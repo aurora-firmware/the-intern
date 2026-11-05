@@ -281,8 +281,8 @@ small.
   from pi-durable. The daemon adds no retry loops, intake tables or recovery code of its own, except two bounded
   exceptions (ADR-001 decision 4). The first: the facts the-intern owns about a conversation (held messages, awaiting
   links, parked state, the abort mark, the closed mark and creation keys) live in its own documents, and the only
-  recovery is redelivering the input those facts show as undelivered, made safe to repeat by pi-durable request ids. Each
-  daemon-owned fact is committed in the same atomic commit as the change it describes, except for an abort. An
+  recovery is redelivering the input those facts show as undelivered, made safe to repeat by pi-durable request ids.
+  Each daemon-owned fact is committed in the same atomic commit as the change it describes, except for an abort. An
   abort's facts are written in one commit just before pi-durable's abort, not in pi-durable's abort commit. The
   second: job writes are committed before their pi-durable change, and four startup repair rules are the only job
   recovery (S-004 REQ-018).
