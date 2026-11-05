@@ -58,8 +58,8 @@ async function indexConversations(ctx: ServiceContext): Promise<Map<string, JobC
     return index;
 }
 
-// Input the lead has not taken: queued in its inbox (a queued write is not input), or held. A held message waits only for a lead parked for reports
-// (S-004 REQ-012), so one beside a park for an answer is older than the block.
+// Input the lead has not taken: queued in its inbox (a queued write is not input), or held. A held message waits only
+// for a lead parked for reports (S-004 REQ-012), so one beside a park for an answer is older than the block.
 async function leadHoldsInput(ctx: ServiceContext, leadId: string): Promise<boolean> {
     const meta = await readConversationMeta(ctx.host, leadId);
     if (meta === undefined) return false;
