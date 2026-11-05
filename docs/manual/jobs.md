@@ -82,10 +82,12 @@ The `complete_job` tool of the lead returns a result that isn't an error and nam
 closed mark doesn't land after the job is written Done, the tool's result says the call was aborted, and
 `bob jobs follow` can show `tool complete_job failed` for that Done job. The job stays Done and the lead's run ends.
 When the commit that sets the mark fails without a storage error, the job's conversations list with a status other
-than `closed` until the next start, and refuse input as `conflict`. At the next start, repair rule 4 closes them. The
-same line can appear after a storage error or a daemon crash during the call, once rule 4 has aborted the run. A team
-member's `jobs.complete` or `jobs.cancel` that fails the same way fails with `internal` and aborts
-no further conversation, and rule 4 closes them at the next start.
+than `closed` until the next start, and refuse input as `conflict`. The daemon then aborts the job's conversations
+it can, and the compactions running in those whose mark landed, so no queued input runs a model turn. At the next
+start, repair rule 4 closes the rest and ends their compactions. The same line can appear after a storage error or a
+daemon crash during the call, once rule 4 has aborted the run. A team member's `jobs.complete` or `jobs.cancel` that
+fails the same way, or whose abort of a conversation fails, tries to abort every conversation of the job, logs each
+failure and still fails with `internal`. A conversation whose own abort fails keeps running until the next start.
 
 ## The definition of done
 
