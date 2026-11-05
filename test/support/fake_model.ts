@@ -23,6 +23,8 @@ export type FakeReply = string | { toolCall: { name: string; arguments: Record<s
 
 export type FakeModelOptions = {
     delayMs?: (transcript: FakeTranscript) => number;
+    /** Called with the transcript of each model request as it starts, before any delay or gate. */
+    onRequest?: (transcript: FakeTranscript) => void;
     /** An answer waits until this promise settles (or the run is aborted), for a test that decides when a run ends. */
     gate?: Promise<void>;
     /**
@@ -152,6 +154,7 @@ export function createFakeModel(
     const answerFromTranscript: FauxResponseFactory = async (context, streamOptions) => {
         registration.appendResponses([answerFromTranscript]);
         const transcript = toFakeTranscript(context);
+        options.onRequest?.(transcript);
         await waitUnlessAborted(options.delayMs?.(transcript) ?? 0, streamOptions?.signal);
         if (options.gate) await untilOrAborted(options.gate, streamOptions?.signal);
         return messageFor(reply(transcript), transcript);

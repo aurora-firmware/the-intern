@@ -63,6 +63,8 @@ export type DaemonComponent = {
     ensureWorkspaces?(ctx: ServiceContext): Promise<void>;
     /** Step 7, after admission is restored and before work resumes: brings the component's saved state in step. */
     repair?(ctx: ServiceContext): Promise<void>;
+    /** Step 7, after the host has resumed: waits for what the repair marked to end, before listeners open. */
+    afterResume?(ctx: ServiceContext): Promise<void>;
     start?(ctx: ServiceContext): Promise<void>;
     stop?(): Promise<void>;
 };
@@ -224,7 +226,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         return { models, host, gateAdmission, jobStore };
     }
 
-    async function runComponents(hook: "checkModels" | "ensureWorkspaces" | "repair"): Promise<void> {
+    async function runComponents(hook: "checkModels" | "ensureWorkspaces" | "repair" | "afterResume"): Promise<void> {
         for (const component of components) await component[hook]?.(context);
     }
 
@@ -278,6 +280,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
             await opened.gateAdmission.restore();
             await runComponents("repair");
             opened.host.resume();
+            await runComponents("afterResume");
         });
         await step(8, STEP_NAMES.startComponents, async () => {
             for (const component of components) {

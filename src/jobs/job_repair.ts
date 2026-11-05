@@ -12,7 +12,8 @@ import {
     hasQueuedUserInput,
     hasSubmissionWithRequestId,
 } from "../host/conversation_control.ts";
-import { abortJobConversations, continueWithHeld, parkConversation, unparkConversation } from "../host/invocation.ts";
+import { continueWithHeld, parkConversation, unparkConversation } from "../host/invocation.ts";
+import { markJobConversationsForAbort } from "../host/repair_abort.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import {
     leadRefusedJustification,
@@ -46,8 +47,8 @@ async function allJobs(ctx: ServiceContext): Promise<Job[]> {
 type JobConversations = { leadId?: string; isUnsettled: boolean; idleClosedIds: string[] };
 
 // One pass over the conversations for the whole repair, so its cost grows with the conversations and the jobs, not
-// with their product. No listener answers and no work resumes while the repair runs (S-002 REQ-002 step 7), so only
-// the rules themselves change a conversation, and rule 1 reports the lead it starts.
+// with their product. No listener answers while the repair runs (S-002 REQ-002 step 7), so only the rules themselves
+// change a conversation, and rule 1 reports the lead it starts. Rule 4 never turns scheduling on, so no run resumes.
 async function indexConversations(ctx: ServiceContext): Promise<Map<string, JobConversations>> {
     const index = new Map<string, JobConversations>();
     for (const { id, busy } of await ctx.host.listConversations()) {
@@ -154,20 +155,22 @@ async function needsClosing(ctx: ServiceContext, known: JobConversations): Promi
 
 /**
  * Rule 4: a Done job with a conversation that isn't closed, or that is closed but still runs or has queued input,
- * gets its conversations closed and aborted: the closed marks are committed before pi-durable's aborts.
+ * gets its conversations closed and aborted: the closed marks are committed before the aborts. The aborts are marks
+ * on the work, because ending it takes scheduling, which stays off until the daemon resumes the host after the repair.
+ * Returns the conversations it marked, which the caller waits for once the host has resumed.
  * `listed` is the job as listed before the rules: a job that rule 1 cancels was not Done then, and that cancel
  * already closed its conversations, so the listing taken before it does not apply to it.
  * A closed conversation with a compaction still running is busy, because every live task counts, so it is unsettled
  * and this rule fires for it too; the abort then stops the compaction, which no closed mark stops by itself.
  */
-async function applyRule4(deps: JobActionDeps, listed: Job, known: JobConversations): Promise<void> {
+async function applyRule4(deps: JobActionDeps, listed: Job, known: JobConversations): Promise<string[]> {
     const { ctx } = deps;
-    if (listed.status !== "done" || !(await needsClosing(ctx, known))) return;
+    if (listed.status !== "done" || !(await needsClosing(ctx, known))) return [];
     await ctx.jobStore.recordRepair(listed.id, {
         rule: 4,
         did: "Closed and aborted the conversations of the Done job",
     });
-    await abortJobConversations(ctx.host, listed.id);
+    return markJobConversationsForAbort(ctx.host, listed.id);
 }
 
 /**
@@ -175,11 +178,13 @@ async function applyRule4(deps: JobActionDeps, listed: Job, known: JobConversati
  * lead is idle and waits for nothing. The turn-end check is that rule applied to saved state, not a fifth repair.
  * The conversations are listed once, before the rules, so a Done job whose conversations are all closed and idle
  * costs one queued-input read per conversation and no other conversation read.
+ * Returns the conversations rule 4 marked for abort, which end once the host resumes.
  */
-export async function repairJobs(deps: JobActionDeps): Promise<void> {
+export async function repairJobs(deps: JobActionDeps): Promise<string[]> {
     const jobs = await allJobs(deps.ctx);
     const index = await indexConversations(deps.ctx);
     const leads = new Map<string, string>();
+    const marked: string[] = [];
     for (const job of jobs) {
         const { id } = job;
         const known = index.get(id) ?? { isUnsettled: false, idleClosedIds: [] };
@@ -187,8 +192,9 @@ export async function repairJobs(deps: JobActionDeps): Promise<void> {
         const leadId = await applyRule1(deps, id, known.leadId);
         if (leadId !== undefined) leads.set(id, leadId);
         await applyRule2(deps, id, leadId);
-        await applyRule4(deps, job, known);
+        marked.push(...(await applyRule4(deps, job, known)));
     }
-    if (deps.options.turnEndRule === false) return;
+    if (deps.options.turnEndRule === false) return marked;
     for (const { id } of jobs) await checkTurnEnd(deps, id, leads.get(id));
+    return marked;
 }
