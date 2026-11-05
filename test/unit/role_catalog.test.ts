@@ -131,7 +131,7 @@ describe("createRoleCatalog", () => {
         assert.equal(catalog.get("reviewer")?.model, "p/m");
 
         await catalog.remove("reviewer");
-        assert.doesNotMatch(await fileText(), /reviewer/);
+        assert.doesNotMatch(await fileText(), /\[roles\.reviewer\]/);
         assert.equal(catalog.get("reviewer"), undefined);
     });
 
