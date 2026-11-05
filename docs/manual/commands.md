@@ -120,8 +120,8 @@ Options: `--json`, `--runtime-dir <value>`, `--help`.
 
 ### `bob usage`
 
-Print the usage per conversation and in total. With `--json` it prints an object with `total` and `conversations`: `total` is the answer of
-`usage.get`, and `conversations` holds the same answer for each conversation, by its id.
+Print the usage per conversation and in total. With `--json` it prints an object with `total` and `conversations`:
+`total` is the answer of `usage.get`, and `conversations` holds the same answer for each conversation, by its id.
 
 Options: `--json`, `--runtime-dir <value>`, `--help`.
 
@@ -312,9 +312,9 @@ exit 1.
 
 ### `bob conversations list`
 
-List conversations, one line each with the ID, the job's ID (followed by `lead` for a lead conversation) or `front desk`,
-the seat, the status and the last activity. The status is `closed`, `waiting for a worker thread`, `running`, `parked` or
-`idle`. With `--json` it prints the array of conversations.
+List conversations, one line each with the ID, the job's ID (followed by `lead` for a lead conversation) or `front
+desk`, the seat, the status and the last activity. The status is `closed`, `waiting for a worker thread`, `running`,
+`parked` or `idle`. With `--json` it prints the array of conversations.
 
 | Option            | Meaning                              |
 | ----------------- | ------------------------------------ |
