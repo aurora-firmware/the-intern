@@ -958,10 +958,11 @@ aborted and closed. Input to a Blocked job's lead reaches the lead conversation 
 (REQ-006). At startup (S-002 REQ-002 step 7), after the database opens, the daemon SHALL apply exactly these repair
 rules, write each repair to the history as one `repair` entry with the daemon as author (Interfaces), and apply no other
 recovery to jobs. Each rule's decision, its history entry and its changes to the job and to conversation state take
-effect before work resumes. The input a rule owes a lead conversation (rule 1's first input, rule 3's held messages) and
-the end of rule 4's aborts take effect once work has resumed, before any listener answers a call other than
-`daemon.status`, and that lead takes no run before its input. A rule a crash cuts short applies again at the next start
-and writes another entry:
+effect before work resumes, apart from the following, which take effect once work has resumed and before any listener
+answers a call other than `daemon.status`: the input a rule owes a lead conversation (rule 1's first input; rule 3's
+held messages, delivered with the release of the lead and followed by the job's change to In progress) and the end of
+rule 4's aborts. That lead takes no run before its input. A rule a crash cuts short applies again at the next start and
+writes another entry:
 
 1. a job whose start is missing or was cut short gets its start completed: a job that isn't Done and has no lead
    conversation (no conversation records the job as its lead), or a To do job whose lead conversation never got
@@ -1046,7 +1047,8 @@ setting changes the statuses, the actions or the letters.
 
 - **ADR-001, amended with this spec.** Decision 1 gains the job store as the-intern's own tables in the same file;
   decision 4 gains a second bounded exception: ordered job writes and the four repair rules of REQ-018. The amendment is
-  accepted. The product owner approved this spec at Gate 1 on 2026-11-02, before that review.
+  accepted. The product owner approved this spec at Gate 1 on 2026-11-02, before the architecture consistency review
+  that raised the amendment.
 - **pi-durable shares its SQLite file.** Confirmed in the pinned pi-durable 1.4.0: its SQLite storage opens on a
   database the host can open itself and names its own tables, so other tables can live in the same file; its commits
   run in their own transactions, which is why job writes are ordered and repaired instead of joined.
@@ -1066,7 +1068,7 @@ setting changes the statuses, the actions or the letters.
   `A` is S-001's follow-up job source.
 - **S-002 amendments.** The job operations replace the lead start in the catalogue, and creating a job records the
   origin (REQ-012); startup step 4 reads the job schema version and opens the job store and step 7 runs the repair
-  before resuming work (REQ-002); the instance scope of the feed carries the job deltas in its sequence (REQ-014); the
+  around resuming work (REQ-002); the instance scope of the feed carries the job deltas in its sequence (REQ-014); the
   `in-process` way in, recorded when a caller names none (AC-012.5), is refused by `jobs.create` (REQ-002); a team
   member's request records the details its way in observes (REQ-012, REQ-013); a job store write failure is handled as a
   storage error (REQ-007); a held message waits only for a conversation parked for reports (REQ-012). ADR-001 decision 4
@@ -1128,4 +1130,4 @@ None.
 | 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The two storage alternatives moved to `docs/development/architecture.md`; ADR-001 Alternative G also records the first. Assumptions, the S-002 amendments item: it cites ADR-001 decisions 1 and 4 in place of the removed S-002 principles. | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |
 | 2026-11-05 | v0.10. No behaviour changes (CR-001): technology and implementation words leave the requirement text, and each REQ keeps its guarantee. Changed: REQ-001, AC-001.1 (`SQLite`, `intern_`; the Verification line reads the tables directly), REQ-002, AC-005.8, REQ-006, REQ-007, AC-007.4, REQ-008, REQ-011, REQ-012, AC-012.1, REQ-016, REQ-017, AC-017.2, REQ-018, AC-018.1, AC-018.2, REQ-020, with the copies in Purpose, Definitions, Users, Interfaces (`blockedAfterEntry`, `jobs.startLead`), Workflow, Assumptions and Implementation Order. REQ-018 rule numbers stay. Moved statements live in ADR-001 decisions 1 and 4, with REQ-017's lock in decision 1. No identifier added or retired. | CR-001, approved by the product owner. | None; spec text only |
 | 2026-11-05 | v0.11. REQ-007: when a team member's `jobs.complete` or `jobs.cancel` fails while marking a conversation closed, or at an abort, without a storage error, the daemon still tries to abort every conversation of the job and logs each failure, and the call fails with `internal`. A conversation whose own abort fails keeps running until the next start, with the complete tool and with these calls alike (S-001 v0.13 REQ-026). New AC-007.6. Architecture consistency review, same version: when the lead couldn't be marked closed and its own abort fails too, its run may not end at the call and its queued input isn't withdrawn (F1); AC-007.6 has two invoked agents and adds a failed mark with a failed abort after it (F3). | B-010, product owner decision of 2026-11-05: both failures count. Product owner answers on the amendment, 2026-11-05. Architecture consistency review. | B-010 |
-| 2026-11-05 | v0.12. No behaviour changes. REQ-018: the rules' decisions, history entries and changes to the job and to conversation state take effect before work resumes; the input a rule owes a lead conversation, the end of rule 4's aborts and a reminder the turn-end check owes take effect once work has resumed, before any listener answers a call other than `daemon.status`; a rule a crash cuts short applies again and writes another entry. Workflow: startup repair comes before listeners open. Assumptions: the ADR-001 and ADR-004 amendments are accepted, S-005 names `bob chat` and `bob import`, and "Until they exist" covers only the specs still unwritten. | spec-truth reconciliation: the text was stale against the built behaviour, and the Architect found no behaviour change (D1, D4). | None; spec text only |
+| 2026-11-05 | v0.12. No behaviour changes. REQ-018: the rules' decisions, history entries and changes to the job and to conversation state take effect before work resumes, apart from rule 3's delivery of held messages, which releases the lead and is followed by the job's change to In progress; the input a rule owes a lead conversation, the end of rule 4's aborts and a reminder the turn-end check owes take effect once work has resumed, before any listener answers a call other than `daemon.status`; a rule a crash cuts short applies again and writes another entry. Workflow: startup repair comes before listeners open. Assumptions: the ADR-001 and ADR-004 amendments are accepted, S-005 names `bob chat` and `bob import`, and "Until they exist" covers only the specs still unwritten. | spec-truth reconciliation: the text was stale against the built behaviour, and the Architect found no behaviour change (D1, D4). | None; spec text only |
