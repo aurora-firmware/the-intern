@@ -133,9 +133,9 @@ const INVOKE_MANY_CALL = {
  * text answer, or the request is a compaction summary, which only text can answer. Compaction drops an old result, so
  * every unmarked input after one gets a new long result.
  */
-function longOutputReply(transcript: FakeTranscript): FakeReply {
+function longOutputReply(transcript: FakeTranscript, isSummaryFailing: boolean): FakeReply {
     const lastText = lastUserText(transcript);
-    if (lastText.includes(SUMMARY_REQUEST_TAG)) return "summary";
+    if (lastText.includes(SUMMARY_REQUEST_TAG)) return isSummaryFailing ? { toolCall: LONG_OUTPUT_CALL } : "summary";
     if (lastText.startsWith(TEXT_ONLY_INPUT_PREFIX) || hasToolResult(transcript)) return "done";
     return { toolCall: LONG_OUTPUT_CALL };
 }
@@ -211,7 +211,8 @@ function replyFor(script: Script, transcript: FakeTranscript): FakeReply {
     }
     if (script === "block-with-reason") return blockWithReasonReply(transcript);
     if (script === "invoke-many") return invokeManyReply(transcript);
-    if (script === "long-output") return longOutputReply(transcript);
+    if (script === "long-output") return longOutputReply(transcript, false);
+    if (script === "long-output-failing-summary") return longOutputReply(transcript, true);
     if (script === "desk-create-job") return deskCreateJobReply(transcript);
     if (script !== "bash-sleep") return echo;
     if (hasToolResult(transcript)) return "slept";
@@ -355,7 +356,7 @@ function createComponents(switches: Switches, release: Promise<void>): DaemonCom
             },
         });
     }
-    if (switches.script === "long-output") {
+    if (switches.script === "long-output" || switches.script === "long-output-failing-summary") {
         components.push({ name: "bash", extensions: [createBashExtension(LONG_OUTPUT_TEXT)] });
     }
     if (switches.killOnSteer) components.push(killOnSteerComponent());

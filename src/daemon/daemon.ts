@@ -20,6 +20,7 @@ import {
     type SqliteDatabase,
     type Storage,
 } from "../host/harness_host.ts";
+import { logCompactionFailures } from "../host/host_observation.ts";
 import { recordOpenedVersions, runningVersions } from "../host/versions.ts";
 import { checkJobSchemaVersion, createJobStore, type JobStore, migrateJobStore } from "../jobs/job_store.ts";
 import { createModelRuntime, type InternModels, resolvePiAgentDir } from "../models/model_runtime.ts";
@@ -215,6 +216,8 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         undoStack.push(async () => {
             if (!isHostClosedByStorageFailure) await host.close();
         });
+        const compactionLog = logCompactionFailures(host, logger);
+        undoStack.push(async () => compactionLog.stop());
         const gateAdmission = createAdmission({ host, capacity: workerThreadCount, logger, gate });
         undoStack.push(async () => gateAdmission.stop());
         await migrateJobStore(hostDatabase(host));
