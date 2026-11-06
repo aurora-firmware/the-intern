@@ -12,6 +12,7 @@ import type { Seat } from "../roles/role_model.ts";
 import {
     abortConversation,
     compactConversation,
+    hasQueuedUserInput,
     type InputRecord,
     submissionIdFor,
     submitInput,
@@ -19,7 +20,7 @@ import {
 import { toConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { findCreatedConversation } from "./idempotency.ts";
-import { inJobSection, inOpenConversation } from "./job_section.ts";
+import { inJobSection, inOpenConversation, readJobStatus } from "./job_section.ts";
 import {
     type ContextMode,
     type ConversationMeta,
@@ -316,14 +317,32 @@ export async function continueWithHeld(host: HarnessHost, conversationId: string
 // One commit per conversation (ADR-001 decision 4): an aborted conversation is left neither parked nor waiting for
 // a report, and its held messages are withdrawn as an abort withdraws queued input. The same commit marks a lone
 // abort of an invoked conversation (`isReportOwed`), so its invoker is owed an "aborted" report.
-async function clearWaiting(host: HarnessHost, conversationId: string, isReportOwed = false): Promise<void> {
+async function clearWaiting(
+    host: HarnessHost,
+    conversationId: string,
+    marks: { isReportOwed?: boolean; stopped?: string | null } = {},
+): Promise<void> {
     if ((await readConversationMeta(host, conversationId)) === undefined) return;
     await updateMeta(host, conversationId, (meta) => {
         meta.parked = null;
         meta.awaiting = [];
         meta.held = [];
-        if (isReportOwed) meta.aborted = true;
+        if (marks.isReportOwed === true) meta.aborted = true;
+        if (marks.stopped != null) meta.stopped = marks.stopped;
     });
+}
+
+// A team member's abort of a lead marks it when the abort stops something: the lead is running, has input queued, is
+// parked or awaits a report, and its job is In progress. The caller reads this before clearing.
+async function stopMarkDue(host: HarnessHost, conversationId: string, meta: ConversationMeta | undefined) {
+    if (meta === undefined || !meta.isLead || meta.jobId === null) return null;
+    if ((await readJobStatus(host, meta.jobId)) !== "in_progress") return null;
+    const isStopping =
+        (await host.conversationInfo(conversationId))?.busy === true ||
+        (await hasQueuedUserInput(host, conversationId)) ||
+        meta.parked !== null ||
+        meta.awaiting.length > 0;
+    return isStopping ? host.readNewestEntryId(conversationId) : null;
 }
 
 // The abort's root owes a report only when it was invoked and its invoker still awaits it.
@@ -347,7 +366,8 @@ async function clearRecursively(
     const isReportOwed = isRoot && (await isReportOwedTo(host, meta, conversationId));
     cleared.add(conversationId);
     // Cleared before any abort, so no cascaded run finds its invoker still waiting.
-    await clearWaiting(host, conversationId, isReportOwed);
+    const stopped = isRoot ? await stopMarkDue(host, conversationId, meta) : null;
+    await clearWaiting(host, conversationId, { isReportOwed, stopped });
     for (const awaitedId of meta?.awaiting ?? []) await clearRecursively(host, awaitedId, cleared);
 }
 
