@@ -22,6 +22,7 @@ const PREVIEW_LINES = 5;
 const PREVIEW_BYTES = 1024;
 const HELD_NOTICE = "held until it continues";
 const STEER_KIND = "intern.steer";
+const SEAT_KIND = "intern.seat";
 
 /** Compares ids as numbers: as strings, "10" would sort before "9". */
 const compareIds = (left: string, right: string): number => {
@@ -112,4 +113,13 @@ export const heldNotice = (entry: ActivityEntry): string | undefined => {
     }
     const data = entry.data as { content?: unknown } | null;
     return data?.content === undefined ? HELD_NOTICE : undefined;
+};
+
+/** The role the newest `intern.seat` record seats the conversation in; nothing when there is no such record. */
+export const seatRole = (entries: readonly ActivityEntry[]): string | undefined => {
+    let newest: ActivityEntry | undefined;
+    for (const each of entries) {
+        if (each.kind === SEAT_KIND && (newest === undefined || compareIds(each.id, newest.id) > 0)) newest = each;
+    }
+    return (newest?.data as { next?: { role?: string } } | null | undefined)?.next?.role;
 };
