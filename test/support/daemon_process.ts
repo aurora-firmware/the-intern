@@ -68,6 +68,11 @@ export type StartDaemonOptions = {
      * and its caller is still waiting, so the kill lands inside the steering tool call, before its result is saved.
      */
     killOnSteer?: boolean;
+    /**
+     * The child kills itself with `SIGKILL` in the `afterResume` of a component placed before the Jobs component: the
+     * host has resumed and the inputs the repair owes are not yet delivered.
+     */
+    killAfterResume?: boolean;
 };
 
 export type DaemonProcess = {

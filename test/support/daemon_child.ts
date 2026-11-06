@@ -237,6 +237,17 @@ function killOnSteerComponent(): DaemonComponent {
     };
 }
 
+/** Kills the process once the host has resumed, before the Jobs component delivers the inputs the repair owes. */
+function killAfterResumeComponent(): DaemonComponent {
+    return {
+        name: "kill-after-resume",
+        async afterResume() {
+            process.kill(process.pid, "SIGKILL");
+            return new Promise<void>(() => undefined);
+        },
+    };
+}
+
 function createComponents(switches: Switches, release: Promise<void>): DaemonComponent[] {
     const components: DaemonComponent[] = [];
     if (switches.script === "bash-sleep") {
@@ -457,6 +468,8 @@ async function main(): Promise<void> {
                 afterResume: async () => void modelRequests.push({ firstUserText: RESUME_MARKER, phase: "starting" }),
             },
             agents.component,
+            // Before the Jobs component, so the kill lands before its `afterResume` delivers anything.
+            ...(switches.killAfterResume ? [killAfterResumeComponent()] : []),
             jobs.component,
             desk.component,
             createLocalSocketComponent(),
