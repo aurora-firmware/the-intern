@@ -132,6 +132,17 @@ async function waitForUsage(daemon: DaemonProcess, above: number): Promise<numbe
     }
 }
 
+const waitForShownTotal = (page: Page, tokens: number) =>
+    page.waitForFunction(
+        ({ selector, expected }) =>
+            [...document.querySelectorAll(selector)].reduce(
+                (sum, row) => sum + Number(row.getAttribute("data-total-tokens")),
+                0,
+            ) === expected,
+        { selector: TOTAL_TOKENS, expected: tokens },
+        { timeout: WAIT_MS, polling: POLL_MS },
+    );
+
 const shownTokens = (page: Page): Promise<number[]> =>
     page.locator(TOTAL_TOKENS).evaluateAll((rows) => rows.map((row) => Number(row.getAttribute("data-total-tokens"))));
 
@@ -208,15 +219,7 @@ describe("the Status page in chrome", () => {
         await say(daemon, desk, "second");
         const after = await waitForUsage(daemon, before);
 
-        await waitFor(
-            page,
-            ({ selector, tokens }) =>
-                [...document.querySelectorAll(selector)].reduce(
-                    (sum, row) => sum + Number(row.getAttribute("data-total-tokens")),
-                    0,
-                ) === tokens,
-            { selector: TOTAL_TOKENS, tokens: after },
-        );
+        await waitForShownTotal(page, after);
     });
 
     it("reads the status and usage again on a new instance snapshot", { timeout: TEST_TIMEOUT_MS }, async (t) => {
@@ -236,14 +239,6 @@ describe("the Status page in chrome", () => {
         const after = await waitForUsage(daemon, before);
         proxy.forceFeedEnd("lagging");
 
-        await waitFor(
-            page,
-            ({ selector, tokens }) =>
-                [...document.querySelectorAll(selector)].reduce(
-                    (sum, row) => sum + Number(row.getAttribute("data-total-tokens")),
-                    0,
-                ) === tokens,
-            { selector: TOTAL_TOKENS, tokens: after },
-        );
+        await waitForShownTotal(page, after);
     });
 });
