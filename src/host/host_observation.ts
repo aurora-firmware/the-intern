@@ -67,22 +67,22 @@ function seatAtAttachment(view: StructuralView): SeatSummary | undefined {
 
 /**
  * Follows what a watch has passed on: the newest entry id and the seat. `entriesAfterNewest` walks the view's entries
- * back from the end and stops at the first one whose id is at or below the newest passed on. It never looks for that
- * id itself, because a compaction can remove it.
+ * for entries whose id is above the newest passed on. It reads the whole view, because a compaction puts its entry
+ * before the kept entries, which have lower ids, and it never looks for the newest id itself, because a compaction can
+ * remove it.
  */
 function createEntryTracker(attached: StructuralView) {
-    let newestId = attached.entries.at(-1)?.id;
+    let newestId = attached.entries.reduce<EntryRecord["id"] | undefined>(
+        (newest, entry) => (newest === undefined || Number(entry.id) > Number(newest) ? entry.id : newest),
+        undefined,
+    );
     let seat = seatAtAttachment(attached);
     return {
         newestEntryId: newestId === undefined ? null : String(newestId),
         entriesAfterNewest(view: StructuralView): WatchedEntry[] {
-            const added: EntryRecord[] = [];
-            for (let index = view.entries.length - 1; index >= 0; index--) {
-                const entry = view.entries[index] as EntryRecord;
-                if (newestId !== undefined && Number(entry.id) <= Number(newestId)) break;
-                added.push(entry);
-            }
-            added.reverse();
+            const added = view.entries
+                .filter((entry) => newestId === undefined || Number(entry.id) > Number(newestId))
+                .sort((a, b) => Number(a.id) - Number(b.id));
             const last = added.at(-1);
             if (last !== undefined) newestId = last.id;
             return added.map((entry) => {

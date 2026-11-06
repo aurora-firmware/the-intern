@@ -5,7 +5,12 @@ import type { Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
 import { createLogger } from "../../src/daemon/logger.ts";
-import { abortConversation, submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
+import {
+    abortConversation,
+    compactConversation,
+    submitInput,
+    waitForSubmission,
+} from "../../src/host/conversation_control.ts";
 import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import {
     type ConversationFrame,
@@ -50,7 +55,7 @@ function modelsFor(fake: FakeModel): Models {
     return models;
 }
 
-async function openFixture(delayMs = 0): Promise<Fixture> {
+async function openFixture(delayMs = 0, harnessSettings: Record<string, unknown> = {}): Promise<Fixture> {
     const env = await createHermeticEnv();
     envs.push(env);
     const fake = createFakeModel(() => "ok", { delayMs: () => delayMs });
@@ -58,7 +63,7 @@ async function openFixture(delayMs = 0): Promise<Fixture> {
     const host = await openHarnessHost({
         databaseFile: join(env.root, "state.sqlite"),
         models: modelsFor(fake),
-        harnessSettings: {},
+        harnessSettings,
         extensions: [],
         defaultCwd: process.cwd(),
         logger: createLogger({ stream: { write: () => true } }),
@@ -87,6 +92,46 @@ async function sendAndSettle(host: HarnessHost, conversationId: string, content:
 }
 
 describe("watchConversation", () => {
+    it("starts from the newest entry id when the attached view holds the compaction entry before kept entries", async () => {
+        const { host, agentModel } = await openFixture(0, { compaction: { keepRecentTokens: 1 } });
+        const conversationId = await host.createConversation({ agent: { model: agentModel } });
+        await sendAndSettle(host, conversationId, "first");
+        await sendAndSettle(host, conversationId, "second");
+        await compactConversation(host, conversationId);
+        const stored = (await host.readEntries(conversationId, { limit: 100 })).entries;
+        const compaction = stored.find((entry) => entry.kind === "pi.compaction");
+        const frames: ConversationFrame[] = [];
+
+        const watch = await watchConversation(host, conversationId, (frame) => frames.push(frame));
+        await sendAndSettle(host, conversationId, "third");
+        await pause(SETTLE_PAUSE_MS);
+        await watch.stop();
+
+        assert.equal(watch.snapshot.newestEntryId, compaction?.id);
+        const delivered = frames.flatMap((frame) => frame.entries);
+        assert.ok(delivered.length > 0);
+        assert.ok(delivered.every((entry) => Number(entry.id) > Number(compaction?.id)));
+    });
+
+    it("delivers the compaction entry a compaction adds, once, though kept entries with lower ids follow it", async () => {
+        const { host, agentModel } = await openFixture(0, { compaction: { keepRecentTokens: 1 } });
+        const conversationId = await host.createConversation({ agent: { model: agentModel } });
+        await sendAndSettle(host, conversationId, "first");
+        await sendAndSettle(host, conversationId, "second");
+        const frames: ConversationFrame[] = [];
+        const watch = await watchConversation(host, conversationId, (frame) => frames.push(frame));
+
+        await compactConversation(host, conversationId);
+        await pause(SETTLE_PAUSE_MS);
+        await watch.stop();
+
+        const delivered = frames.flatMap((frame) => frame.entries);
+        assert.deepEqual(
+            delivered.map((entry) => entry.kind),
+            ["pi.compaction"],
+        );
+    });
+
     it("returns the newest entry id and the state as the snapshot, then one frame per commit without replay", async () => {
         const { host, agentModel } = await openFixture();
         const conversationId = await host.createConversation({ agent: { model: agentModel } });
