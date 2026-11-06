@@ -6,6 +6,7 @@ import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
 import { onInputSubmitted } from "../host/conversation_control.ts";
+import { onLeadStopped } from "../host/invocation.ts";
 import { setJobStatusCheck } from "../host/job_section.ts";
 import { waitForMarkedConversations } from "../host/repair_abort.ts";
 import { readConversationMeta } from "../host/seating.ts";
@@ -72,6 +73,7 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
     let stopListening: (() => void) | undefined;
     let stopInputListening: (() => void) | undefined;
     let stopTurnEndRule: (() => void) | undefined;
+    let stopLeadListening: (() => void) | undefined;
     let stopJobStatusCheck: (() => void) | undefined;
     let markedByRepair: string[] = [];
     let firstInputsOwed: PendingFirstInput[] = [];
@@ -113,6 +115,7 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
                 if (options.turnEndRule !== false) {
                     const rule = startTurnEndRule({ ctx, options });
                     stopTurnEndRule = rule.stop;
+                    stopLeadListening = onLeadStopped(ctx.host, rule.leadStopped);
                     await rule.ready;
                 }
             },
@@ -145,6 +148,8 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
                 stopListening = undefined;
                 stopInputListening?.();
                 stopInputListening = undefined;
+                stopLeadListening?.();
+                stopLeadListening = undefined;
                 stopTurnEndRule?.();
                 stopTurnEndRule = undefined;
                 context = undefined;
