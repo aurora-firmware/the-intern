@@ -61,6 +61,10 @@ main {
     color: var(--color-white);
 }
 
+.sidebar .app-title {
+    padding: 0 1.5rem 0.75rem;
+}
+
 .sidebar a {
     display: block;
     padding: 0.75rem 1.5rem;
@@ -220,7 +224,21 @@ dialog .actions {
     margin-top: 1rem;
 }
 
-/* Form fields */
+/* Form fields: a label stacks its text above its control, and a form wraps its fields in a row */
+
+form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
 
 .field {
     display: flex;
