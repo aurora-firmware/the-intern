@@ -3,11 +3,12 @@
  * worklog, and applies the worklog entries that came in meanwhile. Any other delta of the job reads the job and its
  * history again: `job_done` carries no justification and history has no delta. The live activity is `JobActivity`.
  */
-import { h } from "preact";
+import { Fragment, h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { ClientError } from "../client/client.ts";
 import { AnswerBox } from "../components/answer_box.ts";
 import { ConversationControls } from "../components/conversation_controls.ts";
+import { ConversationSettings } from "../components/conversation_settings.ts";
 import { JobActions, UnrelateButton } from "../components/job_actions.ts";
 import { JobActivity } from "../components/job_activity.ts";
 import {
@@ -184,7 +185,12 @@ export const JobPage = ({ feed, number }: { feed: FeedConnection | null | undefi
                       jobId: view.record.id,
                       leadConversation: view.record.leadConversation,
                       controls: (conversationId, state) =>
-                          h(ConversationControls, { number, conversationId, state, key: conversationId }),
+                          h(
+                              Fragment,
+                              { key: conversationId },
+                              h(ConversationControls, { number, conversationId, state }),
+                              h(ConversationSettings, { conversationId }),
+                          ),
                   }),
                   h(Entries, {
                       name: "worklog",
