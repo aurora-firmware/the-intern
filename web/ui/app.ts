@@ -1,8 +1,9 @@
 import { h, render } from "preact";
 import { ConnectionBanner, isConnected } from "./components/connection_banner.ts";
 import { shell } from "./components/shell.ts";
-import { connectFeed } from "./feed_connection.ts";
+import { connectFeed, type FeedConnection } from "./feed_connection.ts";
 import { parseRoute, type Route } from "./model/routes.ts";
+import { BoardPage } from "./pages/board.ts";
 
 type PageName = Exclude<Route["page"], "unknown">;
 
@@ -23,10 +24,13 @@ const showRoute = (route: Route) => {
         { active: page },
         h(ConnectionBanner, null),
         h("h2", { class: "page-heading" }, PAGE_HEADINGS[page]),
+        page === "board" ? h(BoardPage, { feed }) : null,
     );
 };
 
 let connected = true;
+/** `undefined` while the tab connects, `null` when it could not. */
+let feed: FeedConnection | null | undefined;
 
 const renderCurrentRoute = () => {
     render(h(isConnected.Provider, { value: connected }, showRoute(parseRoute(window.location.hash))), document.body);
@@ -40,9 +44,14 @@ const setConnected = (value: boolean) => {
 window.addEventListener("hashchange", renderCurrentRoute);
 renderCurrentRoute();
 connectFeed().then(
-    (feed) => feed.onConnection(setConnected),
+    (connection) => {
+        connection.onConnection(setConnected);
+        feed = connection;
+        renderCurrentRoute();
+    },
     (error) => {
         console.error("The tab could not connect to the feed", error);
+        feed = null;
         setConnected(false);
     },
 );

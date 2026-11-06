@@ -282,3 +282,45 @@ textarea {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
+
+/* Board: four columns, each card drawn only when it is near the screen */
+
+.board-columns {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1rem;
+    align-items: start;
+}
+
+.board-column h3 {
+    margin: 0 0 0.75rem;
+}
+
+.board-column .list > li {
+    margin-bottom: 0.75rem;
+    padding: 1rem;
+    border-bottom: 1px solid var(--color-medium-gray);
+}
+
+.board-column .list > li.card-blocked {
+    border-left: 4px solid var(--color-red);
+}
+
+.board-card {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 5rem;
+}
+
+.board-card a {
+    color: var(--color-dark-blue);
+    overflow-wrap: anywhere;
+}
+
+.board-card .job-number {
+    font-weight: 600;
+}
+
+.board-card .reason {
+    margin: 0.5rem 0 0;
+    overflow-wrap: anywhere;
+}
