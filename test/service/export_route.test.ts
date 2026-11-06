@@ -95,8 +95,8 @@ type Fixture = {
     env: HermeticEnv;
     lines: string[];
     daemon: RunningDaemon;
-    target: Target;
-    socket: Target;
+    target: { host: string; port: number };
+    socket: { socketPath: string };
     ctx(): ServiceContext;
 };
 
