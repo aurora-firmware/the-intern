@@ -28,6 +28,8 @@ export type NetworkListenerOptions = {
     freePort?: boolean;
     /** Answers the requests the front has no route for; the web interface files by default. */
     fallback?: Fallback;
+    /** Test-only: the free bytes of the file system holding the export folder, instead of reading it. */
+    readFreeSpace?: (folder: string) => Promise<number>;
 };
 
 export function createNetworkListenerComponent(options: NetworkListenerOptions = {}): NetworkListenerComponent {
@@ -44,6 +46,7 @@ export function createNetworkListenerComponent(options: NetworkListenerOptions =
                 wayIn: "web interface",
                 observe: observePeer,
                 logger: ctx.logger,
+                ...(options.readFreeSpace && { readFreeSpace: options.readFreeSpace }),
             });
             const otherFiles = options.fallback ?? createStaticFiles(WEB_UI_DIR);
             const front = createHttpFront({

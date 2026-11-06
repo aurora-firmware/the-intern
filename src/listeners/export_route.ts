@@ -4,11 +4,12 @@
  * `exports` folder, then sent as a file attachment. The route adds no operation and imports nothing of the host.
  */
 
-import { mkdir, mkdtemp, open, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, open, rm, stat, statfs } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { pipeline } from "node:stream";
 import type { Logger } from "../daemon/logger.ts";
+import { resolveInstanceDirs } from "../daemon/state_layout.ts";
 import { type Caller, type Catalogue, type ObservedDetails, ServiceError } from "../service/operations.ts";
 import { type Fallback, STATUS_BY_CODE, type WayIn } from "./http_front.ts";
 
@@ -19,6 +20,10 @@ const COPY_FILE_NAME = "export.sqlite";
 const SQLITE_MEDIA_TYPE = "application/vnd.sqlite3";
 const ISO_DATE_LENGTH = 10;
 const NOT_NAME_CHARACTERS = /[^A-Za-z0-9._-]/g;
+const BYTES_PER_MEBIBYTE = 1024 * 1024;
+
+/** Room kept beyond the copy for what running jobs write while the file downloads (architecture.md, The export route). */
+export const EXPORT_FREE_SPACE_MARGIN_BYTES = 256 * BYTES_PER_MEBIBYTE;
 
 export type ExportRouteOptions = {
     /** The catalogue call the route makes; the network listener passes the catalogue's own. */
@@ -27,9 +32,12 @@ export type ExportRouteOptions = {
     /** The TCP peer's address and port. */
     observe(req: IncomingMessage): ObservedDetails;
     logger: Logger;
+    /** Test-only: the free bytes of the file system holding the folder; `statfs` by default. */
+    readFreeSpace?: (folder: string) => Promise<number>;
 };
 
-type Status = { phase: string; instance: { stateDir: string } };
+type Instance = { configDir: string; stateDir: string; dataDir: string; runtimeDir: string };
+type Status = { phase: string; instance: Instance };
 type Copy = { path: string; size: number };
 
 function isExportRequest(req: IncomingMessage): boolean {
@@ -72,7 +80,36 @@ function fileNameOf(stateDir: string): string {
     return `the-intern-${instanceName(stateDir)}-${date}.sqlite`;
 }
 
-/** Checks the daemon is ready and makes the owner-only folder for one download. */
+async function freeBytesOf(folder: string): Promise<number> {
+    const info = await statfs(folder);
+    return info.bavail * info.bsize;
+}
+
+async function sizeIfPresent(path: string): Promise<number> {
+    try {
+        return (await stat(path)).size;
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+        throw error;
+    }
+}
+
+/** Refuses when the folder's file system could not hold the database, its `-wal` file and the margin. */
+async function requireFreeSpace(options: ExportRouteOptions, exportsFolder: string, instance: Instance): Promise<void> {
+    const { databaseFile } = resolveInstanceDirs({ flags: instance, env: {}, homeDir: instance.stateDir });
+    const databaseBytes = await sizeIfPresent(databaseFile);
+    const walBytes = await sizeIfPresent(`${databaseFile}-wal`);
+    const needed = databaseBytes + walBytes + EXPORT_FREE_SPACE_MARGIN_BYTES;
+    const free = await (options.readFreeSpace ?? freeBytesOf)(exportsFolder);
+    if (free < needed) {
+        throw new ServiceError(
+            "conflict",
+            `The export needs ${needed} bytes free (the database ${databaseBytes}, its write-ahead log ${walBytes} and a margin of ${EXPORT_FREE_SPACE_MARGIN_BYTES}), and ${free} are free`,
+        );
+    }
+}
+
+/** Checks the daemon is ready and has room, then makes the owner-only folder for one download. */
 async function makeFolder(options: ExportRouteOptions, caller: Caller): Promise<{ folder: string; stateDir: string }> {
     const status = (await options.invoke("daemon.status", {}, caller)) as Status;
     if (status.phase !== "ready") {
@@ -81,7 +118,14 @@ async function makeFolder(options: ExportRouteOptions, caller: Caller): Promise<
     const stateDir = status.instance.stateDir;
     const exportsFolder = join(stateDir, EXPORTS_FOLDER);
     await mkdir(exportsFolder, { recursive: true, mode: OWNER_ONLY_FOLDER_MODE });
+    await requireFreeSpace(options, exportsFolder, status.instance);
     return { folder: await mkdtemp(join(exportsFolder, "download-")), stateDir };
+}
+
+/** Runs `action` once the response has closed, at once when it already has. */
+function whenClosed(res: ServerResponse, action: () => void): void {
+    if (res.closed) action();
+    else res.once("close", action);
 }
 
 /**
@@ -89,19 +133,31 @@ async function makeFolder(options: ExportRouteOptions, caller: Caller): Promise<
  * A client that left while the folder was being made has closed the response already, so the folder goes at once.
  */
 function removeWhenClosed(res: ServerResponse, folder: string, logger: Logger): void {
-    const remove = () => {
+    whenClosed(res, () => {
         rm(folder, { recursive: true, force: true }).catch((error: unknown) => {
             logger.error("export copy not removed", { folder, error: describeError(error) });
         });
-    };
-    if (res.closed) remove();
-    else res.once("close", remove);
+    });
 }
 
 /** Creates the route as a fallback of the HTTP front: it answers `GET /export` and declines every other request. */
 export function createExportRoute(options: ExportRouteOptions): Fallback {
+    // The one download slot, in memory: taken before anything else, freed when the response closes (ADR-001 decision 2).
+    let isSlotTaken = false;
     return async (req, res) => {
         if (!isExportRequest(req)) return false;
+        if (isSlotTaken) {
+            sendError(
+                res,
+                new ServiceError("busy", "Another export download is running; try again when it ends"),
+                options.logger,
+            );
+            return true;
+        }
+        isSlotTaken = true;
+        whenClosed(res, () => {
+            isSlotTaken = false;
+        });
         try {
             const observed = options.observe(req);
             const caller: Caller = { actor: { kind: "team_member", wayIn: options.wayIn, observed } };
