@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { access, writeFile } from "node:fs/promises";
 import { type IncomingMessage, request } from "node:http";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, it } from "node:test";
 import { type FauxProviderRegistration, fauxAssistantMessage } from "@earendil-works/pi-ai";
@@ -62,6 +62,21 @@ function get(target: Target, path: string): Promise<Answer> {
         });
         call.end();
     });
+}
+
+async function exists(path: string): Promise<boolean> {
+    return access(path).then(
+        () => true,
+        () => false,
+    );
+}
+
+function listening(fixture: Fixture): boolean {
+    try {
+        return fixture.target.port > 0;
+    } catch {
+        return false;
+    }
 }
 
 async function countRows(folder: string, file: Buffer): Promise<{ jobs: number; worklog: number; history: number }> {
@@ -191,5 +206,58 @@ describe("GET /export on the network listener", () => {
         assert.match(logged, /remotePort=\d+/);
         release.resolve();
         await waitFor(async () => !(await isBusy()), "the held run to finish");
+    });
+
+    it("suggests the file name from the state directory's last folder and the UTC date", async () => {
+        const fixture = await readyDaemon();
+        const before = new Date().toISOString().slice(0, 10);
+
+        const answer = await get(fixture.target, "/export");
+
+        const after = new Date().toISOString().slice(0, 10);
+        const instance = basename(fixture.env.stateDir).replace(/[^A-Za-z0-9._-]/g, "");
+        const names = new Set([before, after].map((date) => `the-intern-${instance}-${date}.sqlite`));
+        const match = /^attachment; filename="(.+)"$/.exec(String(answer.headers["content-disposition"]));
+        assert.ok(match, "the disposition names a file");
+        assert.ok(names.has(match[1] as string), `${match[1]} is one of ${[...names]}`);
+    });
+
+    it("answers 404 on the local socket", async () => {
+        const fixture = await readyDaemon();
+
+        const answer = await get(fixture.socket, "/export");
+
+        assert.equal(answer.status, 404);
+        assert.equal(answer.headers["content-type"], "application/json; charset=utf-8");
+    });
+
+    it("answers 503 unavailable and makes no folder while the daemon is starting", async () => {
+        const startGate = Promise.withResolvers<void>();
+        const slow: DaemonComponent = { name: "slow start", start: () => startGate.promise };
+        const fixture = await startDaemon([slow]);
+        await waitFor(() => fixture.daemon.phase() === "starting" && listening(fixture), "the listener to be up");
+
+        const answer = await get(fixture.target, "/export");
+
+        assert.equal(answer.status, 503);
+        assert.equal(JSON.parse(answer.body.toString()).error.code, "unavailable");
+        assert.equal(await exists(join(fixture.env.stateDir, "exports")), false);
+        startGate.resolve();
+    });
+
+    it("answers 503 unavailable and makes no folder while the daemon is stopping", async () => {
+        const stopGate = Promise.withResolvers<void>();
+        const slow: DaemonComponent = { name: "slow stop", stop: () => stopGate.promise };
+        const fixture = await readyDaemon([slow]);
+        const stopped = fixture.daemon.stop();
+        await waitFor(() => fixture.daemon.phase() === "stopping", "the daemon to be stopping");
+
+        const answer = await get(fixture.target, "/export");
+
+        assert.equal(answer.status, 503);
+        assert.equal(JSON.parse(answer.body.toString()).error.code, "unavailable");
+        assert.equal(await exists(join(fixture.env.stateDir, "exports")), false);
+        stopGate.resolve();
+        await stopped;
     });
 });
