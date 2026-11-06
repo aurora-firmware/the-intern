@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
+import { type ConversationId, defineEntry } from "@earendil-works/pi-durable";
 import { createLogger } from "../../src/daemon/logger.ts";
 import {
     type ConversationDelta,
@@ -14,10 +16,12 @@ import {
     type Subscription,
 } from "../../src/feed/observation_feed.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
-import { type HarnessHost, type HostEntry, openHarnessHost } from "../../src/host/harness_host.ts";
+import { type HarnessHost, type HostEntry, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import { REPORT_KIND, type ReportRecord } from "../../src/host/reports.ts";
-import type { SeatActor } from "../../src/host/seating.ts";
+import { changeSeat, createSeatedConversation, type SeatActor } from "../../src/host/seating.ts";
 import { STEER_RECORD_KIND, steerConversation } from "../../src/host/steering.ts";
+import type { Seat } from "../../src/roles/role_model.ts";
+import { readEntriesPage } from "../../src/service/conversation_entries.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -112,6 +116,55 @@ async function placeSteer(host: HarnessHost, conversationId: string): Promise<vo
     await waitForSubmission(host, placed.submissionId as string, SUBMISSION_TIMEOUT_MS);
 }
 
+const SEAT_ACTOR: SeatActor = { kind: "team_member", wayIn: "cli" };
+
+function seatFor(fixture: Fixture, role: string): Seat {
+    return { role, model: fixture.agentModel, workspace: process.cwd(), instructions: "Work.", tools: [], skills: [] };
+}
+
+async function createSeated(fixture: Fixture, role: string): Promise<string> {
+    const { conversationId } = await createSeatedConversation(fixture.host, {
+        scope: "conversation-feed-test",
+        key: "k1",
+        job: { jobId: "job-1", isLead: true, origin: { kind: "request", wayIn: "cli" }, depth: 0 },
+        seat: seatFor(fixture, role),
+        actor: SEAT_ACTOR,
+    });
+    return conversationId;
+}
+
+const NOTE_KIND = "test.note";
+const noteEntry = defineEntry<{ text: string }>(NOTE_KIND);
+const FILL_BATCH = 500;
+
+async function appendNotes(host: HarnessHost, conversationId: string, count: number): Promise<void> {
+    const id = Number(conversationId) as ConversationId;
+    await internalHarness(host).commit(async (tx) => {
+        for (let index = 0; index < count; index++) await tx.appendEntry(noteEntry, id, { data: { text: "note" } });
+    }, BACKGROUND_CONTEXT);
+}
+
+async function fillEntries(host: HarnessHost, conversationId: string, count: number): Promise<void> {
+    for (let done = 0; done < count; done += FILL_BATCH) {
+        await appendNotes(host, conversationId, Math.min(FILL_BATCH, count - done));
+    }
+}
+
+// The size of the one delta that a single short entry causes.
+async function deltaBytesForOneEntry(fixture: Fixture, conversationId: string): Promise<number> {
+    const subscription = await fixture.feed.subscribeConversation(conversationId);
+    await appendNotes(fixture.host, conversationId, 1);
+    const deltas = await collectUntil(subscription, (seen) => entriesOf(seen).length === 1);
+    subscription.close();
+    return deltas.reduce((total, delta) => total + JSON.stringify(delta).length, 0);
+}
+
+const entriesOf = (deltas: readonly ConversationDelta[]) => deltas.flatMap((delta) => delta.entries);
+
+async function readAll(host: HarnessHost, conversationId: string, order: "ascending" | "descending" = "ascending") {
+    return (await readEntriesPage(host, { conversationId, limit: 500, order })).entries;
+}
+
 function ownDataOf(entries: readonly HostEntry[], kind: string): unknown {
     return entries.find((entry) => entry.kind === kind)?.data;
 }
@@ -184,31 +237,65 @@ describe("createSubscription", () => {
 });
 
 describe("conversation observation feed", () => {
-    it("delivers the snapshot and then deltas in commit order with increasing sequence numbers", async () => {
+    it("delivers a snapshot of the newest entry id and the state, with no entries", async () => {
         const { host, feed, agentModel } = await openFixture();
         const conversationId = await host.createConversation({ agent: { model: agentModel } });
         await sendAndSettle(host, conversationId, "first");
 
         const subscription = await feed.subscribeConversation(conversationId);
-        assert.ok(subscription.snapshot.entries.length > 0, "the snapshot holds the view at subscription");
+        subscription.close();
+
+        const newest = (await readAll(host, conversationId, "descending"))[0];
+        assert.deepEqual(Object.keys(subscription.snapshot).sort(), ["busy", "inbox", "live", "newestEntryId"]);
+        assert.equal(subscription.snapshot.newestEntryId, newest?.id);
         assert.equal(subscription.snapshot.busy, false);
-        assert.ok("inbox" in subscription.snapshot, "the snapshot carries the queued input");
+    });
+
+    it("gives a null newest entry id for a conversation with no entries", async () => {
+        const { host, feed, agentModel } = await openFixture();
+        const conversationId = await host.createConversation({ agent: { model: agentModel } });
+
+        const subscription = await feed.subscribeConversation(conversationId);
+        subscription.close();
+
+        assert.equal(subscription.snapshot.newestEntryId, null);
+    });
+
+    it("delivers deltas in commit order with increasing sequence numbers, each holding only its commit's entries", async () => {
+        const { host, feed, agentModel } = await openFixture();
+        const conversationId = await host.createConversation({ agent: { model: agentModel } });
+        await sendAndSettle(host, conversationId, "first");
+
+        const subscription = await feed.subscribeConversation(conversationId);
         await sendAndSettle(host, conversationId, "second");
-        const deltas = await collectUntil(subscription, (seen) =>
-            JSON.stringify(seen.at(-1)?.view ?? null).includes("second"),
-        );
+        const deltas = await collectUntil(subscription, (seen) => JSON.stringify(entriesOf(seen)).includes('"ok"'));
         subscription.close();
 
         assert.deepEqual(
             deltas.map((delta) => delta.seq),
             deltas.map((_, index) => index + 1),
         );
-        let previousLength = subscription.snapshot.entries.length;
+        const added = (await readAll(host, conversationId)).filter(
+            (entry) => Number(entry.id) > Number(subscription.snapshot.newestEntryId),
+        );
+        assert.deepEqual(entriesOf(deltas), added);
         for (const delta of deltas) {
-            assert.ok(delta.view.entries.length >= previousLength, "each delta extends the one before");
-            assert.ok(delta.ops.length > 0);
-            previousLength = delta.view.entries.length;
+            assert.deepEqual(Object.keys(delta).sort(), ["entries", "seq", "view"]);
+            assert.deepEqual(Object.keys(delta.view).sort(), ["busy", "inbox", "live"]);
         }
+    });
+
+    it("gives a delta with empty entries for a commit that adds none", async () => {
+        const { host, feed, agentModel } = await openFixture(RUN_DELAY_MS);
+        const conversationId = await host.createConversation({ agent: { model: agentModel } });
+        const subscription = await feed.subscribeConversation(conversationId);
+
+        await sendAndSettle(host, conversationId, "work");
+        const deltas = await collectUntil(subscription, (seen) => JSON.stringify(entriesOf(seen)).includes('"ok"'));
+        subscription.close();
+
+        assert.ok(deltas.some((delta) => delta.entries.length === 0));
+        assert.ok(deltas.every((delta) => !("ops" in delta)));
     });
 
     it("starts a new subscription from a fresh snapshot without replaying earlier deltas", async () => {
@@ -216,20 +303,75 @@ describe("conversation observation feed", () => {
         const conversationId = await host.createConversation({ agent: { model: agentModel } });
         const first = await feed.subscribeConversation(conversationId);
         await sendAndSettle(host, conversationId, "first");
-        await collectUntil(first, (seen) => JSON.stringify(seen.at(-1)?.view ?? null).includes("first"));
+        await collectUntil(first, (seen) => JSON.stringify(entriesOf(seen)).includes('"ok"'));
         first.close();
         assert.deepEqual(await first.next(), { closed: "unsubscribed" });
 
         const second = await feed.subscribeConversation(conversationId);
-        assert.ok(JSON.stringify(second.snapshot).includes("first"), "the fresh snapshot holds the earlier commits");
+        const newest = (await readAll(host, conversationId, "descending"))[0];
+        assert.equal(second.snapshot.newestEntryId, newest?.id, "the fresh snapshot stands after the earlier commits");
         await sendAndSettle(host, conversationId, "second");
-        const deltas = await collectUntil(second, (seen) =>
-            JSON.stringify(seen.at(-1)?.view ?? null).includes("second"),
-        );
+        const deltas = await collectUntil(second, (seen) => JSON.stringify(entriesOf(seen)).includes("second"));
         second.close();
 
         assert.equal(deltas[0]?.seq, 1, "the sequence starts again");
-        assert.ok(deltas.every((delta) => delta.view.entries.length >= second.snapshot.entries.length));
+        assert.ok(!JSON.stringify(entriesOf(deltas)).includes("first"), "earlier entries are not replayed");
+    });
+
+    it("attributes each assistant entry in the deltas to the seat that produced it", async () => {
+        const fixture = await openFixture();
+        const conversationId = await createSeated(fixture, "developer");
+        const subscription = await fixture.feed.subscribeConversation(conversationId);
+
+        await sendAndSettle(fixture.host, conversationId, "one");
+        await changeSeat(fixture.host, conversationId, { seat: seatFor(fixture, "reviewer"), actor: SEAT_ACTOR });
+        await sendAndSettle(fixture.host, conversationId, "two");
+        const deltas = await collectUntil(
+            subscription,
+            (seen) => entriesOf(seen).filter((entry) => entry.kind === "pi.assistant").length === 2,
+        );
+        subscription.close();
+
+        const assistants = entriesOf(deltas).filter((entry) => entry.kind === "pi.assistant");
+        assert.deepEqual(
+            assistants.map((entry) => (entry as { seat?: { role: string } }).seat?.role),
+            ["developer", "reviewer"],
+        );
+        const stored = await readAll(fixture.host, conversationId);
+        assert.deepEqual(
+            entriesOf(deltas),
+            stored.filter((entry) => Number(entry.id) > Number(subscription.snapshot.newestEntryId)),
+        );
+    });
+
+    it("takes the seat from the latest seat record in the view at subscription", async () => {
+        const fixture = await openFixture();
+        const conversationId = await createSeated(fixture, "developer");
+        await changeSeat(fixture.host, conversationId, { seat: seatFor(fixture, "reviewer"), actor: SEAT_ACTOR });
+        const subscription = await fixture.feed.subscribeConversation(conversationId);
+
+        await sendAndSettle(fixture.host, conversationId, "one");
+        const deltas = await collectUntil(subscription, (seen) =>
+            entriesOf(seen).some((entry) => entry.kind === "pi.assistant"),
+        );
+        subscription.close();
+
+        const assistant = entriesOf(deltas).find((entry) => entry.kind === "pi.assistant");
+        assert.equal((assistant as { seat?: { role: string } }).seat?.role, "reviewer");
+    });
+
+    it("sends a delta no larger for one short entry in 2000 entries than in 20", async () => {
+        const fixture = await openFixture();
+        const small = await fixture.host.createConversation({ agent: { model: fixture.agentModel } });
+        const large = await fixture.host.createConversation({ agent: { model: fixture.agentModel } });
+        await fillEntries(fixture.host, small, 20);
+        await fillEntries(fixture.host, large, 2000);
+
+        const smallBytes = await deltaBytesForOneEntry(fixture, small);
+        const largeBytes = await deltaBytesForOneEntry(fixture, large);
+
+        assert.ok(smallBytes > 0);
+        assert.ok(largeBytes <= smallBytes, `${largeBytes} bytes for 2000 entries, ${smallBytes} for 20`);
     });
 
     it("rejects subscribing to a conversation that does not exist", async () => {
@@ -302,11 +444,11 @@ describe("conversation observation feed", () => {
         const subscription = await feed.subscribeConversation(conversationId);
         await placeReport(host, conversationId);
         const deltas = await collectUntil(subscription, (seen) =>
-            seen.some((delta) => delta.view.entries.some((entry) => entry.kind === REPORT_KIND)),
+            entriesOf(seen).some((entry) => entry.kind === REPORT_KIND),
         );
         subscription.close();
 
-        assert.deepEqual(ownDataOf(deltas.at(-1)?.view.entries ?? [], REPORT_KIND), reportRecord);
+        assert.deepEqual(ownDataOf(entriesOf(deltas), REPORT_KIND), reportRecord);
     });
 
     it("shows an intern.steer entry in a delta by its stored actor, mode and content", async () => {
@@ -315,42 +457,27 @@ describe("conversation observation feed", () => {
         const subscription = await feed.subscribeConversation(conversationId);
         await placeSteer(host, conversationId);
         const deltas = await collectUntil(subscription, (seen) =>
-            seen.some((delta) => delta.view.entries.some((entry) => entry.kind === STEER_RECORD_KIND)),
+            entriesOf(seen).some((entry) => entry.kind === STEER_RECORD_KIND),
         );
         subscription.close();
 
-        assert.deepEqual(ownDataOf(deltas.at(-1)?.view.entries ?? [], STEER_RECORD_KIND), steerData);
+        assert.deepEqual(ownDataOf(entriesOf(deltas), STEER_RECORD_KIND), steerData);
     });
 
-    it("shows report and steer entries in a fresh snapshot by their own data", async () => {
+    it("shows every delta entry as conversations.entries shows it", async () => {
         const { host, feed, agentModel } = await openFixture();
         const conversationId = await host.createConversation({ agent: { model: agentModel } });
-        await placeReport(host, conversationId);
-        await placeSteer(host, conversationId);
-
         const subscription = await feed.subscribeConversation(conversationId);
-        subscription.close();
 
-        assert.deepEqual(ownDataOf(subscription.snapshot.entries, REPORT_KIND), reportRecord);
-        assert.deepEqual(ownDataOf(subscription.snapshot.entries, STEER_RECORD_KIND), steerData);
-    });
-
-    it("shows every entry with the same kind and data as readEntries returns for it", async () => {
-        const { host, feed, agentModel } = await openFixture();
-        const conversationId = await host.createConversation({ agent: { model: agentModel } });
         await sendAndSettle(host, conversationId, "hello");
         await placeReport(host, conversationId);
         await placeSteer(host, conversationId);
-
-        const subscription = await feed.subscribeConversation(conversationId);
+        const stored = await readAll(host, conversationId);
+        const deltas = await collectUntil(subscription, (seen) => entriesOf(seen).length >= stored.length);
         subscription.close();
-        const { entries } = await host.readEntries(conversationId, { limit: 100 });
 
-        const kinds = subscription.snapshot.entries.map((entry) => entry.kind);
+        const kinds = entriesOf(deltas).map((entry) => entry.kind);
         assert.ok(["pi.user", "pi.assistant", REPORT_KIND, STEER_RECORD_KIND].every((kind) => kinds.includes(kind)));
-        assert.deepEqual(
-            subscription.snapshot.entries.map(({ kind, data }) => ({ kind, data })),
-            entries.map(({ kind, data }) => ({ kind, data })),
-        );
+        assert.deepEqual(entriesOf(deltas), stored);
     });
 });

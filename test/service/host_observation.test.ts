@@ -87,32 +87,54 @@ async function sendAndSettle(host: HarnessHost, conversationId: string, content:
 }
 
 describe("watchConversation", () => {
-    it("returns the current view as the snapshot and then one frame per commit, in commit order, without replay", async () => {
+    it("returns the newest entry id and the state as the snapshot, then one frame per commit without replay", async () => {
+        const { host, agentModel } = await openFixture();
+        const conversationId = await host.createConversation({ agent: { model: agentModel } });
+        await sendAndSettle(host, conversationId, "first");
+        const newestBefore = (await host.readEntries(conversationId, { limit: 1, order: "descending" })).entries[0];
+        const frames: ConversationFrame[] = [];
+
+        const watch = await watchConversation(host, conversationId, (frame) => frames.push(frame));
+        await pause(SETTLE_PAUSE_MS);
+        assert.equal(frames.length, 0, "nothing is replayed at attachment");
+        assert.deepEqual(Object.keys(watch.snapshot).sort(), ["busy", "inbox", "live", "newestEntryId"]);
+        assert.equal(watch.snapshot.newestEntryId, newestBefore?.id);
+        assert.equal(watch.snapshot.busy, false);
+
+        await sendAndSettle(host, conversationId, "second");
+        await until(() => JSON.stringify(frames.map((frame) => frame.entries)).includes("second"), "new frames");
+        await watch.stop();
+
+        assert.ok(
+            frames.every((frame) => !("ops" in frame)),
+            "a frame carries no operations",
+        );
+        assert.deepEqual(JSON.parse(JSON.stringify(frames)), frames, "frames are plain JSON");
+    });
+
+    it("gives each frame only the entries its commit added, which together are the entries added after attachment", async () => {
         const { host, agentModel } = await openFixture();
         const conversationId = await host.createConversation({ agent: { model: agentModel } });
         await sendAndSettle(host, conversationId, "first");
         const frames: ConversationFrame[] = [];
-
         const watch = await watchConversation(host, conversationId, (frame) => frames.push(frame));
-        const snapshotIds = watch.snapshot.entries.map((entry) => entry.id);
-        await pause(SETTLE_PAUSE_MS);
-        assert.equal(frames.length, 0, "nothing is replayed at attachment");
-        assert.ok(snapshotIds.length > 0, "the snapshot holds the entries committed before attachment");
-        assert.equal(watch.snapshot.busy, false);
 
         await sendAndSettle(host, conversationId, "second");
-        await until(() => frames.some((frame) => frame.view.entries.length > snapshotIds.length + 1), "new frames");
+        await pause(SETTLE_PAUSE_MS);
         await watch.stop();
 
-        let previousIds = snapshotIds;
-        for (const frame of frames) {
-            const ids = frame.view.entries.map((entry) => entry.id);
-            assert.deepEqual(ids.slice(0, previousIds.length), previousIds, "each frame extends the one before");
-            assert.ok(frame.ops.length > 0, "a frame carries the operations of its commit");
-            previousIds = ids;
-        }
-        assert.ok(JSON.stringify(frames.at(-1)?.view).includes("second"));
-        assert.deepEqual(JSON.parse(JSON.stringify(frames)), frames, "frames are plain JSON");
+        const delivered = frames.flatMap((frame) => frame.entries);
+        const stored = (await host.readEntries(conversationId, { limit: 100 })).entries;
+        const added = stored.filter((entry) => Number(entry.id) > Number(watch.snapshot.newestEntryId));
+        assert.ok(added.length > 0);
+        assert.deepEqual(
+            delivered.map(({ id, kind, data }) => ({ id, kind, data })),
+            added,
+        );
+        assert.ok(
+            frames.some((frame) => frame.entries.length === 0),
+            "a commit that adds no entry gives a frame with none",
+        );
     });
 
     it("delivers exactly one frame for each commit that changes the conversation's view", async () => {
