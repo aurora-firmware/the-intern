@@ -165,7 +165,10 @@ export type ExportRoute = Fallback & {
     settled(): Promise<void>;
 };
 
-/** Makes the copy and sends it; resolves, once the download is under way, to the promise of its folder's removal (wrapped, so it is not awaited). */
+/**
+ * Makes the copy and sends it. Once the download is under way it resolves to the promise of its folder's removal,
+ * wrapped so that awaiting this call does not wait for the download to end.
+ */
 async function serveExport(
     options: ExportRouteOptions,
     req: IncomingMessage,
