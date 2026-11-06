@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { createServer, type RequestListener, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, it } from "node:test";
+import { browserTransport } from "../../src/client/browser_transport.ts";
 import {
     ClientError,
     createClient,
@@ -208,5 +209,91 @@ describe("a subscription whose stream closes without an end event", () => {
         assert.ok(error instanceof Error && !(error instanceof UnreachableError), `a plain error, not ${error}`);
         assert.match(error.message, /closed without an end event/);
         assert.deepEqual(opened, ["/feed?scope=instance"]);
+    });
+});
+
+/** A fetch double that records each request; a feed answers one snapshot, then silence until the signal aborts. */
+function fetchDouble(requests: RequestInit[]): typeof fetch {
+    return async (_input, init = {}) => {
+        requests.push(init);
+        if (init.method === "POST") return new Response('{"result":1}');
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode("event: snapshot\ndata: {}\n\n"));
+                init.signal?.addEventListener("abort", () => controller.error(new DOMException("x", "AbortError")));
+            },
+        });
+        return new Response(body, { headers: { "content-type": "text/event-stream" } });
+    };
+}
+
+describe("a subscription given an abort signal", () => {
+    const realFetch = globalThis.fetch;
+    afterEach(() => {
+        globalThis.fetch = realFetch;
+    });
+
+    it("ends with no error and closes the connection over the Node transport on abort of a quiet stream", async () => {
+        const closed = Promise.withResolvers<void>();
+        const baseUrl = await serve((req, res) => {
+            req.socket.once("close", () => closed.resolve());
+            res.writeHead(200, { "content-type": "text/event-stream" });
+            res.write("event: snapshot\ndata: {}\n\n");
+        });
+        const controller = new AbortController();
+        const client = createClient(nodeTransport({ baseUrl }));
+        const feed = client.subscribe({ scope: "instance" }, { signal: controller.signal });
+        const first = await feed.next();
+        const waiting = feed.next();
+        controller.abort();
+
+        assert.deepEqual(first, { done: false, value: { snapshot: {} } });
+        assert.equal((await waiting).done, true);
+        await closed.promise;
+    });
+
+    it("ends with no error over the browser transport when it aborts on a quiet stream", async () => {
+        const requests: RequestInit[] = [];
+        globalThis.fetch = fetchDouble(requests);
+        const controller = new AbortController();
+        const client = createClient(browserTransport("http://daemon.test"));
+        const feed = client.subscribeConversations(["c1"], { signal: controller.signal });
+        await feed.next();
+        const waiting = feed.next();
+
+        controller.abort();
+
+        assert.equal((await waiting).done, true);
+        assert.equal(requests[0]?.signal, controller.signal);
+    });
+
+    it("sets cache no-store on a browser feed request and on no operation call", async () => {
+        const requests: RequestInit[] = [];
+        globalThis.fetch = fetchDouble(requests);
+        const controller = new AbortController();
+        const client = createClient(browserTransport("http://daemon.test"));
+        await client.invoke("daemon.status");
+        const feed = client.subscribe({ scope: "instance" }, { signal: controller.signal });
+        await feed.next();
+        assert.equal(requests[0]?.cache, undefined);
+        assert.equal(requests[1]?.cache, "no-store");
+        controller.abort();
+    });
+
+    it("passes the signal on to the transport's stream, and none when the caller gives none", async () => {
+        const seen: (AbortSignal | undefined)[] = [];
+        const client = createClient({
+            call: () => assert.fail("the subscription calls no operation"),
+            async *stream(_path: string, signal?: AbortSignal): AsyncIterable<StreamEvent> {
+                seen.push(signal);
+                yield { event: "end", data: '{"reason":"stopped"}' };
+            },
+        });
+        const controller = new AbortController();
+
+        await client.subscribe({ scope: "instance" }, { signal: controller.signal }).next();
+        await client.subscribe({ scope: "instance" }).next();
+
+        assert.deepEqual(seen, [controller.signal, undefined]);
     });
 });

@@ -82,8 +82,19 @@ async function cancelBody(reader: ReadableStreamDefaultReader<Uint8Array>, baseU
  * Opens the feed route and yields its events up to and including `end`, then cancels the body. It never reopens the
  * feed, as an `EventSource` would; a body that closes or fails before `end` fails as unreachable.
  */
-async function* streamEvents(baseUrl: string, path: string): AsyncIterable<StreamEvent> {
-    const response = await send(new URL(path, baseUrl), { method: "GET" }, baseUrl);
+async function* streamEvents(baseUrl: string, path: string, signal?: AbortSignal): AsyncIterable<StreamEvent> {
+    try {
+        yield* openedEvents(baseUrl, path, signal);
+    } catch (error) {
+        // An aborted read is the reader's own choice to stop, not a failure of the daemon or the connection.
+        if (!signal?.aborted) throw error;
+    }
+}
+
+/** The feed's events as `streamEvents` yields them, before it sets aside what an abort makes of a read. */
+async function* openedEvents(baseUrl: string, path: string, signal?: AbortSignal): AsyncIterable<StreamEvent> {
+    // `no-store` keeps the browser's HTTP cache from holding one feed request behind another.
+    const response = await send(new URL(path, baseUrl), { method: "GET", cache: "no-store", signal }, baseUrl);
     if (response.status !== 200) {
         throw answerError(parseAnswer(await readText(response, baseUrl), response.status, baseUrl));
     }
@@ -110,6 +121,6 @@ export function browserTransport(baseUrl: string): Transport {
             const response = await send(new URL(operationPath(name), baseUrl), init, baseUrl);
             return parseAnswer(await readText(response, baseUrl), response.status, baseUrl);
         },
-        stream: (path) => streamEvents(baseUrl, path),
+        stream: (path, signal) => streamEvents(baseUrl, path, signal),
     };
 }

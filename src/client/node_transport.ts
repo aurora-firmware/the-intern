@@ -70,16 +70,30 @@ function parseAnswer(text: string, status: number | undefined, target: string): 
     }
 }
 
-/** Opens the feed route and yields its events; the request is closed when the reader stops or the stream ends. */
-async function* streamEvents(target: NodeTarget, described: string, path: string): AsyncIterable<StreamEvent> {
+/**
+ * Opens the feed route and yields its events; the request is closed when the reader stops, the stream ends or `signal`
+ * aborts. An abort ends the read without an error: it is the reader's own choice, not a failure of the connection.
+ */
+async function* streamEvents(
+    target: NodeTarget,
+    described: string,
+    path: string,
+    signal?: AbortSignal,
+): AsyncIterable<StreamEvent> {
+    if (signal?.aborted) return;
     const req = openRequest(target, { method: "GET", path });
+    const abort = () => req.destroy();
+    signal?.addEventListener("abort", abort, { once: true });
     try {
         const response = await responseOf(req, "", described);
         if (response.statusCode !== 200) {
             throw answerError(parseAnswer(await readText(response, described), response.statusCode, described));
         }
         yield* parseEventStream(chunksOf(response, described));
+    } catch (error) {
+        if (!signal?.aborted) throw error;
     } finally {
+        signal?.removeEventListener("abort", abort);
         req.destroy();
     }
 }
@@ -98,6 +112,6 @@ export function nodeTransport(target: NodeTarget): Transport {
                 req.destroy();
             }
         },
-        stream: (path) => streamEvents(target, described, path),
+        stream: (path, signal) => streamEvents(target, described, path, signal),
     };
 }
