@@ -531,3 +531,66 @@ describe("kill -9 as a lead's turn ends with its job In progress", () => {
         assert.deepEqual(await repairsOf(second, job.id), []);
     });
 });
+
+describe("kill -9 after a team member's abort stopped a lead, before the turn-end rule ran", () => {
+    const STOPPED_REASON = "stopped by a team member";
+
+    /** The job is Blocked as stopped, with the lead parked, no reminder submitted and the daemon the author. */
+    async function assertBlockedAsStopped(daemon: DaemonProcess, job: JobView): Promise<void> {
+        const leadId = job.leadConversation as string;
+        const stored = await jobOf(daemon, job.id);
+        assert.equal(stored.status, "blocked");
+        assert.equal(stored.blockedReason, STOPPED_REASON);
+        assert.equal((await listingOf(daemon, leadId)).status, "parked");
+        const blocks = (await historyOf(daemon, job.id)).filter((entry) => entry.new === "blocked");
+        assert.deepEqual(
+            blocks.map((entry) => entry.author),
+            [DAEMON_AUTHOR],
+        );
+        assert.equal(await steersWith(daemon, leadId, REMINDER_TEXT), 0, "no reminder was submitted");
+        assert.equal(await userInputsWith(daemon, leadId, REMINDER_TEXT), 0, "the lead took no reminder");
+    }
+
+    it("blocks the job as stopped at the next start, with a definition of done and no reminder", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const env = await hermetic();
+        const first = start(env, "gated", "turn-ended", true);
+        await first.ready;
+        const job = await createJob(first, "stop the running lead");
+        const leadId = job.leadConversation as string;
+        await untilStatus(first, leadId, "running");
+        await first.invoke("jobs.update", { job: job.id, definitionOfDone: "the report is filed" });
+        await first.invoke("conversations.abort", { conversationId: leadId }).catch(() => undefined);
+        await untilKilled(first);
+
+        const second = start(env, "gated", undefined, true);
+        await second.ready;
+
+        await assertBlockedAsStopped(second, job);
+    });
+
+    it("blocks the job as stopped at the next start when the aborted lead was parked for invoked agents", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const env = await hermetic();
+        // The lead's own first turn end would reach the `turn-ended` point before any abort could, so this daemon
+        // applies no rule and the test kills it once the abort and its cascade have ended.
+        const first = start(env, "invoke-parked");
+        await first.ready;
+        const job = await createJob(first, "stop the parked lead");
+        const leadId = job.leadConversation as string;
+        await untilTrue(async () => (await conversationsOf(first, job.id)).length === 3, "both invoked conversations");
+        await first.invoke("jobs.update", { job: job.id, definitionOfDone: "the report is filed" });
+        await first.invoke("conversations.abort", { conversationId: leadId });
+        for (const { id } of await conversationsOf(first, job.id)) await assertNoRun(first, id);
+        assert.equal((await jobOf(first, job.id)).status, "in_progress");
+        first.kill9();
+        await untilKilled(first);
+
+        const second = start(env, "invoke-parked", undefined, true);
+        await second.ready;
+
+        await assertBlockedAsStopped(second, job);
+    });
+});
