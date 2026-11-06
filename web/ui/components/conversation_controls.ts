@@ -44,10 +44,18 @@ const hasFinished = async (conversationId: string, state: FeedState): Promise<bo
     return FINISHED_STATUSES.includes(listing.status);
 };
 
-type StopProps = { conversationId: string; state: FeedState; onEngaged: (isEngaged: boolean) => void };
+type StopProps = {
+    conversationId: string;
+    state: FeedState;
+    isOffered: boolean;
+    onEngaged: (isEngaged: boolean) => void;
+};
 
-/** Stop with its confirmation. It tells `onEngaged` while the dialog is open or its answer is shown. */
-const StopButton = ({ conversationId, state, onEngaged }: StopProps) => {
+/**
+ * Stop with its confirmation. It tells `onEngaged` while the dialog is open or its answer is shown; those outlast the
+ * run, but pressing Stop is offered only while the conversation is.
+ */
+const StopButton = ({ conversationId, state, isOffered, onEngaged }: StopProps) => {
     const connected = useContext(isConnected);
     const dialog = useRef<HTMLDialogElement>(null);
     const [message, setMessage] = useState<string | undefined>(undefined);
@@ -68,19 +76,21 @@ const StopButton = ({ conversationId, state, onEngaged }: StopProps) => {
     return h(
         "div",
         { class: "stop" },
-        h(
-            "button",
-            {
-                type: "button",
-                class: "button button-destructive stop-open",
-                disabled: !connected || sending,
-                onClick: () => {
-                    dialog.current?.showModal();
-                    setOpen(true);
-                },
-            },
-            "Stop",
-        ),
+        isOffered
+            ? h(
+                  "button",
+                  {
+                      type: "button",
+                      class: "button button-destructive stop-open",
+                      disabled: !connected || sending,
+                      onClick: () => {
+                          dialog.current?.showModal();
+                          setOpen(true);
+                      },
+                  },
+                  "Stop",
+              )
+            : null,
         h(
             "dialog",
             { ref: dialog, class: "stop-dialog", onClose: () => setOpen(false) },
@@ -183,7 +193,7 @@ export const ConversationControls = ({ number, conversationId, state }: Controls
     return h(
         "div",
         { class: "conversation-controls", "data-busy": String(state.busy) },
-        h(StopButton, { conversationId, state, onEngaged: setEngaged }),
-        h(RedirectBox, { number, conversationId }),
+        h(StopButton, { conversationId, state, isOffered, onEngaged: setEngaged }),
+        isOffered ? h(RedirectBox, { number, conversationId }) : null,
     );
 };

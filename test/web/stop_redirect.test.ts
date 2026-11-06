@@ -176,6 +176,33 @@ describe("stopping and redirecting a conversation from the Job page in chrome", 
         await controls.locator(".control-message").waitFor({ timeout: WAIT_MS });
         t.assert.match((await controls.locator(".control-message").textContent()) ?? "", /already finished/);
         t.assert.equal(proxy.requests().filter((request) => request.url.includes("conversations.abort")).length, 0);
+        t.assert.equal(await controls.locator(REDIRECT_BOX).count(), 0);
+        t.assert.equal(await controls.locator(STOP_OPEN).count(), 0);
+    });
+
+    it("keeps only the Stop confirmation for a finished conversation, and no Redirect, after a failed read", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const rig = await startRig("gated", { turnEndRule: false });
+        const proxy = await startWebProxy();
+        proxies.push(proxy);
+        const browser = await launchBrowser(t, "chrome", { proxyPort: proxy.port });
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openJob(page, rig.port, rig, true);
+        const controls = controlsOf(page, rig.lead);
+
+        await controls.locator(STOP_OPEN).click();
+        rig.daemon.releaseRuns();
+        await waitForStatus(rig.daemon, rig.lead, "idle");
+        await controls.locator(REDIRECT_BOX).waitFor({ state: "detached", timeout: WAIT_MS });
+        t.assert.equal(await controls.locator(STOP_CONFIRM).isVisible(), true);
+
+        proxy.forceUnavailable("conversations.get");
+        await controls.locator(STOP_CONFIRM).click();
+        await page.waitForSelector(BANNER, { timeout: WAIT_MS });
+        t.assert.equal(await controls.locator(REDIRECT_BOX).count(), 0);
+        t.assert.equal(await controls.locator(STOP_OPEN).count(), 0);
     });
 
     it("holds Redirect words for a parked lead, starts no run, and shows the words once when it continues", {
