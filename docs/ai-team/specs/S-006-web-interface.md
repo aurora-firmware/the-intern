@@ -33,11 +33,11 @@ and the shared vocabulary of `docs/system_overview.html`. It adds these terms:
 | Page | One screen of the web interface, reached from the sidebar or from a link: Board, Job page, Front desk, Roles, Workspaces, Status. |
 | Sidebar | The dark panel on every page holding the logo and the links to the pages. |
 | Board | The home page: every job in one column per status. |
-| Job page | The page of one job, with an address of its own. |
+| Job page | The page of one job, with an address of its own, such as `/ui/#/jobs/W-3`. |
 | Live activity | What a conversation does as it happens: messages, tool calls and results, and the agents it invokes. |
 | Stop | The action that aborts a conversation, with S-001's cascade. |
-| Redirect | The action that sends a team member's words to a running agent, to take into account straight away. |
-| Answer | Text a team member gives a Blocked job, delivered to its lead agent (S-004 REQ-006). |
+| Redirect | The action that sends a team member's words to a running agent, to take into account after its current tool round. |
+| Answer | Text a team member gives a Blocked job through `jobs.resume`, delivered to its lead agent (S-004 REQ-006). |
 | Connection banner | The notice a page shows while it can't reach the service. |
 | Export download | The file of the whole saved state that a browser receives from the Status page. |
 
@@ -92,6 +92,11 @@ What this specification explicitly does NOT cover:
   docked as a chat. Rejected: long tool output and nested agents get cramped, with the sidebar taking width as well.
 - **Control room.** The board plus pinned tiles, each following one agent live. Rejected: the most to build and the
   busiest screen, against the brand's "simple and clear", for something rarely needed in a first version.
+- **Page addresses in path form, such as `/ui/jobs/W-3`.** Rejected: a missing file gets `404` today, so it needs a
+  further S-003 REQ-008 amendment for nothing a team member sees. The hash form needs none.
+- **One stream per invoked conversation.** Rejected: plain HTTP allows a browser 6 connections per host across its tabs,
+  so a few busy jobs would use them up and actions would hang.
+- **A reminder after Stop.** Rejected: it starts again what a team member just stopped (S-000 use case 7).
 - **Linked pages** were chosen because, with no login, a link is the easy way to point another team member at a job,
   and the live activity gets the whole content width.
 - **An optional name remembered in the browser.** Rejected: it's a label, not proof, and the record should claim
@@ -122,10 +127,11 @@ What this specification explicitly does NOT cover:
 |---|---|
 | `/` | Redirects to `/ui/` (S-003 REQ-008) |
 | `/ui/` | Board |
-| One address per job, holding its short number, such as `/ui/jobs/W-3` | Job page |
-| One address each | Front desk, Roles, Workspaces, Status |
+| `/ui/#/jobs/<short number>`, such as `/ui/#/jobs/W-3` | Job page |
+| `/ui/#/desk`, `/ui/#/roles`, `/ui/#/workspaces`, `/ui/#/status` | Front desk, Roles, Workspaces, Status |
 
-The exact form of these addresses is an Open Question for the Architect. REQ-001 fixes what they must do.
+Every page is served from `/ui/`, and the part after `#` names it, so S-003 REQ-008 isn't amended. REQ-001 fixes what
+these addresses must do.
 
 ### Service calls consumed
 
@@ -135,11 +141,18 @@ operations and feed each page relies on. No page calls anything else, apart from
 | Page | Reads | Actions |
 |---|---|---|
 | Board | `jobs.list`, instance feed (`GET /feed?scope=instance`) | — |
-| Job page | `jobs.get`, `jobs.history.list`, `jobs.worklog.list`, `conversations.get`, `conversations.entries`, `conversations.invocations`, `models.list`, `roles.list`, conversation feed | `jobs.update`, `jobs.complete`, `jobs.cancel`, `jobs.resume`, `jobs.relate`, `jobs.unrelate`, `conversations.submit`, `conversations.abort`, `conversations.compact`, `conversations.reset`, `conversations.seat` |
+| Job page | `jobs.get`, `jobs.history.list`, `jobs.worklog.list`, `conversations.get`, `conversations.entries`, `conversations.invocations`, `models.list`, `roles.list`, `workspaces.list`, instance feed, one stream for the job's conversations (`GET /feed?scope=conversations`, S-003 REQ-006) | `jobs.update`, `jobs.complete`, `jobs.cancel`, `jobs.resume`, `jobs.relate`, `jobs.unrelate`, `conversations.submit`, `conversations.abort`, `conversations.compact`, `conversations.reset`, `conversations.seat` |
 | Front desk | `desk.get`, `conversations.entries`, `submissions.get`, conversation feed | `conversations.submit`, `conversations.abort`, `jobs.create` |
-| Roles | `roles.list`, `models.list` | `roles.create`, `roles.change`, `roles.remove`, `roles.restore` |
-| Workspaces | `workspaces.list` | `workspaces.register`, `workspaces.unregister` |
-| Status | `daemon.status`, `usage.get`, `models.list` | Export download |
+| Roles | `roles.list`, `models.list`, `workspaces.list`, instance feed | `roles.create`, `roles.change`, `roles.remove`, `roles.restore` |
+| Workspaces | `workspaces.list`, instance feed | `workspaces.register`, `workspaces.unregister` |
+| Status | `daemon.status`, `usage.get`, `models.list`, `conversations.list`, instance feed | Export download |
+
+On the Job page, the instance feed is the only source of job deltas (S-004 REQ-015), and its `conversation_created`
+delta names a newly invoked conversation. `workspaces.list` gives the workspaces for a change of seat.
+
+**Contract** (answers and Redirect on the Job page): an answer is `jobs.resume` with `text`, and a second answer, once
+the job is no longer Blocked, is refused `conflict`. `conversations.submit` is for Redirect only, with busy mode
+`steer`, and answers `{ held: true }` for a conversation parked for reports (S-002 REQ-012).
 
 ### The export route
 
@@ -172,8 +185,10 @@ Blocked job
 Live following
   job page → current entries → live activity from the conversation feed             REQ-005
   long output → collapsed, expandable                                               REQ-005, REQ-019
-  Redirect → words delivered to the running agent                                   REQ-006
+  Redirect → words delivered after the current tool round                           REQ-006
+  Redirect while parked for reports → page says "held until it continues"           REQ-006
   Stop → one confirmation → conversation aborted; already finished → page says so   REQ-006
+  Stop on the lead → no reminder → Blocked "stopped by a team member" → an answer resumes   REQ-006
   Reset → one confirmation → conversation starts over                               REQ-007
 
 Any action
@@ -183,6 +198,8 @@ Any action
 Lost connection
   feed or call fails → connection banner, actions disabled, typed text kept         REQ-014
   → reconnects on its own → fresh data → banner gone, text can be sent              REQ-014
+  feed ends lagging → subscribes again, missed entries shown once, no banner        REQ-014
+  feed ends stopped, or the service answers unavailable → as for a failed feed      REQ-014
 
 Backup
   Status → Export → one confirmation stating what the copy holds                    REQ-012
@@ -218,7 +235,7 @@ browser's back, forward and reload SHALL work across pages.
 #### AC-001.3 — An unknown job
 
 - **Given:** a daemon with no job `W-999`
-- **When:** a team member opens that job's address
+- **When:** a team member opens `/ui/#/jobs/W-999`
 - **Then:** the page says the job doesn't exist and links back to the Board
 
 **Verification:** test — a browser test.
@@ -227,8 +244,9 @@ browser's back, forward and reload SHALL work across pages.
 
 The Board SHALL be the home page and SHALL show every job in the columns To do, In progress, Blocked and Done, in that
 order, each job with its short number and title. A Blocked job SHALL stand out from the others by more than its column,
-and SHALL show its Blocked reason or the start of it. The Done column SHALL show the most recent jobs first and load
-more on request. A job SHALL move between columns without a reload when the service reports the change.
+and SHALL show its Blocked reason or the start of it. The Done column SHALL show jobs newest first, as `jobs.list`
+returns them, and load more on request. A job SHALL move between columns without a reload when the service reports the
+change.
 
 #### AC-002.1 — A job blocks
 
@@ -250,7 +268,7 @@ more on request. A job SHALL move between columns without a reload when the serv
 
 - **Given:** more Done jobs than the column first shows
 - **When:** a team member asks for more
-- **Then:** older Done jobs are added, most recent first, and the other columns stay as they were
+- **Then:** older Done jobs are added, newest first, and the other columns stay as they were
 
 **Verification:** test — a browser test.
 
@@ -272,7 +290,8 @@ keep them current without a reload.
 
 The Job page SHALL let a team member answer a Blocked job (S-004 REQ-006), edit its title, description and definition
 of done (S-004 REQ-004), complete it or cancel it with a justification (S-004 REQ-005), and relate it to another job or
-remove a relation (S-004 REQ-009). The Job page SHALL show the job's related jobs, with links.
+remove a relation (S-004 REQ-009). The Job page SHALL show the job's related jobs, with links. An answer SHALL go
+through `jobs.resume` with its text, so a second answer, once the job is no longer Blocked, is refused `conflict`.
 
 #### AC-004.1 — Answer a blocked job
 
@@ -301,11 +320,21 @@ remove a relation (S-004 REQ-009). The Job page SHALL show the job's related job
 
 **Verification:** test — a browser test.
 
+#### AC-004.4 — A second answer
+
+- **Given:** a Blocked job with its page open in two browsers, each with an answer typed
+- **When:** one sends its answer, and the other then sends its own
+- **Then:** the lead agent receives the first; the second browser shows the `conflict` refusal, its typed text stays in
+  the box, and the lead agent doesn't receive that text
+
+**Verification:** test — a browser test with two browser contexts.
+
 ### REQ-005 — Following live
 
 The Job page SHALL show the live activity of the job's lead conversation and of every conversation it invokes,
 recursively: messages, tool calls and tool results, as they happen, after the entries already stored. Long output SHALL
-be collapsed and expandable. A team member SHALL be able to tell which agent each activity belongs to.
+be collapsed and expandable. A team member SHALL be able to tell which agent each activity belongs to. Following a job
+SHALL leave the browser's connections free for its actions (Assumptions and Dependencies).
 
 #### AC-005.1 — Activity appears
 
@@ -332,26 +361,39 @@ be collapsed and expandable. A team member SHALL be able to tell which agent eac
 
 **Verification:** test — a browser test.
 
+#### AC-005.4 — Many agents in several tabs
+
+- **Given:** a job with 8 running invoked agents on the fake model, over plain HTTP
+- **When:** its Job page is open in 3 tabs of one browser, and a team member presses Stop in one and confirms
+- **Then:** every tab keeps showing the activity of all 8 agents with no reload, and the Stop gets its answer
+
+**Verification:** test — a browser test with 3 pages in one browser context.
+
 ### REQ-006 — Stop and redirect
 
-The Job page SHALL offer Stop and Redirect for a running conversation of the job. Stop SHALL ask for one confirmation,
-then abort the conversation (S-001's cascade). Redirect SHALL deliver the team member's words to the running agent
-straight away (S-002's busy mode `steer`).
+The Job page SHALL offer Stop for a running conversation of the job, and Redirect for a running conversation or one
+parked for reports. Stop SHALL ask for one confirmation, then abort the conversation (S-001's cascade). Stopping the
+job's lead SHALL leave the job as S-004 REQ-008 states: no reminder, Blocked with the reason "stopped by a team member",
+and an answer resumes it. Redirect SHALL deliver the team member's words to the running agent after its current tool
+round (S-002's busy mode `steer`; S-001 REQ-020). For a conversation parked for reports, the service holds the words,
+and the page SHALL say "held until it continues" (ADR-004 decision 4).
 
 #### AC-006.1 — Redirect
 
 - **Given:** a running lead agent on the fake model
 - **When:** a team member sends words through Redirect
-- **Then:** the agent's conversation records them from a team member with the way in `web interface`, and the live
-  activity shows them
+- **Then:** the agent takes them after its current tool round, its conversation records them from a team member with
+  the way in `web interface`, and the live activity shows them
 
 **Verification:** test — a browser test reading the conversation's entries.
 
 #### AC-006.2 — Stop asks once
 
 - **Given:** a running lead agent on the fake model
-- **When:** a team member presses Stop, declines the confirmation, presses it again and confirms
-- **Then:** the agent keeps running after the decline, and stops after the confirmation
+- **When:** a team member presses Stop, declines the confirmation, presses it again and confirms, then answers the job
+- **Then:** the agent keeps running after the decline and stops after the confirmation, with no reminder; the job goes
+  Blocked with the reason "stopped by a team member", the daemon as author in its history; and the answer sets it In
+  progress with the lead continuing
 
 **Verification:** test — a browser test.
 
@@ -359,7 +401,17 @@ straight away (S-002's busy mode `steer`).
 
 - **Given:** a Stop confirmation open
 - **When:** the agent finishes before the team member confirms
-- **Then:** the page says the agent has already finished, and nothing else happens
+- **Then:** the page reads from the feed's state that the run ended, says the agent has already finished, and sends no
+  abort
+
+**Verification:** test — a browser test.
+
+#### AC-006.4 — Redirect while parked
+
+- **Given:** a lead agent parked for a running invoked agent on the fake model
+- **When:** a team member sends words through Redirect, and the invoked agent reports
+- **Then:** the page says "held until it continues" and no run starts; when the lead continues, the live activity shows
+  the words once, from a team member with the way in `web interface`
 
 **Verification:** test — a browser test.
 
@@ -382,8 +434,9 @@ Stop and Redirect. Reset SHALL ask for one confirmation.
 The Front desk page SHALL show the front desk's recent conversation and let a team member send it messages, with its
 answers appearing as they are written. A message sent while the front desk is busy SHALL queue (S-002's busy mode
 `followUp`). The page SHALL offer Stop while the front desk answers, with no confirmation, because it ends only a chat
-turn. Messages still queued at that point SHALL be dropped, and the page SHALL name them. The page SHALL also let a team
-member create a job directly, with a title and description (S-004 REQ-003).
+turn. Messages still queued at that point SHALL be dropped, and the page SHALL name the dropped messages that it sent
+and still holds. The page SHALL also let a team member create a job directly, with its text and an optional title
+(S-004 REQ-003).
 
 #### AC-008.1 — Chat creates a job
 
@@ -396,14 +449,14 @@ member create a job directly, with a title and description (S-004 REQ-003).
 #### AC-008.2 — Create directly
 
 - **Given:** the Front desk page
-- **When:** a team member creates a job directly, then tries again with an empty title
+- **When:** a team member creates a job directly, then tries again with empty text
 - **Then:** the first opens as `W-n` on the Board; the second shows the service's refusal and creates nothing
 
 **Verification:** test — a browser test.
 
 #### AC-008.3 — Stop an answer
 
-- **Given:** the front desk answering on the fake model, with one more message queued
+- **Given:** the front desk answering on the fake model, with one more message queued from this page
 - **When:** a team member presses Stop
 - **Then:** with no confirmation the answer stops, the queued message is dropped and named on the page, and a new
   message gets an answer
@@ -462,7 +515,8 @@ the available models and thinking levels, kept current without a manual reload.
 ### REQ-012 — The export download
 
 The Status page SHALL offer the export download. It SHALL ask for one confirmation that states the file holds every
-conversation and the whole job record, and that anyone who can reach the page can take it. After the confirmation the
+conversation and the whole job record, that settings (the configuration file) aren't in it, and that anyone who can
+reach the page can take it. After the confirmation the
 browser SHALL save the file from `GET /export` (S-003 REQ-016). A failure SHALL show an error, and the page SHALL never
 present a partial file as a good backup.
 
@@ -473,21 +527,25 @@ present a partial file as a good backup.
 - **Then:** the browser saves a file, the jobs go on, and `bob import` accepts the file for a new instance that starts
   with every job committed before the export began
 
-**Verification:** test — a browser test, then `bob import` as a child process with a temporary instance.
+**Verification:** test — a browser test, then `bob import` as a child process with a temporary instance. The test
+downloads again on `409 busy` (S-003 REQ-016).
 
 #### AC-012.2 — Declined and failed
 
 - **Given:** the Status page
 - **When:** a team member declines the confirmation, then confirms while the service answers `GET /export` with an error
-- **Then:** nothing is requested after the decline, and the error shows after the failure with no success message
+- **Then:** the confirmation states what REQ-012 names; nothing is requested after the decline, and the error shows
+  after the failure with no success message
 
 **Verification:** test — a browser test.
 
 ### REQ-013 — Refusals and simultaneous actions
 
 When the service refuses an action, the page SHALL show the service's message, keep what the team member typed and show
-no change. The pages SHALL NOT decide on their own whether an action is allowed. When two team members act on the same
-job, the service decides, and both pages SHALL show the result through the feed.
+no change. The pages SHALL NOT decide on their own whether an action is allowed. A page MAY read state from the feed to
+word a message, such as "already finished" (AC-006.3). When that state arrives late, the action reaches the service, and
+this harmless race is accepted. When two team members act on the same job, the service decides, and both pages SHALL
+show the result through the feed.
 
 #### AC-013.1 — Answering a cancelled job
 
@@ -503,6 +561,12 @@ While a page can't reach the service, it SHALL show the connection banner and di
 being typed. It SHALL try to reconnect without being asked. On reconnecting it SHALL load fresh data, remove the banner
 and enable the actions, and the kept text can then be sent.
 
+Following S-005 REQ-015, a feed that ends with `stopped`, and an `unavailable` answer to a call or feed request, SHALL
+count as a page that can't reach the service. `unavailable` and unreachable are connection state, not a refusal under
+REQ-013. A feed that ends with `lagging` SHALL be subscribed again with no banner. Each new subscription starts from a
+fresh snapshot. For each conversation it shows, the page SHALL then read `conversations.entries` from the last entry it
+showed and show what it missed, once, before the new deltas.
+
 #### AC-014.1 — A daemon restart
 
 - **Given:** a Job page open with a typed answer not yet sent
@@ -511,6 +575,24 @@ and enable the actions, and the kept text can then be sent.
   current state, and the kept answer can be sent and reaches the lead agent
 
 **Verification:** test — a browser test restarting a test daemon.
+
+#### AC-014.2 — A feed that lags
+
+- **Given:** a Job page following a run, whose feed ends with `lagging` after entries the page hasn't shown
+- **When:** the feed ends
+- **Then:** no banner shows, the page subscribes again, and it shows the missed entries once and in order, then the new
+  activity
+
+**Verification:** test — a browser test with the feed's end forced.
+
+#### AC-014.3 — A service that is stopping
+
+- **Given:** a Job page with a typed answer not yet sent
+- **When:** the feed ends with `stopped`, and in a second case the page's call to send the answer gets `unavailable`
+- **Then:** each time the banner shows, sending is disabled, the typed answer stays, no refusal message shows, and the
+  page recovers as AC-014.1 states
+
+**Verification:** test — a browser test stopping a test daemon, and one with the `unavailable` answer forced.
 
 ### REQ-015 — Who did it
 
@@ -616,7 +698,8 @@ with the daemon under normal work.
 
 The Board SHALL stay usable with 500 jobs, and a Job page SHALL stay responsive with long activity. Usable and
 responsive here mean that the page opens within 3 seconds on loopback, and that an interaction, such as opening a job
-or expanding an output, answers within 500 milliseconds.
+or expanding an output, answers within 500 milliseconds. What the service sends a page for a new activity entry SHALL be
+bounded by what the entry adds, not by the length of the conversation.
 
 #### AC-019.1 — A full board
 
@@ -633,6 +716,16 @@ or expanding an output, answers within 500 milliseconds.
 - **Then:** both meet the times above
 
 **Verification:** test — a browser test.
+
+#### AC-019.3 — Long activity with a run writing
+
+- **Given:** a Job page following a run on the fake model, once with 20 activity entries and once with 2,000, some with
+  long output
+- **When:** the run adds one short entry
+- **Then:** the data the page receives for that entry is no larger with 2,000 entries than with 20, and its size follows
+  from what the entry adds
+
+**Verification:** test — a browser test measuring the data received on the feed connection.
 
 ### REQ-020 — Readable and keyboard-usable
 
@@ -693,8 +786,14 @@ None. The web interface adds no setting. The existing `[network]` section of `co
 - **A daemon restart is routine (S-002),** and the pages recover through REQ-014.
 - **Accepted risk, confirmed by the product owner on 2026-11-06.** Anyone who can reach the page can download every
   conversation and the whole job record, with no login. The confirmation on the Status page and the manual state this.
-- **S-001 to S-005** provide the operations and the feed named in Interfaces. S-003 REQ-016, added on this spec's
-  planning branch, provides the export route.
+- **S-001 to S-005** provide the operations and the feed named in Interfaces. Amendments on this spec's planning branch
+  provide the rest. S-003 v0.5 adds the export route (REQ-016) and one stream for several conversations (REQ-006). S-004
+  v0.13 adds the block after a team member's stop (REQ-008) and the "related changed" delta (REQ-015).
+- **Browser connections.** Plain HTTP allows a browser 6 connections per host across its tabs. A Job page reads the
+  instance feed and the stream for its conversations, so 3 Job pages that each hold both would use all 6 and leave none
+  for actions. Feature Architecture decides how the pages stay within the limit, so that AC-005.4 holds.
+- **Delta size.** Today each delta of a conversation re-sends its whole active view, measured at 1.06 MB for a 32-byte
+  change. Feature Architecture decides how AC-019.3 is met.
 - **Brand assets.** The brand manual, logos and font choices come from The Round Table project
   (`~/projects/the_round_table/project/docs/corporate_image/` and `the_round_table/src/app/globals.css`). They are
   copied into this repository, so the two projects stay independent. The fonts are free and open source.
@@ -704,7 +803,8 @@ None. The web interface adds no setting. The existing `[network]` section of `co
 
 1. All browser tests of this spec pass in CI against a real daemon on the fake model, covering the journeys of Users and
    Journeys, the restart (REQ-014) and a refused action (REQ-013). Measured by the CI run.
-2. The service tests of S-003 REQ-016 pass: the copy, the log line and the removal of the temporary copy. Measured by
+2. The service tests of S-003 REQ-016 pass: the copy, the log line, the owner-only temporary copy and its removal, one
+   download at a time and the free-space refusal. So do those of S-003 AC-006.4 and S-004 AC-008.5. Measured by
    `npm test`.
 3. From a second computer on the network, the pages load and an action is recorded with that computer's address
    (REQ-015). Measured by the by-hand LAN check, with its output recorded.
@@ -718,10 +818,12 @@ None. The web interface adds no setting. The existing `[network]` section of `co
 
 1. **The shell.** The served files, style, sidebar, addresses, connection banner and the browser test setup. Delivers
    REQ-001, REQ-014, REQ-016, REQ-017. Depends on nothing else here.
-2. **See the work.** Board and Job page, read-only, with live activity. Delivers REQ-002, REQ-003, REQ-005, REQ-018,
-   REQ-019. Depends on phase 1.
+2. **See the work.** Board and Job page, read-only, with live activity, one stream for a job's conversations, staying
+   within the browser's connections, and delta size bounded by what an entry adds (AC-019.3). Delivers REQ-002, REQ-003,
+   REQ-005, REQ-018, REQ-019, S-003 REQ-006's stream and S-004 REQ-015's "related changed" delta. Depends on phase 1.
 3. **Steer the work.** Answering, editing, cancelling, Stop, Redirect, conversation controls, the Front desk and
-   refusals. Delivers REQ-004, REQ-006, REQ-007, REQ-008, REQ-013, REQ-015. Depends on phase 2.
+   refusals. Delivers REQ-004, REQ-006, REQ-007, REQ-008, REQ-013, REQ-015 and S-004 REQ-008's block after a stop.
+   Depends on phase 2.
 4. **Shape and back up.** Roles, Workspaces, Status and the export route and download. Delivers REQ-009, REQ-010,
    REQ-011, REQ-012, S-003 REQ-016. Depends on phase 1.
 5. **Finish.** Browser coverage, the manual chapter, the by-hand checks and `docs/system_overview.html`. Delivers
@@ -734,12 +836,8 @@ Each is for the Architect, resolved in Feature Architecture, and none changes th
 - **Technology preference from the product owner:** the look of The Round Table, built with Next.js, Tailwind, shadcn
   with Radix and lucide icons, and writing the pages in TypeScript. It's a preference to weigh against `bob`'s setup,
   which has no compile step, and S-003 REQ-008's serving of files from the package.
-- **The form of the page addresses.** REQ-001 fixes their behaviour. A path form such as `/ui/jobs/W-3` needs a further
-  S-003 REQ-008 amendment, because a missing file gets `404` today; a form such as `/ui/#/jobs/W-3` doesn't.
 - **Browser test tooling.** `docs/development/tech_stack.md` leaves it to this spec's architecture. REQ-021 needs one
   that covers the target browsers.
-- **The export route's place in the catalogue.** Whether `GET /export` calls a new operation, which would add a row to
-  S-002's catalogue, or another call on the service layer, within S-003 REQ-013.
 
 ## Amendment Log
 
