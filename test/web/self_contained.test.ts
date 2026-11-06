@@ -90,8 +90,11 @@ describe("the pages' independence of anything but the service in chrome", () => 
         if (browser === undefined) return;
         const origin = new URL(pageUrl(port, "/")).origin;
 
+        // The proxy sees no CONNECT (https) request, but the page reports every request it makes, whatever the scheme.
+        const pageRequests: string[] = [];
         for (const target of pagesToOpen(job)) {
             const page = await browser.newPage();
+            page.on("request", (request) => pageRequests.push(request.url()));
             await openAndSettle(page, port, target);
             await page.close();
         }
@@ -101,6 +104,9 @@ describe("the pages' independence of anything but the service in chrome", () => 
             (request) => !request.url.startsWith(`${origin}/`) || !request.referer?.startsWith(`${origin}/`),
         );
         t.assert.deepEqual(stray, [] as RecordedRequest[]);
+        const outside = pageRequests.filter((url) => /^(https?|wss?|ftp):/.test(url) && !url.startsWith(`${origin}/`));
+        t.assert.deepEqual(outside, [], "no request the page made went outside the service");
+        t.assert.equal(pageRequests.length > 0, true, "the pages' requests were seen");
         t.assert.equal(
             withReferer.some((request) => new URL(request.url).pathname.startsWith(FONT_PATH)),
             true,
