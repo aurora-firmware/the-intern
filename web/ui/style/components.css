@@ -14,7 +14,6 @@ body {
     background: var(--color-light-gray);
     color: var(--color-dark-blue);
     font-family: var(--font-body);
-    font-weight: 400;
 }
 
 h1,
@@ -84,20 +83,20 @@ main {
 
 /* Cards */
 
-.card {
-    padding: 1rem;
+.card,
+dialog {
     border: 1px solid var(--color-medium-gray);
     border-radius: var(--radius-card);
     background: var(--color-white);
     box-shadow: var(--shadow-card);
 }
 
-.card-blocked {
-    border-left: 4px solid var(--color-red);
+.card {
+    padding: 1rem;
 }
 
-.card-blocked .reason {
-    color: var(--color-dark-blue);
+.card-blocked {
+    border-left: 4px solid var(--color-red);
 }
 
 /* Buttons */
@@ -186,7 +185,6 @@ main {
     border-left: 4px solid var(--color-red);
     border-radius: var(--radius-control);
     background: var(--color-orange-subtle);
-    color: var(--color-dark-blue);
 }
 
 /* Connection banner */
@@ -206,11 +204,7 @@ main {
 dialog {
     max-width: 32rem;
     padding: 1.5rem;
-    border: 1px solid var(--color-medium-gray);
-    border-radius: var(--radius-card);
-    background: var(--color-white);
     color: var(--color-dark-blue);
-    box-shadow: var(--shadow-card);
 }
 
 dialog::backdrop {
@@ -240,13 +234,6 @@ label {
     gap: 0.25rem;
 }
 
-.field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    margin-bottom: 1rem;
-}
-
 input,
 select,
 textarea {
@@ -261,19 +248,6 @@ textarea {
 textarea {
     min-height: 6rem;
     resize: vertical;
-}
-
-/* Lists */
-
-.list {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-}
-
-.list > li {
-    padding: 0.75rem 0;
-    border-bottom: 1px solid var(--color-medium-gray);
 }
 
 /* Activity section: long conversations stay cheap to draw */
