@@ -56,6 +56,8 @@ operating-system account The Intern runs as, not by logins or per-action rules.
 6. **Owner-only files.** Every directory The Intern creates is owner-only (mode 0700) and every file it creates is
    accessible only to the service account. An existing directory that is accessible to the group or others, or not
    owned by the service account, stops startup (S-002 REQ-006).
+   This covers what The Intern writes on its own machine, including the temporary copy behind the export route (S-003
+   REQ-016; ADR-001 decision 2). A file a client saves from that route is on the client's machine, outside this rule.
 
 **The consequence, stated plainly:** whoever can reach The Intern acts with the service account's access. In v1 that
 is the installing person's access. Limiting who can reach a way in, and what the service account can reach, is how a
@@ -80,6 +82,10 @@ team limits what The Intern can do.
   access.
 - In v1 the service account is a person's own account, so The Intern's reach is that person's reach, including their
   personal files and keys. A mistake by an agent, or by anyone who reaches a way in, acts with that person's access.
+- Anyone who can reach the network listener can take a copy of the whole database with `GET /export`: every
+  conversation and the whole job record, and whatever agents' tool output wrote into them. The copy then leaves the
+  service account's protection. Decision 5 keeps credentials out of the database's own fields, but it can't keep a
+  secret out of a transcript. The product owner accepted this risk on 2026-11-06 (S-006, Assumptions and Dependencies).
 - There is no record of which person acted. The actor that S-001 attribution records names a team member and the
   way in they used, as the caller states it; nothing proves it.
 - Safety depends on setup outside The Intern: the machine's accounts, the network setup that decides who reaches the
@@ -125,3 +131,4 @@ the same account log each other out. Using the service account's credentials in 
 |---|---|---|
 | 2026-11-04 | Decision 2: records the two rules that read the way in to decide an outcome: the front desk's refusal of input from anyone but a team member by the command line or the web interface, and the refusal of `jobs.create` for a way in with no origin letter. | S-001 REQ-020 and S-004 REQ-021 and REQ-002 already require them, and this decision said the actor grants nothing. PR #148 review; product owner decision of 2026-11-04. |
 | 2026-11-05 | Citations only (Sources, Alternative C): S-002 no longer has Design Principles. No decision changes. | Architecture consistency review of the ai-team 0.19.0 spec layout, T-185. |
+| 2026-11-06 | Decision 6: owner-only covers what The Intern writes on its own machine, and a file a client saves from the export route is outside it. Negative: anyone who reaches the network listener can take a copy of the whole database. The rule for The Intern's own files doesn't change. | Architecture consistency review of S-006 and S-003 v0.5; the product owner's accepted risk of 2026-11-06. S-004 REQ-016 keeps the copy owner-only, and S-003 REQ-016 sends "the same copy" to a browser. |

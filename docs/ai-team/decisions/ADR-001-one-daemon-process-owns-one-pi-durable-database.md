@@ -114,7 +114,8 @@ code of our own, apart from the two bounded exceptions in decision 4.
 
    **Export and import copy the whole file.**
    - `jobs.export` writes a consistent copy of the whole database to a new path, owner-only, through SQLite's online
-     backup on the daemon's connection, while work goes on (S-004 REQ-016).
+     backup on the daemon's connection, while work goes on (S-004 REQ-016). The network listener's export route
+     (S-003 REQ-016) takes its copy through this same operation (decision 2), so there is one way to copy the file.
    - The import step is a separate process, run while the daemon is stopped (S-004 REQ-017). It holds the
      instance's single-owner lock while it runs, so a daemon that starts meanwhile is refused (S-002 REQ-001). It
      places the copy as the database file, owner-only, and only where no database file and no `-wal` or `-shm` file
@@ -137,6 +138,16 @@ code of our own, apart from the two bounded exceptions in decision 4.
      start and stop hooks a component registers with the daemon's lifecycle. They import the daemon and feed modules
      only as types. The one daemon file listener and client library code may load is the path layout,
      `src/daemon/state_layout.ts`, which imports only Node modules.
+   - The export route `GET /export` (S-003 REQ-016) follows these rules and adds no operation to the catalogue. It
+     calls `jobs.export` through the catalogue with the listener's caller, naming a new path in a folder it makes for
+     that download with `mkdtemp`, under an `exports` folder in the state directory, which it reads from
+     `daemon.status`. It then sends that file, using the size `jobs.export` returns as the response's length, and
+     removes the folder when the download ends. The copy is owner-only because `jobs.export` makes it so, and the
+     listener imports nothing of the host. Refusals before the first byte come from the catalogue with their usual
+     codes, `unavailable` outside the ready phase included. The listener's stop hook waits for each running export to
+     settle and for its folder to go, within the daemon's stop bound. At its start the listener removes what the
+     `exports` folder still holds: only a killed daemon leaves anything there. That removal touches no state the daemon
+     resumes from, so it isn't one of the recoveries decision 4 bounds.
 
    **The service layer knows no transport (S-002 REQ-016).** No operation takes a request or connection as input. A
    listener turns what it receives into an operation's input and a caller, so every operation can be called in-process
@@ -433,3 +444,4 @@ second connection open. One shared handle orders every transaction and closes wi
 | 2026-11-05 | Decision 2: names what the harness host module is; listener and client library code imports none of the host module, pi-durable, `pi-ai`, `chord` or `pi-coding-agent`; listeners reach the daemon's state only through the catalogue, the feed and the lifecycle hooks; the service layer knows no transport. Decision 1: single ownership is a lock file, and the import step refuses a copy with a newer job or pi-durable schema. Decision 4: the front desk's input is in the order pi-durable admits it, with no lock of the daemon's own; S-004 REQ-018 states the repair rules in behaviour words; `blockedAfterEntry` is cited to rule 3, and isn't returned or recorded in the history. These statements come from the specs and change no behaviour. | CR-001: design statements leave the requirement text of S-001 to S-005, so a constraint needs a binding home first. |
 | 2026-11-05 | Decision 4, first bounded exception: the failed-close bullet now covers a team member's `jobs.complete` and `jobs.cancel` as well as a lead's complete tool, and a rejected abort as well as a rejected closed-mark commit. A rejected abort, of a compaction or of a conversation, is logged and stops no other. A compaction running in a conversation whose mark landed is aborted; a background compaction in a conversation without its mark goes on until rule 4 aborts it. A conversation whose own abort is rejected keeps running until the next start, on every path. The marks after a rejected commit aren't attempted: rule 4 already sets them, this adds no recovery path, and `closeJobConversations`, which rule 4 also uses, keeps rejecting. | Product owner decisions of 2026-11-05 on B-010; S-001 v0.13 REQ-026 and S-004 v0.11 REQ-007. The product owner left the remaining marks open, so this record decides them. |
 | 2026-11-05 | Decision 4, second bounded exception: states when each part of the repair takes effect. The rules run before `host.resume()` and make no call that turns scheduling on; rule 1's first inputs, the delivery of rule 3's held messages with the job's change to In progress, and the turn-end check's reminders are submitted after it, within step 7 and in that order, and the wait for marked conversations comes last; a rule a crash cuts short writes another entry. The decision itself is unchanged and nothing in the build changes. | Spec-truth reconciliation (S-004 REQ-018, S-002 REQ-002 step 7): "before work resumes" could not hold, because pi-durable's `Conversation.submit` turns scheduling on (`Harness.resume`; B-016, B-018). |
+| 2026-11-06 | Decisions 1 and 2: the export route takes its copy by calling `jobs.export` through the catalogue, into a folder of its own under the state directory's `exports` folder, sends it and removes it; a killed daemon's leftovers go at the listener's next start. S-002's catalogue gains no operation, and the listener imports nothing of the host. | Architecture consistency review of S-006 and S-003 v0.5, which left the route's place in the catalogue open (S-006 Open Questions). S-002 REQ-016 and S-000's Web interface boundary need every action to call an operation, and `jobs.export` already is that operation. |
