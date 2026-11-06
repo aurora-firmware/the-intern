@@ -32,12 +32,9 @@ type Delta = {
     entries?: ActivityEntry[];
     view?: { live: unknown; busy: boolean };
 };
-type Member = { id: string; role: string };
-type Tree = { id: string; role: string | null; invoked: Tree[] };
-type Listing = { id: string; jobId: string | null; seat: { role: string } | null };
 
 const FIRST_PAGE: EntriesRead = { order: "descending", limit: 200 };
-const NO_ROLE = "agent";
+export const NO_ROLE = "agent";
 const TEXT_STYLE = "margin: 0; overflow-wrap: anywhere; white-space: pre-wrap;";
 const LIST_STYLE = "display: flex; flex-direction: column; gap: 0.5rem; margin: 0; padding: 0; list-style: none;";
 const BYTES_PER_KIB = 1024;
@@ -45,7 +42,7 @@ const BYTES_PER_KIB = 1024;
 const listeners = new WeakMap<FeedConnection, Set<(event: FeedEvent) => void>>();
 
 /** A feed connection has no way to remove a listener, so each gets one that passes events to the mounted sections. */
-const listen = (feed: FeedConnection, listener: (event: FeedEvent) => void): (() => void) => {
+export const listen = (feed: FeedConnection, listener: (event: FeedEvent) => void): (() => void) => {
     let held = listeners.get(feed);
     if (held === undefined) {
         const set = new Set<(event: FeedEvent) => void>();
@@ -60,7 +57,7 @@ const listen = (feed: FeedConnection, listener: (event: FeedEvent) => void): (()
 };
 
 /** A refusal or failure worth telling the team member; a service that can't be reached shows the banner instead. */
-const failureText = (error: unknown): string | undefined => {
+export const failureText = (error: unknown): string | undefined => {
     if (error instanceof UnreachableError || (error instanceof ClientError && error.code === "unavailable")) {
         return undefined;
     }
@@ -215,80 +212,5 @@ export const ConversationActivity = ({ feed, conversationId, role, controls }: S
         h("ul", { style: LIST_STYLE }, ...entries.map((entry) => h(EntryItems, { entry, key: entry.id }))),
         answer !== "" ? h("p", { class: "activity-live", style: TEXT_STYLE }, answer) : null,
         controls?.(conversationId, state) ?? null,
-    );
-};
-
-const flatten = (tree: Tree): Member[] => [
-    { id: tree.id, role: tree.role ?? NO_ROLE },
-    ...tree.invoked.flatMap(flatten),
-];
-
-type JobActivityProps = {
-    feed: FeedConnection | null | undefined;
-    /** The job's id, which `conversations.get` names in `jobId`. */
-    jobId: string;
-    leadConversation: string | undefined;
-    controls?: Controls;
-};
-
-/** The sections of a job's conversations: the lead and every conversation it invokes, recursively. */
-export const JobActivity = ({ feed, jobId, leadConversation, controls }: JobActivityProps) => {
-    const [members, setMembers] = useState<Member[]>([]);
-    const [failure, setFailure] = useState<string | undefined>();
-
-    useEffect(() => {
-        if (!feed) return;
-        const held = new Map<string, Member>();
-        let isClosed = false;
-        const fail = (error: unknown) => {
-            if (!isClosed) setFailure(failureText(error));
-        };
-        // Following comes first: the section reads its entries only once it is drawn (ADR-007 decision 3).
-        const admit = (found: Member[]) => {
-            const fresh = found.filter((member) => !held.has(member.id));
-            if (isClosed || fresh.length === 0) return;
-            for (const member of fresh) held.set(member.id, member);
-            feed.follow([...held.keys()]);
-            setMembers([...held.values()]);
-        };
-        const readTree = async () => {
-            if (leadConversation === undefined) return;
-            const tree = await pageClient().invoke("conversations.invocations", { conversationId: leadConversation });
-            admit(flatten(tree as Tree));
-        };
-        const admitCreated = async (conversationId: string) => {
-            const listing = (await pageClient().invoke("conversations.get", { conversationId })) as Listing;
-            if (listing.jobId === jobId) admit([{ id: listing.id, role: listing.seat?.role ?? NO_ROLE }]);
-        };
-        const unlisten = listen(feed, (event) => {
-            const delta = event.type === "instance-delta" ? (event.delta as Delta) : undefined;
-            if (delta?.type === "conversation_created" && delta.conversationId !== undefined) {
-                admitCreated(delta.conversationId).catch(fail);
-            } else if (event.type === "instance-snapshot") {
-                readTree().catch(fail);
-            }
-        });
-        readTree().catch(fail);
-        return () => {
-            isClosed = true;
-            unlisten();
-            feed.follow([]);
-        };
-    }, [feed, jobId, leadConversation]);
-
-    return h(
-        "section",
-        { class: "job-activity", "data-section": "activity" },
-        h("h3", null, "Activity"),
-        failure !== undefined ? h("div", { class: "error", role: "alert" }, failure) : null,
-        ...members.map((member) =>
-            h(ConversationActivity, {
-                feed,
-                conversationId: member.id,
-                role: member.role,
-                key: member.id,
-                ...(controls !== undefined && { controls }),
-            }),
-        ),
     );
 };
