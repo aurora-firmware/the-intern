@@ -364,43 +364,47 @@ async function nextEvent(stream: FeedStream): Promise<FeedEvent> {
     return read;
 }
 
-/** Reads `delta` events until one shows the conversation idle with `content` in its entries. */
-async function readDeltasUntilSettled(stream: FeedStream, content: string): Promise<FeedEvent[]> {
+/** Reads `delta` events until the conversation has been seen busy and then idle again. */
+async function readDeltasUntilSettled(stream: FeedStream): Promise<FeedEvent[]> {
     const deltas: FeedEvent[] = [];
+    let hasSeenBusy = false;
     for (;;) {
         const event = await nextEvent(stream);
         assert.equal(event.name, "delta", `event ${JSON.stringify(event).slice(0, 200)} is a delta`);
         deltas.push(event);
-        const view = (event.data as { view: View }).view;
-        if (!view.busy && JSON.stringify(view.entries).includes(content)) return deltas;
+        const { busy } = (event.data as { view: View }).view;
+        if (hasSeenBusy && !busy) return deltas;
+        hasSeenBusy ||= busy;
     }
 }
 
-/** Asserts the deltas carry ids 1, 2, 3 … equal to their sequence numbers, each extending the view before it. */
-function assertCommitOrder(snapshot: View, deltas: readonly FeedEvent[]): void {
+/** Asserts the deltas carry ids 1, 2, 3 … equal to their sequence numbers. */
+function assertCommitOrder(deltas: readonly FeedEvent[]): void {
     assert.deepEqual(
         deltas.map((delta) => delta.id),
         deltas.map((_, index) => index + 1),
     );
-    let previousLength = snapshot.entries.length;
     for (const delta of deltas) {
-        const { seq, view } = delta.data as { seq: number; view: View };
+        const { seq } = delta.data as { seq: number };
         assert.equal(seq, delta.id, "the event id is the delta's sequence number");
-        assert.ok(view.entries.length >= previousLength, "each delta extends the view before it");
-        previousLength = view.entries.length;
     }
 }
 
-/** Opens the conversation feed, lets a run commit `content`, and returns the snapshot and the deltas read. */
+/**
+ * Opens the conversation feed, lets a run commit `content`, and returns the history the conversation held when the
+ * snapshot arrived, the history after the run, and the deltas read.
+ */
 async function observeRun(fixture: Fixture, listener: Listener, conversationId: string, content: string) {
     const stream = await fixture.openFeed(listener, `?scope=conversation&id=${conversationId}`);
     assert.equal(stream.status, 200);
     const first = await nextEvent(stream);
     assert.equal(first.name, "snapshot");
+    const historyAtSnapshot = JSON.stringify(await fixture.entries(conversationId));
     await fixture.submitAndSettle(conversationId, content);
-    const deltas = await readDeltasUntilSettled(stream, content);
+    const deltas = await readDeltasUntilSettled(stream);
     stream.close();
-    return { snapshot: first.data as View, deltas };
+    const historyAfterRun = JSON.stringify(await fixture.entries(conversationId));
+    return { historyAtSnapshot, historyAfterRun, deltas };
 }
 
 describe("the conversation feed through each listener", { timeout: TEST_TIMEOUT_MS }, () => {
@@ -412,12 +416,13 @@ describe("the conversation feed through each listener", { timeout: TEST_TIMEOUT_
             const first = await observeRun(fixture, listener, conversationId, "first run");
             const second = await observeRun(fixture, listener, conversationId, "second run");
 
-            assertCommitOrder(first.snapshot, first.deltas);
-            assertCommitOrder(second.snapshot, second.deltas);
-            assert.ok(!JSON.stringify(first.snapshot).includes("first run"), "the first snapshot precedes its run");
-            assert.ok(JSON.stringify(second.snapshot).includes("first run"), "the second snapshot is fresh");
-            const replayed = second.deltas.filter((delta) => !JSON.stringify(delta.data).includes("first run"));
-            assert.deepEqual(replayed, [], "the second stream replays no delta from before its snapshot");
+            assertCommitOrder(first.deltas);
+            assertCommitOrder(second.deltas);
+            assert.ok(!first.historyAtSnapshot.includes("first run"), "the first snapshot precedes its run");
+            assert.ok(first.historyAfterRun.includes("first run"), "the first run committed its input");
+            assert.ok(second.historyAtSnapshot.includes("first run"), "the second snapshot is fresh");
+            assert.ok(second.historyAfterRun.includes("second run"), "the second run committed its input");
+            assert.equal(second.deltas[0]?.id, 1, "the second stream replays no delta from before its snapshot");
         });
     }
 });

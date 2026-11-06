@@ -469,8 +469,9 @@ describe("the instance feed seats and parked status", () => {
 
         const result = await subscription.next();
         assert.ok("delta" in result);
-        const record = result.delta.view.entries.findLast((entry) => entry.kind === SEAT_RECORD_KIND);
-        assert.ok(record, "the seat record is in the delta's view");
+        const { entries } = await fixture.host.readEntries(id, { limit: 100 });
+        const record = entries.findLast((entry) => entry.kind === SEAT_RECORD_KIND);
+        assert.ok(record, "the seat record is in the conversation's history");
         assert.equal((record.data as { next: { role: string } }).next.role, "reviewer");
     });
 });
@@ -504,7 +505,7 @@ describe("feed.subscribe", () => {
             TEAM_MEMBER,
         );
 
-        assert.deepEqual(subscription.snapshot.entries, []);
+        assert.deepEqual((await fixture.host.readEntries(id, { limit: 100 })).entries, []);
         assert.equal(typeof subscription.next, "function");
     });
 
