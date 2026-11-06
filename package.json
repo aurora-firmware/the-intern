@@ -24,7 +24,7 @@
         "vitepress": "1.6.4"
     },
     "scripts": {
-        "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
+        "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json && tsc --noEmit -p web/tsconfig.worker.json",
         "format": "biome format --write",
         "format:check": "biome format",
         "lint": "biome check",
