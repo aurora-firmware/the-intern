@@ -27,10 +27,10 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import { createDeskComponent } from "../../src/desk/desk_component.ts";
 import { internalHarness } from "../../src/host/harness_host.ts";
 import { createInvokedConversations } from "../../src/host/invocation.ts";
-import { setJobDoneCheck, setSectionHook } from "../../src/host/job_section.ts";
+import { setJobStatusCheck, setSectionHook } from "../../src/host/job_section.ts";
 import { readConversationMeta, type SeatActor } from "../../src/host/seating.ts";
 import { type JobActionDeps, startJob } from "../../src/jobs/job_actions.ts";
-import type { JobAuthor } from "../../src/jobs/job_model.ts";
+import type { JobAuthor, JobStatus } from "../../src/jobs/job_model.ts";
 import { JobNotFoundError } from "../../src/jobs/job_store.ts";
 import { createJobsComponent, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
@@ -617,11 +617,11 @@ describe("the tools called from and aimed at open conversations", () => {
     });
 });
 
-async function isDoneInStore(started: Started, jobId: string): Promise<boolean> {
+async function statusInStore(started: Started, jobId: string): Promise<JobStatus | undefined> {
     try {
-        return (await started.ctx.jobStore.getJob(jobId)).status === "done";
+        return (await started.ctx.jobStore.getJob(jobId)).status;
     } catch (error) {
-        if (error instanceof JobNotFoundError) return false;
+        if (error instanceof JobNotFoundError) return undefined;
         throw error;
     }
 }
@@ -631,13 +631,13 @@ async function isDoneInStore(started: Started, jobId: string): Promise<boolean> 
 function staleNextCheck(started: Started, jobId: string, completed: Promise<void>) {
     const checked = gate();
     let isArmed = false;
-    setJobDoneCheck(started.ctx.host, async (checkedJobId) => {
-        const isDone = await isDoneInStore(started, checkedJobId);
-        if (!isArmed || checkedJobId !== jobId) return isDone;
+    setJobStatusCheck(started.ctx.host, async (checkedJobId) => {
+        const status = await statusInStore(started, checkedJobId);
+        if (!isArmed || checkedJobId !== jobId) return status;
         isArmed = false;
         checked.open();
         await completed;
-        return isDone;
+        return status;
     });
     return {
         checked: checked.opened,

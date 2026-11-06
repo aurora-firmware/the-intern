@@ -10,7 +10,7 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
 import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import { createInvokedConversations, parkConversation } from "../../src/host/invocation.ts";
-import { inJobSection, setJobDoneCheck } from "../../src/host/job_section.ts";
+import { inJobSection, setJobStatusCheck } from "../../src/host/job_section.ts";
 import { REPORT_KIND, type ReportRecord, startReportDelivery } from "../../src/host/reports.ts";
 import {
     createSeatedConversation,
@@ -18,6 +18,7 @@ import {
     readConversationMeta,
     type SeatActor,
 } from "../../src/host/seating.ts";
+import type { JobStatus } from "../../src/jobs/job_model.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -339,7 +340,7 @@ describe("report delivery to the invoker of a Done job whose close failed", () =
         await fixture.invoke(invokerId, prompts, parked);
         await parkConversation(fixture.host, invokerId, parked);
         const before = await readConversationMeta(fixture.host, invokerId);
-        setJobDoneCheck(fixture.host, async () => true);
+        setJobStatusCheck(fixture.host, async () => "done");
         const errors: string[] = [];
         const recording = createLogger({ stream: { write: (line: string) => errors.push(line) !== 0 } });
         deliveries.push(await startReportDelivery(fixture.host, { logger: recording }));
@@ -388,8 +389,8 @@ describe("report delivery while a close of the invoker's job is in progress", ()
         await parkConversation(fixture.host, invokerId, parked);
         const before = await readConversationMeta(fixture.host, invokerId);
         const requestsBefore = fixture.invokerRequests().length;
-        let isDone = false;
-        setJobDoneCheck(fixture.host, async () => isDone);
+        let status: JobStatus = "in_progress";
+        setJobStatusCheck(fixture.host, async () => status);
         const errors: string[] = [];
         const recording = createLogger({ stream: { write: (line: string) => errors.push(line) !== 0 } });
         deliveries.push(await startReportDelivery(fixture.host, { logger: recording }));
@@ -399,7 +400,7 @@ describe("report delivery while a close of the invoker's job is in progress", ()
         const closeMayFinish = new Promise<void>((resolve) => (finishClose = resolve));
         const closing = inJobSection(fixture.host, "job-1", async () => {
             await closeMayFinish;
-            isDone = true;
+            status = "done";
         });
         releaseA();
         await settle();

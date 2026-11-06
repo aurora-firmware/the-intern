@@ -86,7 +86,7 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   `inOpenConversation(host, conversationId, work)` reads the conversation's job, then runs the closed check and the work
   in that job's section; for the front desk and a conversation with no job it runs the work with no section. Both
   throw `ConversationClosedError`, and a lead start for a Done job throws `JobDoneError` (`refuseIfJobDone`). The
-  jobs component registers the job Done check at startup step 5 (`setJobDoneCheck`), because the host module must not
+  jobs component registers the job status check at startup step 5 (`setJobStatusCheck`), because the host module must not
   import the job store. The service layer maps the errors to `conflict`.
 - **What runs in the section.** `inOpenConversation` wraps the admission of input and the holding of a steering message
   (`src/host/steering.ts`, `src/host/conversation_control.ts`), abort, reset and compaction
