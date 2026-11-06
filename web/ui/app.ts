@@ -6,6 +6,7 @@ import { parseRoute, type Route } from "./model/routes.ts";
 import { BoardPage } from "./pages/board.ts";
 import { DeskPage } from "./pages/desk.ts";
 import { JobPage } from "./pages/job.ts";
+import { RolesPage } from "./pages/roles.ts";
 
 type PageName = Exclude<Route["page"], "unknown">;
 
@@ -28,6 +29,7 @@ const showRoute = (route: Route) => {
         h("h2", { class: "page-heading" }, PAGE_HEADINGS[page]),
         page === "board" ? h(BoardPage, { feed }) : null,
         route.page === "desk" ? h(DeskPage, { feed }) : null,
+        route.page === "roles" ? h(RolesPage, { feed }) : null,
         route.page === "job" ? h(JobPage, { feed, number: route.number, key: route.number }) : null,
     );
 };
