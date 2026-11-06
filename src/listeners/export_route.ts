@@ -84,13 +84,18 @@ async function makeFolder(options: ExportRouteOptions, caller: Caller): Promise<
     return { folder: await mkdtemp(join(exportsFolder, "download-")), stateDir };
 }
 
-/** The one place the temporary copy goes: the response's close follows every ending, finished, failed or abandoned. */
+/**
+ * The one place the temporary copy goes: the response's close follows every ending, finished, failed or abandoned.
+ * A client that left while the folder was being made has closed the response already, so the folder goes at once.
+ */
 function removeWhenClosed(res: ServerResponse, folder: string, logger: Logger): void {
-    res.once("close", () => {
+    const remove = () => {
         rm(folder, { recursive: true, force: true }).catch((error: unknown) => {
             logger.error("export copy not removed", { folder, error: describeError(error) });
         });
-    });
+    };
+    if (res.closed) remove();
+    else res.once("close", remove);
 }
 
 /** Creates the route as a fallback of the HTTP front: it answers `GET /export` and declines every other request. */
@@ -102,6 +107,7 @@ export function createExportRoute(options: ExportRouteOptions): Fallback {
             const caller: Caller = { actor: { kind: "team_member", wayIn: options.wayIn, observed } };
             const { folder, stateDir } = await makeFolder(options, caller);
             removeWhenClosed(res, folder, options.logger);
+            if (res.closed) return true;
             const copy = (await options.invoke("jobs.export", { path: join(folder, COPY_FILE_NAME) }, caller)) as Copy;
             const file = await open(copy.path);
             options.logger.info("export download", {

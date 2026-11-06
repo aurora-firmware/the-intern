@@ -104,26 +104,38 @@ describe("the export route's temporary copy", () => {
     });
 });
 
+type StubInvoke = (name: string, input: unknown, caller: Caller) => Promise<unknown>;
+
+/** Serves the route over a bare HTTP server with a stubbed catalogue call; `closed` resolves when a response closes. */
+async function serveRoute(
+    invoke: StubInvoke,
+): Promise<{ target: { host: string; port: number }; closed: Promise<void> }> {
+    const route = createExportRoute({
+        invoke,
+        wayIn: "web interface",
+        observe: () => ({}),
+        logger: createLogger({ verbose: false, stream: { write: () => true } }),
+    });
+    const closed = Promise.withResolvers<void>();
+    const server = createServer((req, res) => {
+        res.once("close", () => closed.resolve());
+        void route(req, res);
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return { target: { host: "127.0.0.1", port: (server.address() as AddressInfo).port }, closed: closed.promise };
+}
+
 describe("the export route when the copy cannot be made", () => {
     it("answers with the error body, sends no file and leaves no copy", async () => {
         const daemon = await startExportDaemon();
         daemons.push(daemon);
         const stateDir = daemon.env.stateDir;
-        const invoke = async (name: string, input: unknown, _caller: Caller): Promise<unknown> => {
+        const { target } = await serveRoute(async (name, input) => {
             if (name === "daemon.status") return { phase: "ready", instance: { stateDir } };
             await writeFile((input as { path: string }).path, "partial");
             throw new ServiceError("internal", "the copy failed");
-        };
-        const route = createExportRoute({
-            invoke,
-            wayIn: "web interface",
-            observe: () => ({}),
-            logger: createLogger({ verbose: false, stream: { write: () => true } }),
         });
-        const server = createServer((req, res) => void route(req, res));
-        servers.push(server);
-        await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-        const target = { host: "127.0.0.1", port: (server.address() as AddressInfo).port };
 
         const response = await startDownload(target);
         const chunks: Buffer[] = [];
@@ -135,5 +147,35 @@ describe("the export route when the copy cannot be made", () => {
         assert.equal(response.headers["content-type"], "application/json; charset=utf-8");
         assert.equal(JSON.parse(Buffer.concat(chunks).toString()).error.code, "internal");
         await waitFor(async () => (await downloads(stateDir)).length === 0, "the copy to be removed");
+    });
+});
+
+describe("the export route when the client leaves before the copy exists", () => {
+    it("leaves no copy although the response closed before the folder was made", async () => {
+        const daemon = await startExportDaemon();
+        daemons.push(daemon);
+        const stateDir = daemon.env.stateDir;
+        const statusGate = Promise.withResolvers<void>();
+        const { target, closed } = await serveRoute(async (name, input) => {
+            if (name === "daemon.status") {
+                await statusGate.promise;
+                return { phase: "ready", instance: { stateDir } };
+            }
+            await writeFile((input as { path: string }).path, "copy");
+            return { path: (input as { path: string }).path, size: 4 };
+        });
+        const call = request({ ...target, method: "GET", path: "/export" });
+        call.once("error", () => {});
+        call.end();
+        await waitFor(() => call.socket !== undefined && call.socket !== null, "the request to be sent");
+
+        call.destroy();
+        await closed;
+        statusGate.resolve();
+
+        await waitFor(
+            async () => (await readdir(join(stateDir, "exports")).catch(() => ["none"])).length === 0,
+            "the folder to be made and removed",
+        );
     });
 });
