@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
-import { launchBrowser, pageUrl } from "../support/browser.ts";
+import { type BrowserName, launchBrowser, pageUrl } from "../support/browser.ts";
 
 const run = promisify(execFile);
 const BROWSERS = ["chrome", "msedge", "firefox"] as const;
@@ -113,4 +113,62 @@ test("launchBrowser skips the test with a diagnostic and answers undefined when 
     t.assert.equal(outcome.browser, "undefined");
     t.assert.equal(outcome.skips.length, 1);
     t.assert.match(outcome.skips[0] ?? "", /firefox/);
+});
+
+/**
+ * Runs `launchBrowser(name)` in a child process whose `TMPDIR` is a new directory, loads a page over http when the
+ * browser starts, ends the test, and answers what the browser left in that `TMPDIR`.
+ */
+async function leftInTemporaryDirectory(name: BrowserName) {
+    // The name is short on purpose: Chrome refuses a socket path of more than 107 characters, and it nests under this.
+    const temporary = await mkdtemp(join(tmpdir(), "bl-"));
+    const script = `
+        const http = await import("node:http");
+        const { readdirSync } = await import("node:fs");
+        const { launchBrowser, pageUrl } = await import(process.argv[1]);
+        const afters = [];
+        const t = { skip: () => {}, after: (callback) => afters.push(callback) };
+        const server = http.createServer((request, response) => response.end("hi"));
+        await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+        const browser = await launchBrowser(t, process.argv[2]);
+        if (browser !== undefined) {
+            const page = await browser.newPage();
+            await page.goto(pageUrl(server.address().port, "/"));
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+        for (const callback of afters.reverse()) {
+            await callback();
+        }
+        server.closeAllConnections();
+        server.close();
+        console.log(JSON.stringify({ launched: browser !== undefined, left: readdirSync(process.env.TMPDIR) }));`;
+    try {
+        const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: temporary };
+        delete env.BOB_WEB_ALL_BROWSERS;
+        const { stdout } = await run(process.execPath, ["--input-type=module", "-e", script, SUPPORT_MODULE, name], {
+            env,
+        });
+        return JSON.parse(stdout) as { launched: boolean; left: string[] };
+    } finally {
+        await rm(temporary, { recursive: true, force: true });
+    }
+}
+
+test("launchBrowser leaves nothing in TMPDIR after a chrome page loaded over http and the test ended", async (t) => {
+    const outcome = await leftInTemporaryDirectory("chrome");
+    if (!outcome.launched) {
+        t.skip("browser chrome is not installed");
+        return;
+    }
+    t.assert.deepEqual(outcome.left, []);
+});
+
+test("launchBrowser leaves nothing in TMPDIR when the browser is missing and the test is skipped", async (t) => {
+    // Edge cannot be installed on a development machine, so the launch fails as it does for any missing browser.
+    const outcome = await leftInTemporaryDirectory("msedge");
+    if (outcome.launched) {
+        t.skip("browser msedge is installed");
+        return;
+    }
+    t.assert.deepEqual(outcome.left, []);
 });
