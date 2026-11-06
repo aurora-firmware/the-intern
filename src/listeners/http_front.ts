@@ -166,7 +166,7 @@ function conversationIdsOf(query: URLSearchParams): string[] {
     if (ids.length === 0 || ids.includes(""))
         throw new ServiceError(
             "invalid_input",
-            "Query parameter id must name each conversation for scope conversations",
+            "Query parameter id must name every conversation of scope conversations",
         );
     return [...new Set(ids)];
 }
@@ -271,14 +271,11 @@ export function createHttpFront(options: HttpFrontOptions): HttpFront {
             sendError(res, asServiceError(error, SUBSCRIBE_OPERATION));
             return;
         }
-        if (query.get("scope") !== "conversations") {
-            await streamFeed(subscriptions[0] as FeedSubscription, res, signal);
-            return;
-        }
-        const named: ConversationSubscription[] = subscriptions.map((subscription, index) => ({
-            conversationId: inputs[index]?.conversationId as string,
-            subscription,
-        }));
+        if (query.get("scope") !== "conversations")
+            return streamFeed(subscriptions[0] as FeedSubscription, res, signal);
+        const named = subscriptions.map((subscription, index): ConversationSubscription => {
+            return { conversationId: inputs[index]?.conversationId as string, subscription };
+        });
         await streamConversations(named, res, signal);
     }
 
