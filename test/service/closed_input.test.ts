@@ -17,7 +17,7 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import { type BusyMode, submissionState, submitInput } from "../../src/host/conversation_control.ts";
 import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import { abortJobConversations } from "../../src/host/invocation.ts";
-import { ConversationClosedError, setJobDoneCheck, setSectionHook } from "../../src/host/job_section.ts";
+import { ConversationClosedError, setJobStatusCheck, setSectionHook } from "../../src/host/job_section.ts";
 import {
     conversationMetaDoc,
     createSeatedConversation,
@@ -190,7 +190,7 @@ describe("input while the job is Done and the closed marks are not committed", (
     it("refuses submitInput, steerConversation and holdForParked with ConversationClosedError", async () => {
         const { host, lead } = await openHostFixture();
         const id = await lead("job-1");
-        setJobDoneCheck(host, async (jobId) => jobId === "job-1");
+        setJobStatusCheck(host, async (jobId) => (jobId === "job-1" ? "done" : "in_progress"));
         await park(host, id);
 
         await assert.rejects(
@@ -206,7 +206,7 @@ describe("input to the front desk after every job is Done", () => {
     it("admits the input", async () => {
         const { host, frontDesk } = await openHostFixture();
         const id = await frontDesk();
-        setJobDoneCheck(host, async () => true);
+        setJobStatusCheck(host, async () => "done");
 
         const { submissionId } = await submitInput(host, id, { content: "hi", requestId: "r1", busyMode: "followUp" });
 

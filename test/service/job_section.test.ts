@@ -13,11 +13,13 @@ import {
     inOpenConversation,
     isConversationClosed,
     JobDoneError,
+    readJobStatus,
     refuseIfJobDone,
-    setJobDoneCheck,
+    setJobStatusCheck,
     setSectionHook,
 } from "../../src/host/job_section.ts";
 import { createSeatedConversation, readConversationMeta, type SeatActor } from "../../src/host/seating.ts";
+import type { JobStatus } from "../../src/jobs/job_model.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
@@ -149,11 +151,20 @@ describe("inJobSection", () => {
 });
 
 describe("the closed checks", () => {
+    it("answers the job's status from the registered check, and no status when no check is registered", async () => {
+        const { host } = await openFixture();
+        assert.equal(await readJobStatus(host, "job-1"), undefined);
+
+        setJobStatusCheck(host, async () => "blocked");
+
+        assert.equal(await readJobStatus(host, "job-1"), "blocked");
+    });
+
     it("refuses work in a conversation the registered check reports Done, and runs it again once not Done", async () => {
         const { host, start } = await openFixture();
         const lead = await start("job-1");
-        let isDone = true;
-        setJobDoneCheck(host, async () => isDone);
+        let status: JobStatus = "done";
+        setJobStatusCheck(host, async () => status);
 
         await assert.rejects(
             inOpenConversation(host, lead, async () => "ran"),
@@ -161,7 +172,7 @@ describe("the closed checks", () => {
         );
         assert.equal(await isConversationClosed(host, lead), true);
         await assert.rejects(refuseIfJobDone(host, "job-1"), (error) => error instanceof JobDoneError);
-        isDone = false;
+        status = "in_progress";
 
         assert.equal(await inOpenConversation(host, lead, async () => "ran"), "ran");
         assert.equal(await isConversationClosed(host, lead), false);
@@ -202,7 +213,7 @@ describe("createInvokedConversations in a closed conversation", () => {
     it("throws ConversationClosedError and creates no conversation when the job is Done", async () => {
         const { host, start, invoke } = await openFixture();
         const lead = await start("job-1");
-        setJobDoneCheck(host, async (jobId) => jobId === "job-1");
+        setJobStatusCheck(host, async (jobId) => (jobId === "job-1" ? "done" : "in_progress"));
         const before = (await host.listConversations()).length;
 
         await assert.rejects(invoke(lead, "c1"), ConversationClosedError);

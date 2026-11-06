@@ -6,7 +6,7 @@ import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
 import { onInputSubmitted } from "../host/conversation_control.ts";
-import { setJobDoneCheck } from "../host/job_section.ts";
+import { setJobStatusCheck } from "../host/job_section.ts";
 import { waitForMarkedConversations } from "../host/repair_abort.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import { jobActionOperations } from "../service/job_action_operations.ts";
@@ -72,7 +72,7 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
     let stopListening: (() => void) | undefined;
     let stopInputListening: (() => void) | undefined;
     let stopTurnEndRule: (() => void) | undefined;
-    let stopJobDoneCheck: (() => void) | undefined;
+    let stopJobStatusCheck: (() => void) | undefined;
     let markedByRepair: string[] = [];
     let firstInputsOwed: PendingFirstInput[] = [];
     let heldDeliveriesOwed: PendingHeldDelivery[] = [];
@@ -96,11 +96,11 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
             // Step 5 comes before work resumes, so runs that resume after a restart are covered.
             async checkModels(ctx) {
                 context = ctx;
-                stopJobDoneCheck = setJobDoneCheck(ctx.host, async (jobId) => {
+                stopJobStatusCheck = setJobStatusCheck(ctx.host, async (jobId) => {
                     try {
-                        return (await ctx.jobStore.getJob(jobId)).status === "done";
+                        return (await ctx.jobStore.getJob(jobId)).status;
                     } catch (error) {
-                        if (error instanceof JobNotFoundError) return false;
+                        if (error instanceof JobNotFoundError) return undefined;
                         throw error;
                     }
                 });
@@ -139,8 +139,8 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
                 markedByRepair = [];
             },
             async stop() {
-                stopJobDoneCheck?.();
-                stopJobDoneCheck = undefined;
+                stopJobStatusCheck?.();
+                stopJobStatusCheck = undefined;
                 stopListening?.();
                 stopListening = undefined;
                 stopInputListening?.();
