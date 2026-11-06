@@ -33,6 +33,9 @@ function scriptedClient(options: { waits: string[]; answers: string[]; pageSize?
     const answers = [...options.answers];
     let submitted = 0;
     const client: Client = {
+        subscribeConversations: () => {
+            throw new Error("this test never subscribes to several conversations");
+        },
         async invoke(name, input) {
             const record = (input ?? {}) as Record<string, unknown>;
             calls.push({ name, input: record });
@@ -171,6 +174,9 @@ describe("runPipedChat", () => {
         let refusals = 2;
         const requestIds: unknown[] = [];
         const client: Client = {
+            subscribeConversations: () => {
+                throw new Error("this test never subscribes to several conversations");
+            },
             subscribe: scripted.client.subscribe,
             invoke(name, input) {
                 if (name === "conversations.submit") requestIds.push((input as { requestId?: unknown }).requestId);
