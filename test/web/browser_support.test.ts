@@ -1,0 +1,116 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer, type IncomingMessage, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type TestContext, test } from "node:test";
+import { promisify } from "node:util";
+import { launchBrowser, pageUrl } from "../support/browser.ts";
+
+const run = promisify(execFile);
+const BROWSERS = ["chrome", "msedge", "firefox"] as const;
+const SUPPORT_MODULE = join(import.meta.dirname, "..", "support", "browser.ts");
+
+const PAGE = `<!doctype html><title>probe</title><body>probe`;
+
+/** Starts a loopback server that answers every request with a page and records each request's `Host` header. */
+async function startServer(t: TestContext): Promise<{ port: number; hosts: string[] }> {
+    const hosts: string[] = [];
+    const server: Server = createServer((request: IncomingMessage, response) => {
+        hosts.push(request.headers.host ?? "");
+        response.setHeader("content-type", "text/html");
+        response.end(PAGE);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => {
+        server.closeAllConnections();
+        server.close();
+    });
+    return { port: (server.address() as AddressInfo).port, hosts };
+}
+
+for (const name of BROWSERS) {
+    test(`${name} reaches the loopback server with intern.test as the host and no secure context`, async (t) => {
+        const { port, hosts } = await startServer(t);
+        const browser = await launchBrowser(t, name);
+        if (browser === undefined) {
+            return;
+        }
+        const page = await browser.newPage();
+        await page.goto(pageUrl(port, "/ui/"));
+        const isSecure = await page.evaluate(() => globalThis.isSecureContext);
+        t.assert.equal(new URL(page.url()).host, `intern.test:${port}`);
+        // The browser may also ask for a favicon, so the requests are checked for their host, not their number.
+        assert.ok(hosts.length > 0);
+        assert.ok(hosts.every((host) => host === `intern.test:${port}`));
+        t.assert.equal(isSecure, false);
+    });
+}
+
+test("pageUrl gives the intern.test address of a path", (t) => {
+    t.assert.equal(pageUrl(4321, "/ui/"), "http://intern.test:4321/ui/");
+});
+
+test("launchBrowser sends the page's requests through the forward proxy of proxyPort", async (t) => {
+    const seen: string[] = [];
+    const proxy = createServer((request, response) => {
+        seen.push(request.url ?? "");
+        response.setHeader("content-type", "text/html");
+        response.end(PAGE);
+    });
+    await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+    t.after(() => {
+        proxy.closeAllConnections();
+        proxy.close();
+    });
+    const browser = await launchBrowser(t, "chrome", { proxyPort: (proxy.address() as AddressInfo).port });
+    if (browser === undefined) {
+        return;
+    }
+    const page = await browser.newPage();
+    await page.goto(pageUrl(4321, "/ui/"));
+    // Chrome's own background requests go through the proxy too, so the page's request is looked for among them.
+    assert.ok(seen.includes("http://intern.test:4321/ui/"));
+});
+
+/** Runs `launchBrowser("firefox")` in a child process whose Playwright browser directory is empty. */
+async function launchMissingBrowser(allBrowsers: boolean) {
+    const emptyDirectory = await mkdtemp(join(tmpdir(), "bob-no-browsers-"));
+    const script = `
+        const { launchBrowser } = await import(process.argv[1]);
+        const skips = [];
+        const t = { skip: (reason) => skips.push(reason), after: () => {} };
+        try {
+            const browser = await launchBrowser(t, "firefox");
+            console.log(JSON.stringify({ browser: browser === undefined ? "undefined" : "launched", skips }));
+        } catch (error) {
+            console.log(JSON.stringify({ error: String(error.message), skips }));
+        }`;
+    try {
+        const env: NodeJS.ProcessEnv = { ...process.env, PLAYWRIGHT_BROWSERS_PATH: emptyDirectory };
+        if (allBrowsers) {
+            env.BOB_WEB_ALL_BROWSERS = "1";
+        } else {
+            delete env.BOB_WEB_ALL_BROWSERS;
+        }
+        const { stdout } = await run(process.execPath, ["--input-type=module", "-e", script, SUPPORT_MODULE], { env });
+        return JSON.parse(stdout) as { browser?: string; error?: string; skips: string[] };
+    } finally {
+        await rm(emptyDirectory, { recursive: true, force: true });
+    }
+}
+
+test("launchBrowser fails naming the install command when a browser is missing and all browsers are required", async (t) => {
+    const outcome = await launchMissingBrowser(true);
+    t.assert.match(outcome.error ?? "", /playwright-core install/);
+    t.assert.deepEqual(outcome.skips, []);
+});
+
+test("launchBrowser skips the test with a diagnostic and answers undefined when a browser is missing", async (t) => {
+    const outcome = await launchMissingBrowser(false);
+    t.assert.equal(outcome.browser, "undefined");
+    t.assert.equal(outcome.skips.length, 1);
+    t.assert.match(outcome.skips[0] ?? "", /firefox/);
+});
