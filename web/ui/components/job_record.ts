@@ -24,6 +24,7 @@ export type JobRecord = {
     blockedReason?: string;
     request: { origin: Origin };
     resolution?: { kind: string; justification: string };
+    related?: string[];
 };
 export type WorklogEntry = { at: string; author: Author; text: string };
 export type HistoryEntry = { at: string; author: Author; field: string; old: unknown; new: unknown };
@@ -100,6 +101,29 @@ export const JobFields = ({ record }: { record: JobRecord }) => {
             : null,
     );
 };
+
+/** The jobs related to this one, each a link to its page. `action` draws what the page offers next to a related job. */
+export const RelatedJobs = ({
+    numbers,
+    action,
+}: {
+    numbers: readonly string[];
+    action?: (number: string) => ReturnType<typeof h>;
+}) =>
+    numbers.length === 0
+        ? null
+        : h(
+              "section",
+              { class: "job-related", "data-section": "related" },
+              h("h3", null, "Related jobs"),
+              h(
+                  "ul",
+                  { style: LIST_STYLE },
+                  ...numbers.map((number) =>
+                      h("li", { key: number }, h("a", { href: `#/jobs/${number}` }, number), action?.(number) ?? null),
+                  ),
+              ),
+          );
 
 export const Entries = ({ name, title, items }: { name: string; title: string; items: ReturnType<typeof h>[] }) =>
     h(

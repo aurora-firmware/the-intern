@@ -7,6 +7,7 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { ClientError } from "../client/client.ts";
 import { AnswerBox } from "../components/answer_box.ts";
+import { JobActions, UnrelateButton } from "../components/job_actions.ts";
 import { JobActivity } from "../components/job_activity.ts";
 import {
     Entries,
@@ -16,6 +17,7 @@ import {
     JobFields,
     type JobRecord,
     Missing,
+    RelatedJobs,
     type WorklogEntry,
 } from "../components/job_record.ts";
 import { refusalText } from "../components/refusal.ts";
@@ -170,6 +172,11 @@ export const JobPage = ({ feed, number }: { feed: FeedConnection | null | undefi
         view.phase === "found" && view.record !== undefined
             ? [
                   h(JobFields, { record: view.record }),
+                  h(RelatedJobs, {
+                      numbers: view.record.related ?? [],
+                      action: (other) => h(UnrelateButton, { number, other }),
+                  }),
+                  h(JobActions, { record: view.record }),
                   h(AnswerBox, { number, isBlocked: view.record.status === "blocked" }),
                   h(JobActivity, { feed, jobId: view.record.id, leadConversation: view.record.leadConversation }),
                   h(Entries, {
