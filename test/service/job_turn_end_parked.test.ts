@@ -79,6 +79,10 @@ describe("the turn-end rule for a lead stopped with an invoked agent running", (
 
         await expectStoppedBlock(started, job);
         assert.ok((await readConversationMeta(started.ctx.host, job.leadConversation))?.parked);
+        await started.barrier();
+        // Three checks: the lead's first turn end, the stop listener's, and the invoked agent's run ending while the
+        // lead's stop mark is live. Without the last, there are two.
+        assert.equal(started.turnEndsOf(job.id), 3);
     });
 
     it("does nothing more for a job with no stop mark when an invoked agent's run ends (AC-3)", async () => {
@@ -91,5 +95,9 @@ describe("the turn-end rule for a lead stopped with an invoked agent running", (
         await waitFor(async () => (await started.steersOf(job.leadConversation)).length === 1, "the one reminder");
         await waitFor(async () => (await started.status(job.id)) === "blocked", "the job to block");
         assert.notEqual((await started.ctx.jobStore.getJob(job.id)).blockedReason, STOPPED_REASON);
+        await started.barrier();
+        // Three checks, all of a lead's runs: its first turn, its turn after the aborted report and its turn after the
+        // reminder. The invoked agent's run ending with no stop mark adds none.
+        assert.equal(started.turnEndsOf(job.id), 3);
     });
 });
