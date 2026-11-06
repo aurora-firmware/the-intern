@@ -3,6 +3,7 @@ import { afterEach, describe, it } from "node:test";
 import { hasSubmissionWithRequestId } from "../../src/host/conversation_control.ts";
 import { readConversationMeta } from "../../src/host/seating.ts";
 import { reminderRequestId } from "../../src/jobs/job_model.ts";
+import type { InvocationTree } from "../../src/service/conversation_read_operations.ts";
 import {
     DAEMON,
     deferred,
@@ -69,7 +70,22 @@ describe("the turn-end rule for a lead stopped with an invoked agent running", (
         await started.invoke("conversations.abort", { conversationId: job.leadConversation });
 
         await expectStoppedBlock(started, job);
-        assert.ok((await readConversationMeta(started.ctx.host, job.leadConversation))?.parked);
+        assert.equal(
+            (await readConversationMeta(started.ctx.host, job.leadConversation))?.parked?.waitingFor,
+            "answer",
+        );
+        const listed = (await started.invoke("conversations.get", { conversationId: job.leadConversation })) as {
+            status: string;
+        };
+        assert.equal(listed.status, "parked");
+        const tree = (await started.invoke("conversations.invocations", {
+            conversationId: job.leadConversation,
+        })) as InvocationTree;
+        assert.equal(tree.status, "parked");
+        assert.deepEqual(
+            tree.invoked.map((invoked) => invoked.status),
+            ["idle"],
+        );
     });
 
     it("blocks the job once the invoked agent's run has ended when the lead is steerable (AC-008.5 case 6)", async () => {
