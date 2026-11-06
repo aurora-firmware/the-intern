@@ -157,4 +157,22 @@ client" changes by amending [ADR-005](../ai-team/decisions/ADR-005-commands-load
 - Don't swap the real pi packages for substitutes to get a test passing; only the model is faked.
 - Tests are hermetic: temporary directories for state and runtime paths, an isolated pi agent folder, no dependence on
   the user's own pi configuration, a running daemon or inherited environment variables.
-- Tests are kept apart by folder (`test/unit`, `test/service`), as recorded in `tech_stack.md`.
+- Tests are kept apart by folder (`test/unit`, `test/service`, `test/web`), as recorded in `tech_stack.md`.
+
+## Web pages
+
+The pages are in `web/ui/`. These rules come from
+[ADR-006](../ai-team/decisions/ADR-006-web-pages-are-typescript-modules-with-no-build-step.md), decision 8 of [ADR-007](../ai-team/decisions/ADR-007-one-shared-worker-holds-a-browser-s-feed-connections.md) and the
+Module rule in [architecture.md](architecture.md). `test/web` runs the pages in real browsers; `tech_stack.md` says
+how.
+
+- Erasable TypeScript only, and relative `.ts` imports between modules. The listener strips the types as it serves a
+  file, so there is no build step.
+- Pages call Preact's `h()` and use no JSX. Write props as an object literal or `null`, so `tsc` checks every prop.
+- A module in `web/ui/` imports only other modules of `web/ui/`, `preact`, `preact/hooks` and the two browser-safe
+  client modules.
+- Worker code imports only by relative path, because a worker gets no import map.
+- Use no secure-context API: the service is plain HTTP. The browser tests open the pages at a non-loopback name, so a
+  use fails a test.
+- Decision logic (the board's columns, the catch-up of entries, the worker's feed loop) sits in pure modules with no
+  DOM, which `test/unit` tests on Node.

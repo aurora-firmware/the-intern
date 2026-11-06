@@ -45,7 +45,8 @@ npm ci
 npm test
 ```
 
-`npm run test:unit` and `npm run test:service` run the two test folders separately.
+`npm run test:unit`, `npm run test:service` and `npm run test:web` run the three test folders separately.
+`test:web` drives real browsers; `README.md`, Development environment, says how to get them.
 
 ## Run
 
@@ -104,7 +105,8 @@ code change alone.
 ├── biome.json                   # Lint and format configuration
 ├── mise.toml                    # Tool versions and the ai-team pin
 ├── src/                         # Product code
-├── test/                        # Tests (unit/, support/)
+├── web/ui/                      # Web pages: TypeScript modules the daemon serves
+├── test/                        # Tests (unit/, service/, web/, support/)
 ├── .github/workflows/
 │   ├── build.yml                # CI: Format, Build, User Documentation, Tests
 │   ├── pages.yml                # Publishes the user manual to GitHub Pages
