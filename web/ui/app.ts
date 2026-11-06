@@ -4,6 +4,7 @@ import { shell } from "./components/shell.ts";
 import { connectFeed, type FeedConnection } from "./feed_connection.ts";
 import { parseRoute, type Route } from "./model/routes.ts";
 import { BoardPage } from "./pages/board.ts";
+import { JobPage } from "./pages/job.ts";
 
 type PageName = Exclude<Route["page"], "unknown">;
 
@@ -25,6 +26,7 @@ const showRoute = (route: Route) => {
         h(ConnectionBanner, null),
         h("h2", { class: "page-heading" }, PAGE_HEADINGS[page]),
         page === "board" ? h(BoardPage, { feed }) : null,
+        route.page === "job" ? h(JobPage, { feed, number: route.number, key: route.number }) : null,
     );
 };
 
