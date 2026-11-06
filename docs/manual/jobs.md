@@ -118,6 +118,14 @@ The Intern blocks a job on the lead's behalf in two cases, with the daemon as au
 - A lead's turn ends the same way twice: the lead first gets one reminder to continue, block or complete, and when it
   stops again the reason is "the lead stopped without completing or blocking".
 
+A stop you make is the exception to that reminder. When you stop the lead of an In progress job (with
+`bob conversations stop <id>`, or through the front desk's stop tool) while it runs, has input queued or waits for
+agents it invoked, the lead gets no reminder. Once the stop and the aborts that follow it have ended, The Intern blocks
+the job with the reason "stopped by a team member", with the daemon as author in the history. This holds whatever the
+job's definition of done holds, and it survives a restart of the service. Answer it as any Blocked job: any message
+that reaches the lead resumes the job. Stopping an idle lead changes nothing. Stopping the lead of a Blocked job keeps
+the job's reason.
+
 ## The resolution
 
 A Done job has a resolution. Its kind is `completed` or `cancelled`, and its justification says why: for a completed job
