@@ -245,7 +245,7 @@ export const ConversationActivity = ({ feed, conversationId, role, controls }: S
         h("summary", null, verbatim(seatRole(entries) ?? role)),
         failure !== undefined ? h("div", { class: "error", role: "alert" }, failure) : null,
         h("ul", { style: LIST_STYLE }, ...entries.map((entry) => h(EntryItems, { entry, key: entry.id }))),
-        answer !== "" ? h("p", { class: "activity-live", style: TEXT_STYLE }, answer) : null,
+        answer !== "" ? h("p", { class: "activity-live", style: TEXT_STYLE, "data-verbatim": "" }, answer) : null,
         controls?.(conversationId, state) ?? null,
     );
 };
