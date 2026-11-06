@@ -84,6 +84,7 @@ for (const name of BROWSERS) {
                 return;
             }
             const context = await browser.newContext();
+            await context.route("**/ui/app.ts", (route) => route.fulfill({ contentType: "text/javascript", body: "" }));
             const pages = [];
             for (let tab = 0; tab < 3; tab++) {
                 pages.push(await connectTab(context, port, conversationId));
@@ -105,6 +106,7 @@ for (const name of BROWSERS) {
                 return;
             }
             const context = await browser.newContext();
+            await context.route("**/ui/app.ts", (route) => route.fulfill({ contentType: "text/javascript", body: "" }));
             const pages = [];
             for (let tab = 0; tab < 3; tab++) {
                 pages.push(await connectTab(context, port, conversationId));

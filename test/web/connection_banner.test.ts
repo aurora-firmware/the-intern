@@ -127,7 +127,7 @@ for (const name of BROWSERS) {
             t.assert.equal(await page.locator(BANNER).count(), 0);
         });
 
-        it("tells the worker and shows no refusal message when a call through pageClient fails as unavailable", async (t) => {
+        it("shows the banner at once, tells the worker and shows no refusal message when a call through pageClient fails as unavailable", async (t) => {
             const rig = await startRig();
             const proxy = await startWebProxy();
             proxies.push(proxy);
@@ -152,11 +152,14 @@ for (const name of BROWSERS) {
                 }
             }, FEED_MODULE);
             t.assert.equal(code, "unavailable");
+            await waitForBanner(page, true);
             // The failed call itself and the worker's check made at once because the tab told it.
             while (statusCalls() < before + 2) {
                 await new Promise((resolve) => setTimeout(resolve, 50));
             }
             t.assert.equal(await page.locator(".refusal").count(), 0);
+            // The service answers again, so the banner goes.
+            await waitForBanner(page, false);
         });
 
         it("tells the worker and shows the banner when a call through pageClient fails as unreachable", async (t) => {

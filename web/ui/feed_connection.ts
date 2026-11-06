@@ -21,9 +21,11 @@ export type FeedConnection = {
 };
 
 const WORKER_URL = "./feed_worker.ts";
+const PROBE_MS = 1000;
 
 let workerPort: MessagePort | undefined;
 let sharedClient: Client | undefined;
+let onOwnCallFailed: (() => void) | undefined;
 
 const tellWorker = (message: TabMessage) => workerPort?.postMessage(message);
 
@@ -40,7 +42,10 @@ export function pageClient(): Client {
                 try {
                     return await client.invoke(name, input);
                 } catch (error) {
-                    if (isUnreachableOrUnavailable(error)) tellWorker({ type: "call-failed" });
+                    if (isUnreachableOrUnavailable(error)) {
+                        tellWorker({ type: "call-failed" });
+                        onOwnCallFailed?.();
+                    }
                     throw error;
                 }
             },
@@ -66,6 +71,7 @@ export async function connectFeed(): Promise<FeedConnection> {
     const loadedVersion = await internVersion();
     const worker = new SharedWorker(`${WORKER_URL}?v=${encodeURIComponent(loadedVersion)}`, { type: "module" });
     const port = worker.port;
+    const probeClient = createClient(browserTransport(location.origin));
     workerPort = port;
 
     const eventListeners: ((event: FeedEvent) => void)[] = [];
@@ -74,13 +80,40 @@ export async function connectFeed(): Promise<FeedConnection> {
     let followed: readonly string[] = [];
     let isConnected: boolean | undefined;
 
+    // The tab's own state: the worker's word, or at once a failure of the tab's own call (see `probeUntilAnswered`).
+    const setConnected = (value: boolean) => {
+        if (isConnected === value) return;
+        const isReturn = isConnected === false && value;
+        isConnected = value;
+        for (const listener of connectionListeners) listener(value);
+        if (isReturn) void reloadOnNewVersion(loadedVersion);
+    };
+    let isProbing = false;
+    // The worker says nothing when its check finds the service healthy, so a tab that showed the banner for its own
+    // failed call asks the service itself until it answers.
+    const probeUntilAnswered = async () => {
+        if (isProbing) return;
+        isProbing = true;
+        while (isConnected === false) {
+            await new Promise((resolve) => setTimeout(resolve, PROBE_MS));
+            try {
+                const status = (await probeClient.invoke("daemon.status")) as { phase?: string };
+                if (status.phase !== "stopping") setConnected(true);
+            } catch {
+                // Still unreachable or unavailable: ask again.
+            }
+        }
+        isProbing = false;
+    };
+    onOwnCallFailed = () => {
+        setConnected(false);
+        void probeUntilAnswered();
+    };
+
     port.onmessage = (message: MessageEvent<WorkerMessage>) => {
         const data = message.data;
         if (data.type === "connection") {
-            const isReturn = isConnected === false && data.isConnected;
-            isConnected = data.isConnected;
-            for (const listener of connectionListeners) listener(data.isConnected);
-            if (isReturn) void reloadOnNewVersion(loadedVersion);
+            setConnected(data.isConnected);
             return;
         }
         for (const listener of eventListeners) listener(data);

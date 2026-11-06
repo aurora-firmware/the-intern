@@ -62,6 +62,7 @@ function sendBadGateway(res: ServerResponse, error: Error): void {
 export async function startWebProxy(): Promise<WebProxy> {
     const recorded: RecordedRequest[] = [];
     const openFeeds = new Set<OpenFeed>();
+    const openUpstreams = new Set<ClientRequest>();
     const unavailableOnce = new Set<string>();
     let feedByteCount = 0;
     let isDroppingFeedEvents = false;
@@ -109,6 +110,8 @@ export async function startWebProxy(): Promise<WebProxy> {
                 relayFeed(upstreamRes, open);
             },
         );
+        openUpstreams.add(upstream);
+        upstream.on("close", () => openUpstreams.delete(upstream));
         upstream.on("error", (error) => sendBadGateway(res, error));
         req.pipe(upstream);
     }
@@ -150,6 +153,7 @@ export async function startWebProxy(): Promise<WebProxy> {
                 upstream.destroy();
             }
             openFeeds.clear();
+            for (const upstream of openUpstreams) upstream.destroy();
             server.close();
             server.closeAllConnections();
         },
