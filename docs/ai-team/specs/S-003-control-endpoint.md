@@ -1,7 +1,7 @@
 ---
 id: S-003
 title: Control endpoint
-version: '0.4'
+version: '0.5'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-01'
 author: planner
@@ -74,7 +74,8 @@ What this specification explicitly does NOT cover:
   restart (S-002 REQ-021).
 - **The content of the web interface and of the `bob` commands.** The Web interface and Command line specs own them.
   This spec serves the web interface files and gives both a client library.
-- **New service operations.** This spec adds none. The listeners carry whatever the catalogue holds.
+- **New service operations.** This spec adds none. The listeners carry whatever the catalogue holds. The export route
+  (REQ-016) serves the copy S-004 REQ-016 defines.
 - **A stable public API.** The routes are the contract of The Intern's own clients. Other programs may use them, but
   they get no compatibility promise across versions.
 - **Windows, Linux arm64 and Intel macOS.** These remain unsupported (S-000).
@@ -121,6 +122,7 @@ Both listeners serve these routes (REQ-003 to REQ-006). Any other method or path
 | `GET /feed?scope=conversation&id=<conversation id>` | none | as above | as above |
 | `GET /ui/…` (network listener only) | none | The web interface file | `404` for a missing file |
 | `GET /` (network listener only) | none | Redirect to `/ui/` | — |
+| `GET /export` (network listener only) | none | `200`, a file attachment holding the whole database (REQ-016) | Status and error body as for operations, before any byte of the file; after that, the connection closes without completing the response |
 
 `feed.subscribe` is served only at `GET /feed`, its query standing in for the operation's input. Called at
 `POST /operations/feed.subscribe`, it is refused with `invalid_input` and a message naming `GET /feed`. It is the
@@ -205,6 +207,9 @@ Feed
     → snapshot → delta … → end(reason)                                                       REQ-006
     → client stops reading → end(lagging), run unaffected                                    REQ-011
     → client disconnects → unsubscribed                                                      REQ-006
+
+Export
+  GET /export (network listener) → consistent copy as a file, work goes on → log, temporary copy removed   REQ-016
 
 Shutdown (S-002 REQ-005)
   "stopping" → new calls 503 unavailable → running calls cut (503 or closed connection)
@@ -528,6 +533,45 @@ REQ-022) MUST leave it exactly as written.
 
 **Verification:** test — a service test.
 
+### REQ-016 — The export route
+
+The network listener SHALL answer `GET /export` with a consistent copy of the instance's whole database, the same copy
+S-004 REQ-016 defines, as a file attachment whose suggested name holds the instance and the date. Work in progress SHALL
+go on during the download. The configuration file isn't in it. The daemon SHALL log each download with the way in, the
+remote address and port (REQ-007), and SHALL remove any temporary copy on its machine when the download ends, whether it
+finished, failed or the client left. A failure before the first byte SHALL use the operations' error body (REQ-005), and
+a failure after it SHALL close the connection without completing the response, so that a client can tell the file is
+partial. The local socket SHALL answer this path `404`, and `bob export` stays the way in for a machine's own files.
+
+#### AC-016.1 — A copy while working
+
+- **Given:** a daemon with jobs running on the fake model
+- **When:** a client requests `GET /export` over the network listener
+- **Then:** the response is a file attachment that opens as a database holding every job, worklog entry, history entry
+  and conversation committed before the export began; the jobs go on; the log names the way in and the client's address
+  and port; and no temporary copy remains
+
+**Verification:** test — a service test on a loopback port.
+
+#### AC-016.2 — A client that leaves, and a failure
+
+- **Given:** a ready daemon
+- **When:** a client disconnects part way through a download, and in a second run the copy can't be made
+- **Then:** the first leaves no temporary copy and the jobs go on; the second answers with the error body, with no file,
+  and leaves no temporary copy
+
+**Verification:** test — a service test.
+
+#### AC-016.3 — Not on the local socket, and not while stopping
+
+- **Given:** a daemon with both listeners
+- **When:** a client requests `GET /export` over the local socket, and over the network listener during startup and
+  during shutdown
+- **Then:** the local socket answers `404`, and the network listener answers `503 unavailable` during startup and
+  shutdown
+
+**Verification:** test — a service test.
+
 ## Quality Requirements
 
 ### REQ-011 — Clients don't affect work
@@ -686,3 +730,4 @@ None affect the specified behaviour.
 | 2026-11-05 | v0.3. No behaviour changes (CR-001): implementation words leave the requirement text, and each REQ keeps its guarantee. Changed: REQ-001, AC-001.4, REQ-002, REQ-010 (start hooks, the harness), REQ-013, AC-013.1, with the copies in Consumed, Workflow and Assumptions. REQ-013 and AC-013.1 point to ADR-001 decision 2. No identifier added or retired. | CR-001, approved by the product owner. | T-202 (inspects AC-013.1); spec text otherwise |
 | 2026-11-05 | v0.4. No behaviour changes. Assumptions, S-002: T-094 closed the code's deviations from the S-002 v0.7 amendments, in place of the statement that a task would investigate them. | spec-truth reconciliation: a stale assumption (D4). | None; spec text only |
 | 2026-11-05 | spec-truth reconciliation — PASS | Work in 8e1eaa08..HEAD confirmed against v0.4; one stale assumption corrected; no requirement drift found; its task logs not read | none |
+| 2026-11-06 | v0.5. Added the route `GET /export` to the Routes contract, with REQ-016, AC-016.1 to AC-016.3 and its Workflow line; the Exclusion on new service operations names it. It answers on the network listener only and sends the copy S-004 REQ-016 defines. | S-006's export download: the product owner chose a browser download, and no route could return a file. Approved with S-006 at Gate 1. | Created with S-006's breakdown |
