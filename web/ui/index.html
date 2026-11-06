@@ -2,10 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>The Intern</title>
+    <link rel="icon" type="image/svg+xml" href="assets/brand/favicon.svg" />
+    <link rel="stylesheet" href="style/tokens.css" />
+    <link rel="stylesheet" href="style/components.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "preact": "./vendor/preact.mjs",
+          "preact/hooks": "./vendor/hooks.mjs"
+        }
+      }
+    </script>
+    <script type="module" src="./app.ts"></script>
   </head>
-  <body>
-    <h1>The Intern</h1>
-    <p>The web interface comes later.</p>
-  </body>
+  <body></body>
 </html>
