@@ -50,3 +50,8 @@ to create, follow, edit, complete, cancel and export a job.
 
 See [Giving, following and answering jobs](jobs.md#a-blocked-job): a Blocked job waits for your answer, and any
 message to its lead resumes it.
+
+## Using the web interface
+
+See [The web interface](web_interface.md): the Board, Job page, Front desk, Roles, Workspaces and Status pages, how to
+share a job's address and download a backup, and why anyone who can reach the page can act and download everything.
