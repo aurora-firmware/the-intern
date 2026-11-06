@@ -78,7 +78,7 @@ for (const name of BROWSERS) {
                     (text) => document.querySelector("main h2.page-heading")?.textContent === text,
                     link.name,
                 );
-                t.assert.equal(new URL(page.url()).hash, link.hash === "#/" ? "#/" : link.hash);
+                t.assert.equal(new URL(page.url()).hash, link.hash);
                 t.assert.equal(await heading(page), link.name);
                 t.assert.deepEqual(await activeLinks(page), [link.name]);
             }
