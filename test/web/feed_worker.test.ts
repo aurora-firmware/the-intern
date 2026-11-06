@@ -111,7 +111,7 @@ for (const name of BROWSERS) {
             for (let tab = 0; tab < 3; tab++) {
                 pages.push(await connectTab(context, port, conversationId));
             }
-            await waitForMessage(pages[2], "conversation-snapshot");
+            await waitForMessage(pages[0], "conversation-snapshot");
             await pages[1].close();
             const reloaded = await connectTab(context, port, conversationId);
             await waitForMessage(reloaded, "connection");
