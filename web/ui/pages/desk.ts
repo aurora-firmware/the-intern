@@ -2,12 +2,14 @@
  * The Front desk page (S-006 REQ-008): the front desk's recent conversation, kept current by the shared stream, and a
  * box to send it messages. A message waits its turn when the front desk is busy (busy mode `followUp`). Stop ends only
  * the chat turn, so it asks for no confirmation; the messages still queued are dropped, and the page names those it
- * sent. The activity is `ConversationActivity` with no `controls`: this page draws its own Stop.
+ * sent. The activity is `ConversationActivity` with no `controls`: this page draws its own Stop. Below it sits the
+ * form that creates a job directly (REQ-008).
  */
-import { h } from "preact";
+import { Fragment, h } from "preact";
 import { useContext, useEffect, useRef, useState } from "preact/hooks";
 import { ConversationActivity, listen } from "../components/activity.ts";
 import { isConnected } from "../components/connection_banner.ts";
+import { CreateJobForm } from "../components/create_job.ts";
 import { RefusalMessage } from "../components/refusal.ts";
 import { DraftTextBox } from "../components/text_box.ts";
 import { type FeedConnection, pageClient } from "../feed_connection.ts";
@@ -133,7 +135,7 @@ export const DeskPage = ({ feed }: { feed: FeedConnection | null | undefined }) 
             sent.current = unsettledMessages(sent.current, after);
         });
 
-    return h(
+    const conversation = h(
         "div",
         { class: "desk" },
         conversationId !== undefined
@@ -172,4 +174,5 @@ export const DeskPage = ({ feed }: { feed: FeedConnection | null | undefined }) 
               )
             : null,
     );
+    return h(Fragment, null, conversation, h(CreateJobForm, null));
 };
