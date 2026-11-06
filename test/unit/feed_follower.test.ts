@@ -22,6 +22,9 @@ function scriptedConnect(attempts: Attempt[], entries: (call: EntriesCall) => En
         const attemptIndex = connections++;
         const attempt = attempts[attemptIndex];
         return {
+            subscribeConversations: () => {
+                throw new Error("this test never subscribes to several conversations");
+            },
             invoke: async (_name, input) => {
                 entriesCalls.push(input as EntriesCall);
                 return entries(input as EntriesCall);
@@ -331,6 +334,9 @@ describe("createEntryTracker when a page read fails", () => {
             p2: { entries: [{ id: "e2" }] },
         };
         const client: Client = {
+            subscribeConversations: () => {
+                throw new Error("this test never subscribes to several conversations");
+            },
             invoke: async (_name, input) => {
                 const { after } = input as EntriesCall;
                 if (after === "p2" && shouldFail) throw new UnreachableError("/run/bob.sock", "gone");

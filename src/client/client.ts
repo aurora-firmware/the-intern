@@ -51,16 +51,25 @@ export type FeedScope = { scope: "instance" } | { scope: "conversation"; convers
 
 export type FeedItem = { snapshot: unknown } | { delta: unknown };
 
+/** One item of a feed for several conversations: a snapshot or a delta, with the conversation it belongs to. */
+export type ConversationFeedItem =
+    | { conversationId: string; snapshot: unknown }
+    | { conversationId: string; delta: unknown };
+
 export type Client = {
     invoke(name: string, input?: unknown): Promise<unknown>;
     subscribe(scope: FeedScope): AsyncGenerator<FeedItem, { end: string }>;
+    /** Subscribes to every named conversation over one connection. */
+    subscribeConversations(conversationIds: readonly string[]): AsyncGenerator<ConversationFeedItem, { end: string }>;
 };
 
-export function feedPath(scope: FeedScope): string {
-    const query =
-        scope.scope === "instance"
-            ? new URLSearchParams({ scope: "instance" })
-            : new URLSearchParams({ scope: "conversation", id: scope.conversationId });
+export function feedPath(scope: FeedScope | { scope: "conversations"; conversationIds: readonly string[] }): string {
+    if (scope.scope === "instance") return `/feed?${new URLSearchParams({ scope: "instance" })}`;
+    if (scope.scope === "conversation") {
+        return `/feed?${new URLSearchParams({ scope: "conversation", id: scope.conversationId })}`;
+    }
+    const query = new URLSearchParams({ scope: "conversations" });
+    for (const id of scope.conversationIds) query.append("id", id);
     return `/feed?${query}`;
 }
 
@@ -137,9 +146,27 @@ async function* subscribe(transport: Transport, scope: FeedScope): AsyncGenerato
     throw new Error(`The feed ${feedPath(scope)} closed without an end event`);
 }
 
+type WrappedEvent = { conversationId: string; event: unknown };
+
+/** As `subscribe`, for the one stream of several conversations, whose events each name their conversation. */
+async function* subscribeConversations(
+    transport: Transport,
+    conversationIds: readonly string[],
+): AsyncGenerator<ConversationFeedItem, { end: string }> {
+    const path = feedPath({ scope: "conversations", conversationIds });
+    for await (const event of transport.stream(path)) {
+        if (event.event === "end") return { end: (JSON.parse(event.data) as { reason: string }).reason };
+        if (event.event !== "snapshot" && event.event !== "delta") continue;
+        const { conversationId, event: payload } = JSON.parse(event.data) as WrappedEvent;
+        yield event.event === "snapshot" ? { conversationId, snapshot: payload } : { conversationId, delta: payload };
+    }
+    throw new Error(`The feed ${path} closed without an end event`);
+}
+
 export function createClient(transport: Transport): Client {
     return {
         invoke: async (name, input) => decodeAnswer(await transport.call(name, input)),
         subscribe: (scope) => subscribe(transport, scope),
+        subscribeConversations: (conversationIds) => subscribeConversations(transport, conversationIds),
     };
 }
