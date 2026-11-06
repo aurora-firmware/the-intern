@@ -5,7 +5,13 @@
  */
 
 import type { HarnessHost } from "../host/harness_host.ts";
-import { type ConversationView, watchConversation } from "../host/host_observation.ts";
+import {
+    type ConversationFrame,
+    type ConversationSnapshot,
+    type ConversationView,
+    type WatchedEntry,
+    watchConversation,
+} from "../host/host_observation.ts";
 
 export const FEED_MAX_PENDING = 1000;
 
@@ -18,9 +24,11 @@ export type Subscription<S, D> = {
     /** Settles with the reason once the subscription closes, without taking a delta. */
     closed: Promise<CloseReason>;
 };
-export type ConversationDelta = { seq: number; view: ConversationView; ops: unknown[] };
+export type { ConversationSnapshot };
+/** A delta states what one commit changed: the state, and only the entries it added, in order (ADR-008). */
+export type ConversationDelta = { seq: number; view: ConversationView; entries: WatchedEntry[] };
 export type ObservationFeed = {
-    subscribeConversation(id: string): Promise<Subscription<ConversationView, ConversationDelta>>;
+    subscribeConversation(id: string): Promise<Subscription<ConversationSnapshot, ConversationDelta>>;
     close(): void;
 };
 
@@ -92,8 +100,8 @@ export function createObservationFeed(options: { host: HarnessHost; maxPending?:
         async subscribeConversation(id) {
             if (isClosed) throw closedError();
             // Frames can arrive before the watch is returned; they are held until the subscription exists.
-            let sink: ((frame: { view: ConversationView; ops: unknown[] }) => void) | undefined;
-            const early: { view: ConversationView; ops: unknown[] }[] = [];
+            let sink: ((frame: ConversationFrame) => void) | undefined;
+            const early: ConversationFrame[] = [];
             const watch = await watchConversation(host, id, (frame) => (sink ? sink(frame) : early.push(frame)));
             if (isClosed) {
                 await watch.stop();
@@ -102,7 +110,7 @@ export function createObservationFeed(options: { host: HarnessHost; maxPending?:
 
             let seq = 0;
             const entry = { end: (_reason: CloseReason) => {} };
-            const { subscription, push, end } = createReleasingSubscription<ConversationView, ConversationDelta>(
+            const { subscription, push, end } = createReleasingSubscription<ConversationSnapshot, ConversationDelta>(
                 watch.snapshot,
                 maxPending,
                 () => {
@@ -112,7 +120,7 @@ export function createObservationFeed(options: { host: HarnessHost; maxPending?:
             );
             entry.end = end;
             active.add(entry);
-            sink = (frame) => push({ seq: ++seq, view: frame.view, ops: frame.ops });
+            sink = (frame) => push({ seq: ++seq, view: frame.view, entries: frame.entries });
             for (const frame of early.splice(0)) sink(frame);
             return subscription;
         },
