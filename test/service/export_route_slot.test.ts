@@ -151,6 +151,7 @@ describe("the export route when the file system has too little space", () => {
                     return daemon.daemon.catalogue.invoke(name, input, caller);
                 },
             },
+            dirs: { stateDir: daemon.env.stateDir },
             logger: quietLogger,
         } as unknown as ServiceContext;
         await listener.start?.(context);
