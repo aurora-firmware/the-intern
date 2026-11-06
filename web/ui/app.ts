@@ -7,6 +7,7 @@ import { BoardPage } from "./pages/board.ts";
 import { DeskPage } from "./pages/desk.ts";
 import { JobPage } from "./pages/job.ts";
 import { RolesPage } from "./pages/roles.ts";
+import { StatusPage } from "./pages/status.ts";
 import { WorkspacesPage } from "./pages/workspaces.ts";
 
 type PageName = Exclude<Route["page"], "unknown">;
@@ -32,6 +33,7 @@ const showRoute = (route: Route) => {
         route.page === "desk" ? h(DeskPage, { feed }) : null,
         route.page === "roles" ? h(RolesPage, { feed }) : null,
         route.page === "workspaces" ? h(WorkspacesPage, { feed }) : null,
+        route.page === "status" ? h(StatusPage, { feed }) : null,
         route.page === "job" ? h(JobPage, { feed, number: route.number, key: route.number }) : null,
     );
 };
