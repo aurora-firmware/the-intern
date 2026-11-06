@@ -4,7 +4,7 @@
  * `exports` folder, then sent as a file attachment. The route adds no operation and imports nothing of the host.
  */
 
-import { mkdir, mkdtemp, open } from "node:fs/promises";
+import { mkdir, mkdtemp, open, rm } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { pipeline } from "node:stream";
@@ -72,7 +72,8 @@ function fileNameOf(stateDir: string): string {
     return `the-intern-${instanceName(stateDir)}-${date}.sqlite`;
 }
 
-async function makeCopy(options: ExportRouteOptions, caller: Caller): Promise<{ copy: Copy; stateDir: string }> {
+/** Checks the daemon is ready and makes the owner-only folder for one download. */
+async function makeFolder(options: ExportRouteOptions, caller: Caller): Promise<{ folder: string; stateDir: string }> {
     const status = (await options.invoke("daemon.status", {}, caller)) as Status;
     if (status.phase !== "ready") {
         throw new ServiceError("unavailable", `The export is unavailable while the daemon is ${status.phase}`);
@@ -80,9 +81,16 @@ async function makeCopy(options: ExportRouteOptions, caller: Caller): Promise<{ 
     const stateDir = status.instance.stateDir;
     const exportsFolder = join(stateDir, EXPORTS_FOLDER);
     await mkdir(exportsFolder, { recursive: true, mode: OWNER_ONLY_FOLDER_MODE });
-    const folder = await mkdtemp(join(exportsFolder, "download-"));
-    const copy = (await options.invoke("jobs.export", { path: join(folder, COPY_FILE_NAME) }, caller)) as Copy;
-    return { copy, stateDir };
+    return { folder: await mkdtemp(join(exportsFolder, "download-")), stateDir };
+}
+
+/** The one place the temporary copy goes: the response's close follows every ending, finished, failed or abandoned. */
+function removeWhenClosed(res: ServerResponse, folder: string, logger: Logger): void {
+    res.once("close", () => {
+        rm(folder, { recursive: true, force: true }).catch((error: unknown) => {
+            logger.error("export copy not removed", { folder, error: describeError(error) });
+        });
+    });
 }
 
 /** Creates the route as a fallback of the HTTP front: it answers `GET /export` and declines every other request. */
@@ -92,7 +100,9 @@ export function createExportRoute(options: ExportRouteOptions): Fallback {
         try {
             const observed = options.observe(req);
             const caller: Caller = { actor: { kind: "team_member", wayIn: options.wayIn, observed } };
-            const { copy, stateDir } = await makeCopy(options, caller);
+            const { folder, stateDir } = await makeFolder(options, caller);
+            removeWhenClosed(res, folder, options.logger);
+            const copy = (await options.invoke("jobs.export", { path: join(folder, COPY_FILE_NAME) }, caller)) as Copy;
             const file = await open(copy.path);
             options.logger.info("export download", {
                 wayIn: options.wayIn,
