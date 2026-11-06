@@ -32,6 +32,8 @@ const READY_POLL_TIMEOUT_MS = 30_000;
  * `releaseRuns()`.
  * `long-output`: a lead's first answer, and that of any input after its old result is compacted away, calls a test tool
  * whose result is 1 MiB of text; an input starting `text only: ` and a compaction summary request are answered with text.
+ * `long-output-failing-summary`: as `long-output`, but a compaction summary request is answered with a tool call, so
+ * the compaction fails.
  * `desk-create-job`: an input `create job <text>` makes the answering agent call `create_job` with that text.
  * All of the others answer anything else with an echo.
  */
@@ -50,6 +52,7 @@ export type FakeScript =
     | "block-with-reason"
     | "invoke-many"
     | "long-output"
+    | "long-output-failing-summary"
     | "desk-create-job";
 
 /** Recorded among the child's model requests at the point the host resumes, so a test can tell which came before. */

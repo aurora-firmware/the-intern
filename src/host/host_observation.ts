@@ -5,6 +5,7 @@
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { CommitChange, ConversationId, EntryRecord, JsonObject, TaskId } from "@earendil-works/pi-durable";
+import type { Logger } from "../daemon/logger.ts";
 import { HostNotFoundError } from "./conversation_control.ts";
 import { parseConversationId, toConversationId } from "./conversation_id.ts";
 import { type HarnessHost, type HostEntry, internalHarness, toHostEntry } from "./harness_host.ts";
@@ -229,6 +230,38 @@ export async function watchConversationMeta(
             const meta = change.value as unknown as ConversationMeta;
             if (meta.jobId === "") continue;
             listener({ conversationId: String(change.conversationId), meta });
+        }
+    });
+    return {
+        stop() {
+            isStopped = true;
+            unsubscribe();
+        },
+    };
+}
+
+const COMPACTION_TASK_KIND = "pi.compaction";
+
+/**
+ * Logs each compaction that ends `failed` or `faulted` to standard error with its conversation: pi-durable records
+ * such a failure only in the task's outcome, never as an entry or a report, and nothing else in the host reads it.
+ * Only commits after the call are heard; a failure from before a restart is not replayed.
+ */
+export function logCompactionFailures(host: HarnessHost, logger: Logger): { stop(): void } {
+    let isStopped = false;
+    const unsubscribe = internalHarness(host).subscribeCommits((publication) => {
+        if (isStopped) return;
+        for (const change of publication.changes) {
+            if (change.type !== "task" || change.value.kind !== COMPACTION_TASK_KIND) continue;
+            const { state } = change.value;
+            if (state.status !== "terminal") continue;
+            const { outcome } = state;
+            if (outcome.status !== "failed" && outcome.status !== "faulted") continue;
+            logger.error("compaction failed", {
+                conversation: String(change.value.conversationId),
+                outcome: outcome.status,
+                cause: outcome.error?.message ?? "",
+            });
         }
     });
     return {
