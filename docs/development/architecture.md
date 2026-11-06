@@ -339,7 +339,7 @@ hold one.
 | Page shell and import map | `web/ui/index.html`, `web/ui/app.ts` |
 | Pages and components | `web/ui/pages/`, `web/ui/components/` |
 | Pure models | `web/ui/model/` |
-| Feed worker and its logic | `web/ui/feed_worker.ts`, `web/ui/feed_hub.ts` |
+| Feed worker, its logic, the tab's side | `web/ui/feed_worker.ts`, `web/ui/feed_hub.ts`, `web/ui/feed_connection.ts` |
 | Tokens and component styles | `web/ui/style/` |
 | Fonts, with `OFL.txt` | `web/ui/assets/fonts/` |
 | Logo and favicon | `web/ui/assets/brand/` (Blanco as `logo.svg`, Secundario as `favicon.svg`) |
@@ -447,8 +447,7 @@ ADR-001 decision 2 fixes its order and its folder. This adds the following.
   `Content-Length`, and the body from a read stream that respects the connection's back-pressure.
 - **A stalled client.** The route leaves the listener's idle timeout on, unlike a feed stream, so a client that stops
   reading frees the slot and the copy when the timeout ends the connection.
-- **Test switch.** `NetworkListenerOptions` takes a test-only reading of the free space for AC-016.8, as it takes
-  `freePort`.
+- **Test switch.** `NetworkListenerOptions` takes a test-only `readFreeSpace` for AC-016.8, as it takes `freePort`.
 
 ### Stop mark
 
@@ -460,8 +459,8 @@ ADR-001 decision 4 states the rule. It's built at these points.
   before clearing, it decides whether a mark is due: the conversation is a lead, its job is In progress, and it's busy,
   has input queued (`hasQueuedUserInput`), is parked or awaits a report. `clearWaiting` writes the mark, the ID
   from `readNewestEntryId`, in the commit it already makes. A cascade and `closeJobConversations` never set it.
-- **The job's status.** The host can't read the job store, so `setJobDoneCheck` in `src/host/job_section.ts` becomes
-  `setJobStatusCheck`, answering the job's status, with `refuseIfJobDone` built on it. The jobs component registers it
+- **The job's status.** The host can't read the job store, so `setJobStatusCheck` in `src/host/job_section.ts` answers
+  the job's status, with `refuseIfJobDone` built on it. The jobs component registers it
   at startup step 5, as today.
 - **Whether a mark is live.** `isStopMarkLive(host, conversationId, meta)` in `src/host/conversation_control.ts` is
   `hasInputSince` on the mark's entry, the read repair rule 3 makes, with the same input entry kinds.
