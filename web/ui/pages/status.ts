@@ -7,6 +7,7 @@
 import { type ComponentChild, h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { listen } from "../components/activity.ts";
+import { ExportDownload } from "../components/export_download.ts";
 import { RefusalMessage } from "../components/refusal.ts";
 import { type FeedConnection, pageClient } from "../feed_connection.ts";
 import { throttled } from "../model/throttle.ts";
@@ -196,6 +197,7 @@ export const StatusPage = ({ feed }: { feed: FeedConnection | null | undefined }
         status === undefined ? null : h(StatusSection, { status }),
         usage === undefined ? null : h(UsageSection, { usage }),
         models === undefined ? null : h(ModelsSection, { models }),
+        h(ExportDownload, null),
     ];
     return h("div", { class: "status" }, ...parts);
 };
