@@ -44,6 +44,27 @@ const rolesOf = async (daemon: DaemonProcess): Promise<Role[]> =>
 const roleOf = async (daemon: DaemonProcess, name: string): Promise<Role | undefined> =>
     (await rolesOf(daemon)).find((role) => role.name === name);
 
+type Entry = { kind: string };
+
+/** The text of the system entry a new job's lead stores when it is seated, which holds the role's instructions. */
+async function seatedInstructions(daemon: DaemonProcess, text: string): Promise<string> {
+    const job = (await daemon.invoke("jobs.create", { text })) as { id: string };
+    const deadline = Date.now() + WAIT_MS;
+    for (;;) {
+        const detail = (await daemon.invoke("jobs.get", { job: job.id })) as { leadConversation?: string };
+        if (detail.leadConversation !== undefined) {
+            const { entries } = (await daemon.invoke("conversations.entries", {
+                conversationId: detail.leadConversation,
+                limit: 50,
+            })) as { entries: Entry[] };
+            const system = entries.find((entry) => entry.kind === "pi.system");
+            if (system !== undefined) return JSON.stringify(system);
+        }
+        if (Date.now() > deadline) throw new Error("the new lead stored no system entry");
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    }
+}
+
 const waitFor = (page: Page, condition: string) =>
     page.waitForFunction(condition, undefined, { timeout: WAIT_MS, polling: POLL_MS });
 
@@ -74,6 +95,29 @@ describe("the Roles page in chrome", () => {
         t.assert.equal(restored?.instructions, shipped);
         t.assert.equal(restored?.changed, false);
         t.assert.equal(await page.inputValue(`${roleCard("gp")} textarea[name="instructions"]`), shipped);
+    });
+
+    it("seats a new agent with the changed instructions, then with the shipped ones after a restore", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { daemon, port } = await startServer();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openRoles(page, port);
+        const bob = roleCard("bob");
+        const shipped = (await roleOf(daemon, "bob"))?.instructions ?? "";
+
+        await page.fill(`${bob} textarea[name="instructions"]`, "SEATING-MARKER-7431");
+        await page.click(`${bob} .role-save`);
+        await waitFor(page, `document.querySelector('${bob}')?.dataset.changed === "true"`);
+        t.assert.match(await seatedInstructions(daemon, "first job"), /SEATING-MARKER-7431/);
+
+        await page.click(`${bob} .role-restore`);
+        await waitFor(page, `document.querySelector('${bob}')?.dataset.changed === "false"`);
+        const afterRestore = await seatedInstructions(daemon, "second job");
+        t.assert.doesNotMatch(afterRestore, /SEATING-MARKER-7431/);
+        t.assert.equal(afterRestore.includes(JSON.stringify(shipped.slice(0, 40)).slice(1, -1)), true);
     });
 
     it("shows the service's refusal when desk is removed, and the role stays", {
