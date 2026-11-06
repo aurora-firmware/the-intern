@@ -14,5 +14,17 @@
         "rules": {
             "preset": "recommended"
         }
-    }
+    },
+    "overrides": [
+        {
+            "includes": ["web/ui/assets/brand/**"],
+            "linter": {
+                "rules": {
+                    "a11y": {
+                        "noSvgWithoutTitle": "off"
+                    }
+                }
+            }
+        }
+    ]
 }
