@@ -23,6 +23,9 @@ const LABELS: Record<BoardStatus, string> = {
     blocked: "Blocked",
     done: "Done",
 };
+const CARDS_STYLE = "display: flex; flex-direction: column; gap: 0.75rem; margin: 0; padding: 0; list-style: none;";
+const LINK_STYLE = "color: var(--color-dark-blue); overflow-wrap: anywhere;";
+const REASON_STYLE = "margin: 0.5rem 0 0; overflow-wrap: anywhere;";
 const DONE_PAGE_SIZE = 50;
 const OPEN_PAGE_SIZE = 500;
 const JOB_DELTA_TYPES: readonly string[] = [
@@ -179,13 +182,13 @@ const JobCard = ({ job }: { job: BoardJob }) => {
     return h(
         "li",
         { class: isBlocked ? "card card-blocked board-card" : "card board-card" },
-        h("a", { href: `#/jobs/${job.number}` }, h("span", { class: "job-number" }, job.number), " ", job.title),
+        h("a", { href: `#/jobs/${job.number}`, style: LINK_STYLE }, h("strong", null, job.number), " ", job.title),
         isBlocked
             ? h(
                   "div",
                   null,
                   h("span", { class: "badge badge-blocked" }, "Blocked"),
-                  h("p", { class: "reason" }, blockedText(job)),
+                  h("p", { class: "reason", style: REASON_STYLE }, blockedText(job)),
               )
             : null,
     );
@@ -198,7 +201,11 @@ const Column = ({ status, jobs, hasMore, onMore }: ColumnProps) =>
         "section",
         { class: "board-column", "data-status": status },
         h("h3", null, LABELS[status]),
-        h("ul", { class: "list" }, ...jobs.map((job) => h(JobCard, { job, key: job.number }))),
+        h(
+            "ul",
+            { class: "board-cards", style: CARDS_STYLE },
+            ...jobs.map((job) => h(JobCard, { job, key: job.number })),
+        ),
         hasMore
             ? h("button", { type: "button", class: "button button-secondary", onClick: onMore }, "Load more")
             : null,

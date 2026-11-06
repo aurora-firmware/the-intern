@@ -6,6 +6,7 @@ import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts"
 import { startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
 const WAIT_MS = 20_000;
+const REFUSAL = "The board could not be read for this test";
 const QUIET_MS = 700;
 const TEST_TIMEOUT_MS = 180_000;
 const FIRST_DONE_COUNT = 50;
@@ -153,5 +154,61 @@ describe("the Board in chrome", () => {
         proxy.forceFeedEnd("lagging");
 
         await page.waitForSelector(`main .card a[href='#/jobs/${missed.number}']`, { timeout: WAIT_MS });
+    });
+
+    it("shows the refusal of a failed read and no banner when jobs.list is refused", async (t) => {
+        const { port } = await startNetworkDaemon("echo");
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await page.route("**/operations/jobs.list", (route) =>
+            route.fulfill({ status: 400, json: { error: { code: "invalid_input", message: REFUSAL } } }),
+        );
+
+        await page.goto(pageUrl(port, "/ui/#/"));
+
+        await page.waitForSelector("main .board .error");
+        t.assert.equal(await page.locator("main .board .error").textContent(), REFUSAL);
+        t.assert.equal(await page.locator(".connection-banner").count(), 0);
+    });
+
+    it("shows the connection banner and no refusal message when jobs.list is unavailable", async (t) => {
+        const { port } = await startNetworkDaemon("echo");
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await page.route("**/operations/jobs.list", (route) =>
+            route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "not now" } } }),
+        );
+
+        await page.goto(pageUrl(port, "/ui/#/"));
+
+        await page.waitForSelector(".connection-banner");
+        t.assert.equal(await page.locator("main .board .error").count(), 0);
+    });
+
+    it("keeps the columns, shows the refusal and keeps Load more when asking for more Done jobs fails", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { daemon, port } = await startNetworkDaemon("echo");
+        await createFinishedJobs(daemon, FIRST_DONE_COUNT + 1);
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openBoard(page, port);
+        await waitForCount(page, "Done", FIRST_DONE_COUNT);
+        await page.route("**/operations/jobs.list", (route) =>
+            route.request().postDataJSON()?.cursor === undefined
+                ? route.fallback()
+                : route.fulfill({ status: 400, json: { error: { code: "invalid_input", message: REFUSAL } } }),
+        );
+
+        const more = column(page, "Done").getByRole("button", { name: "Load more" });
+        await more.click();
+
+        await page.waitForSelector("main .board .error");
+        t.assert.equal(await page.locator("main .board .error").textContent(), REFUSAL);
+        t.assert.equal(await cardsIn(page, "Done").count(), FIRST_DONE_COUNT);
+        t.assert.equal(await more.count(), 1);
     });
 });
