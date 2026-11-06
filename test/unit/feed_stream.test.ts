@@ -39,6 +39,8 @@ type HarnessOptions = {
     maxPending?: number;
     /** Holds every `feed.subscribe` call until it settles, as a conversation subscribe awaits its watch. */
     subscribeGate?: Promise<void>;
+    /** The conversations that have a feed of their own; `feed` serves every other id except `unknown`. */
+    feedsById?: Record<string, ServedFeed>;
 };
 
 type Harness = {
@@ -69,7 +71,7 @@ async function startFront(options: HarnessOptions = {}): Promise<Harness> {
             await options.subscribeGate;
             const { conversationId } = input as { conversationId?: string };
             if (conversationId === "unknown") throw new ServiceError("not_found", "No conversation unknown");
-            return feed.subscription;
+            return (conversationId && options.feedsById?.[conversationId]?.subscription) || feed.subscription;
         },
     });
     const catalogue = createCatalogue([subscribe], { context: {}, phase: () => "ready", logger: SILENT_LOGGER });
@@ -448,5 +450,160 @@ describe("feed stream: a client that leaves while subscribing", () => {
 
         assert.deepEqual(await harness.feed.subscription.next(), { closed: "unsubscribed" });
         assert.equal(getEventListeners(harness.abort.signal, "abort").length, 0);
+    });
+});
+
+type ConversationFeeds = { feeds: Record<string, ServedFeed>; harness: Harness };
+
+const CONVERSATION_IDS = ["c-1", "c-2", "c-3"];
+
+async function startConversationsFront(): Promise<ConversationFeeds> {
+    const feeds = Object.fromEntries(
+        CONVERSATION_IDS.map((id) => [id, serveFeed({ view: `start of ${id}` }, Number.MAX_SAFE_INTEGER)]),
+    );
+    return { feeds, harness: await startFront({ feedsById: feeds }) };
+}
+
+const CONVERSATIONS_PATH = "/feed?scope=conversations&id=c-1&id=c-2&id=c-3";
+
+describe("feed stream: one stream for several conversations", () => {
+    let rig: ConversationFeeds;
+    beforeEach(async () => {
+        rig = await startConversationsFront();
+    });
+    afterEach(() => rig.harness.close());
+
+    it("sends a snapshot per conversation, then each delta naming its conversation, in order within it", async () => {
+        const res = await rig.harness.open(CONVERSATIONS_PATH);
+        const events = eventReader(res);
+
+        const snapshots = [await events.next(), await events.next(), await events.next()];
+        rig.feeds["c-2"]?.push({ seq: 1, text: "a" });
+        rig.feeds["c-1"]?.push({ seq: 1, text: "b" });
+        rig.feeds["c-2"]?.push({ seq: 2, text: "c" });
+        const deltas = [await events.next(), await events.next(), await events.next()];
+
+        assert.equal(res.statusCode, 200);
+        assert.match(res.headers["content-type"] ?? "", /^text\/event-stream/);
+        assert.deepEqual(
+            snapshots.map((event) => event.event),
+            ["snapshot", "snapshot", "snapshot"],
+        );
+        assert.deepEqual(
+            snapshots.map((event) => JSON.parse(event.data ?? "")),
+            CONVERSATION_IDS.map((conversationId) => ({
+                conversationId,
+                event: { view: `start of ${conversationId}` },
+            })),
+        );
+        const delta = (id: string, conversationId: string, seq: number, text: string) => ({
+            event: "delta",
+            id,
+            data: JSON.stringify({ conversationId, event: { seq, text } }),
+        });
+        assert.deepEqual(deltas, [delta("1", "c-2", 1, "a"), delta("1", "c-1", 1, "b"), delta("2", "c-2", 2, "c")]);
+    });
+
+    it("subscribes once to each named conversation, as a team member", async () => {
+        const res = await rig.harness.open("/feed?scope=conversations&id=c-1&id=c-2&id=c-1");
+        await eventReader(res).next();
+
+        const inputs = rig.harness.calls.map((call) => call.input);
+        assert.deepEqual(inputs, [
+            { scope: "conversation", conversationId: "c-1" },
+            { scope: "conversation", conversationId: "c-2" },
+        ]);
+        assert.deepEqual(rig.harness.calls[0]?.caller, { actor: { kind: "team_member", wayIn: "web interface" } });
+    });
+
+    it("sends one snapshot for a repeated id", async () => {
+        const res = await rig.harness.open("/feed?scope=conversations&id=c-1&id=c-1");
+        const events = eventReader(res);
+        await events.next();
+        rig.feeds["c-1"]?.push({ seq: 1, text: "a" });
+
+        assert.equal((await events.next()).event, "delta");
+    });
+
+    const refused = [
+        { label: "no id", path: "/feed?scope=conversations", status: 400, code: "invalid_input" },
+        { label: "an empty id", path: "/feed?scope=conversations&id=", status: 400, code: "invalid_input" },
+        {
+            label: "an unknown id among known ones",
+            path: "/feed?scope=conversations&id=c-1&id=unknown&id=c-2",
+            status: 404,
+            code: "not_found",
+        },
+    ];
+    for (const { label, path, status, code } of refused) {
+        it(`answers ${status} ${code} with no event for ${label}`, async () => {
+            const res = await rig.harness.open(path);
+
+            assert.equal(res.statusCode, status);
+            assert.match(res.headers["content-type"] ?? "", /^application\/json/);
+            assert.equal(await readErrorCode(res), code);
+        });
+    }
+
+    it("closes the subscriptions it had opened when an id is unknown", async () => {
+        await rig.harness.open("/feed?scope=conversations&id=c-1&id=unknown&id=c-2");
+
+        await Promise.all([rig.feeds["c-1"]?.closeCalled, rig.feeds["c-2"]?.closeCalled]);
+    });
+
+    for (const reason of ["lagging", "stopped"] as const) {
+        it(`ends the other subscriptions and sends one end with ${reason} when one ends ${reason}`, async () => {
+            const res = await rig.harness.open(CONVERSATIONS_PATH);
+            const events = eventReader(res);
+            for (let snapshot = 0; snapshot < 3; snapshot++) await events.next();
+
+            rig.feeds["c-2"]?.end(reason);
+
+            assert.deepEqual(await events.rest(), [{ event: "end", data: JSON.stringify({ reason }) }]);
+            await Promise.all(Object.values(rig.feeds).map((feed) => feed.closeCalled));
+        });
+    }
+
+    it("ends each subscription unsubscribed when the client closes the connection", async () => {
+        const res = await rig.harness.open(CONVERSATIONS_PATH);
+        const events = eventReader(res);
+        for (let snapshot = 0; snapshot < 3; snapshot++) await events.next();
+
+        res.clientRequest.destroy();
+
+        await Promise.all(Object.values(rig.feeds).map((feed) => feed.closeCalled));
+        for (const feed of Object.values(rig.feeds)) {
+            assert.deepEqual(await feed.subscription.next(), { closed: "unsubscribed" });
+        }
+    });
+
+    it("ends with lagging once more than 1000 deltas across the conversations are undelivered", async () => {
+        const res = await rig.harness.open(CONVERSATIONS_PATH);
+        const events = eventReader(res);
+        for (let snapshot = 0; snapshot < 3; snapshot++) await events.next();
+        res.pause();
+
+        // Large deltas fill the socket buffers, so the writer waits; the rest count as undelivered across the three.
+        for (let seq = 1; seq <= 400; seq++) {
+            for (const feed of Object.values(rig.feeds)) feed.push({ seq, text: LARGE_TEXT });
+            await new Promise((resolve) => setImmediate(resolve));
+        }
+        res.resume();
+        const rest = await events.rest();
+
+        assert.ok(rest.filter((event) => event.event === "delta").length < 1200 - 1000, "the stream stopped early");
+        assert.deepEqual(rest.at(-1), { event: "end", data: '{"reason":"lagging"}' });
+        await Promise.all(Object.values(rig.feeds).map((feed) => feed.closeCalled));
+    });
+
+    it("sends end with stopped and closes each subscription when the signal aborts", async () => {
+        const res = await rig.harness.open(CONVERSATIONS_PATH);
+        const events = eventReader(res);
+        for (let snapshot = 0; snapshot < 3; snapshot++) await events.next();
+
+        rig.harness.abort.abort();
+
+        assert.deepEqual(await events.rest(), [{ event: "end", data: '{"reason":"stopped"}' }]);
+        await Promise.all(Object.values(rig.feeds).map((feed) => feed.closeCalled));
     });
 });
