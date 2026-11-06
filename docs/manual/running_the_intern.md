@@ -192,8 +192,8 @@ for example `http://192.168.1.20:8080/`. It redirects to the Board, the first pa
 ::: warning No login and no encryption
 The network listener has no login and no encryption. Anyone who can reach its address and port can use The Intern,
 with the service account's access, and what they send and receive crosses the network as plain text. Anyone who can
-reach the listener can also take a copy of the whole database, with whatever agents' tool output wrote into it. Limit who can
-reach that address with your network setup, for example with a firewall.
+reach the listener can also take a copy of the whole database, with whatever agents' tool output wrote into it. Limit
+who can reach that address with your network setup, for example with a firewall.
 :::
 
 ## Who can use The Intern
