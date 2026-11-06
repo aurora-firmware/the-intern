@@ -78,5 +78,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install browsers for web tests
+        run: npm run test:web:setup
+
       - name: Run tests
+        env:
+          BOB_WEB_ALL_BROWSERS: "1"
         run: npm test
