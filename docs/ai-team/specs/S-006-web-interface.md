@@ -1,7 +1,7 @@
 ---
 id: S-006
 title: Web interface
-version: '0.1'
+version: '0.2'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-06'
 author: planner
@@ -140,15 +140,20 @@ operations and feed each page relies on. No page calls anything else, apart from
 
 | Page | Reads | Actions |
 |---|---|---|
+| Every page | `daemon.status`, to check the connection and the version (ADR-007 decisions 6 and 9) | — |
 | Board | `jobs.list`, instance feed (`GET /feed?scope=instance`) | — |
 | Job page | `jobs.get`, `jobs.history.list`, `jobs.worklog.list`, `conversations.get`, `conversations.entries`, `conversations.invocations`, `models.list`, `roles.list`, `workspaces.list`, instance feed, one stream for the job's conversations (`GET /feed?scope=conversations`, S-003 REQ-006) | `jobs.update`, `jobs.complete`, `jobs.cancel`, `jobs.resume`, `jobs.relate`, `jobs.unrelate`, `conversations.submit`, `conversations.abort`, `conversations.compact`, `conversations.reset`, `conversations.seat` |
-| Front desk | `desk.get`, `conversations.entries`, `submissions.get`, conversation feed | `conversations.submit`, `conversations.abort`, `jobs.create` |
+| Front desk | `desk.get`, `conversations.entries`, `submissions.get`, conversation feed, which reaches the page on the shared stream (`GET /feed?scope=conversations`, S-003 REQ-006; ADR-007) | `conversations.submit`, `conversations.abort`, `jobs.create` |
 | Roles | `roles.list`, `models.list`, `workspaces.list`, instance feed | `roles.create`, `roles.change`, `roles.remove`, `roles.restore` |
 | Workspaces | `workspaces.list`, instance feed | `workspaces.register`, `workspaces.unregister` |
 | Status | `daemon.status`, `usage.get`, `models.list`, `conversations.list`, instance feed | Export download |
 
 On the Job page, the instance feed is the only source of job deltas (S-004 REQ-015), and its `conversation_created`
 delta names a newly invoked conversation. `workspaces.list` gives the workspaces for a change of seat.
+
+**Contract** (`conversations.entries`): the operation takes an optional input `order`, `"ascending"` or `"descending"`.
+It is `"ascending"` by default, so S-002 AC-012.4's oldest-first read and S-002's catalogue row stay true and S-002
+isn't amended. Pages read newest first, 200 entries at a time (`docs/development/architecture.md`, Reading entries).
 
 **Contract** (answers and Redirect on the Job page): an answer is `jobs.resume` with `text`, and a second answer, once
 the job is no longer Blocked, is refused `conflict`. `conversations.submit` is for Redirect only, with busy mode
@@ -800,9 +805,9 @@ None. The web interface adds no setting. The existing `[network]` section of `co
   v0.13 adds the block after a team member's stop (REQ-008) and the "related changed" delta (REQ-015).
 - **Browser connections.** Plain HTTP allows a browser 6 connections per host across its tabs. A Job page reads the
   instance feed and the stream for its conversations, so 3 Job pages that each hold both would use all 6 and leave none
-  for actions. Feature Architecture decides how the pages stay within the limit, so that AC-005.4 holds.
+  for actions. ADR-007 decides how the pages stay within the limit, so that AC-005.4 holds.
 - **Delta size.** Today each delta of a conversation re-sends its whole active view, measured at 1.06 MB for a 32-byte
-  change. Feature Architecture decides how AC-019.3 is met.
+  change. ADR-008 decides how AC-019.3 is met.
 - **Brand assets.** The brand manual, logos and font choices come from The Round Table project
   (`~/projects/the_round_table/project/docs/corporate_image/` and `the_round_table/src/app/globals.css`). They are
   copied into this repository, so the two projects stay independent. The fonts are free and open source.
@@ -840,15 +845,16 @@ None. The web interface adds no setting. The existing `[network]` section of `co
 
 ## Open Questions
 
-Each is for the Architect, resolved in Feature Architecture, and none changes the behaviour above.
+Both were for the Architect, and Feature Architecture resolved them. Neither changes the behaviour above.
 
-- **Technology preference from the product owner:** the look of The Round Table, built with Next.js, Tailwind, shadcn
-  with Radix and lucide icons, and writing the pages in TypeScript. It's a preference to weigh against `bob`'s setup,
-  which has no compile step, and S-003 REQ-008's serving of files from the package.
-- **Browser test tooling.** `docs/development/tech_stack.md` leaves it to this spec's architecture. REQ-021 needs one
-  that covers the target browsers.
+- **Resolved by ADR-006. Technology preference from the product owner:** the look of The Round Table, built with
+  Next.js, Tailwind, shadcn with Radix and lucide icons, and writing the pages in TypeScript. It's a preference to weigh
+  against `bob`'s setup, which has no compile step, and S-003 REQ-008's serving of files from the package.
+- **Resolved in `docs/development/tech_stack.md`. Browser test tooling.** It was left to this spec's architecture.
+  REQ-021 needs one that covers the target browsers.
 
 ## Amendment Log
 
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
+| 2026-11-06 | v0.2. Interfaces: the service calls table adds `daemon.status` for every page; the Front desk row names the shared `scope=conversations` stream; a Contract notes `conversations.entries`' optional `order` input, ascending by default, with pages reading newest first, 200 at a time. Open Questions: both marked resolved. Assumptions and Dependencies: "Browser connections" points to ADR-007 and "Delta size" to ADR-008. No REQ or AC changed. S-002 isn't amended. | Spec findings from Feature Architecture. Driving ADRs: ADR-006 (technology preference), ADR-007 (decisions 4, 6 and 9, and the shared stream), ADR-008 (delta size). The `order` input's text is in `docs/development/architecture.md`, Reading entries. | None; S-006 isn't broken down yet |
