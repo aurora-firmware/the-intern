@@ -5,7 +5,8 @@
  */
 import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
-import { ClientError, UnreachableError } from "../client/client.ts";
+import { ClientError } from "../client/client.ts";
+import { AnswerBox } from "../components/answer_box.ts";
 import { JobActivity } from "../components/job_activity.ts";
 import {
     Entries,
@@ -17,6 +18,7 @@ import {
     Missing,
     type WorklogEntry,
 } from "../components/job_record.ts";
+import { refusalText } from "../components/refusal.ts";
 import { type FeedConnection, pageClient } from "../feed_connection.ts";
 
 type JobDeltaLike = { type: string; number?: string; numbers?: string[]; entry?: WorklogEntry };
@@ -50,18 +52,10 @@ const allEntries = async <T>(operation: string, number: string): Promise<T[]> =>
     return entries;
 };
 
-/** A refusal or failure worth telling the team member; a service that can't be reached shows the banner instead. */
-const failureText = (error: unknown): string | undefined => {
-    if (error instanceof UnreachableError || (error instanceof ClientError && error.code === "unavailable")) {
-        return undefined;
-    }
-    return error instanceof Error ? error.message : String(error);
-};
-
 /** The view without its earlier failure, and with this one when it is worth telling. */
 const withFailure = (view: JobView, error: unknown): JobView => {
     const { failure: _cleared, ...rest } = view;
-    const text = error === undefined ? undefined : failureText(error);
+    const text = error === undefined ? undefined : refusalText(error);
     return { ...rest, ...(text !== undefined && { failure: text }) };
 };
 
@@ -176,6 +170,7 @@ export const JobPage = ({ feed, number }: { feed: FeedConnection | null | undefi
         view.phase === "found" && view.record !== undefined
             ? [
                   h(JobFields, { record: view.record }),
+                  h(AnswerBox, { number, isBlocked: view.record.status === "blocked" }),
                   h(JobActivity, { feed, jobId: view.record.id, leadConversation: view.record.leadConversation }),
                   h(Entries, {
                       name: "worklog",
