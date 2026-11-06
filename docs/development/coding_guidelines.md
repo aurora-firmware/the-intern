@@ -162,7 +162,8 @@ client" changes by amending [ADR-005](../ai-team/decisions/ADR-005-commands-load
 ## Web pages
 
 The pages are in `web/ui/`. These rules come from
-[ADR-006](../ai-team/decisions/ADR-006-web-pages-are-typescript-modules-with-no-build-step.md), decision 8 of [ADR-007](../ai-team/decisions/ADR-007-one-shared-worker-holds-a-browser-s-feed-connections.md) and the
+[ADR-006](../ai-team/decisions/ADR-006-web-pages-are-typescript-modules-with-no-build-step.md),
+decision 8 of [ADR-007](../ai-team/decisions/ADR-007-one-shared-worker-holds-a-browser-s-feed-connections.md) and the
 Module rule in [architecture.md](architecture.md). `test/web` runs the pages in real browsers; `tech_stack.md` says
 how.
 
