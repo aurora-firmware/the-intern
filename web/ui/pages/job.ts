@@ -1,11 +1,12 @@
 /**
- * The Job page's record (S-006 REQ-003). A tab asks the worker for deltas first, reads the job, its history and its
+ * The Job page (S-006 REQ-003, REQ-005). A tab asks the worker for deltas first, reads the job, its history and its
  * worklog, and applies the worklog entries that came in meanwhile. Any other delta of the job reads the job and its
- * history again: `job_done` carries no justification and history has no delta.
+ * history again: `job_done` carries no justification and history has no delta. The live activity is `JobActivity`.
  */
 import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { ClientError, UnreachableError } from "../client/client.ts";
+import { JobActivity } from "../components/activity.ts";
 import { type FeedConnection, pageClient } from "../feed_connection.ts";
 
 type Observed = { remoteAddress?: string; remotePort?: number };
@@ -19,6 +20,8 @@ type Origin =
     | { kind: "trigger"; trigger: string }
     | { kind: "follow_up"; jobId: string };
 type JobRecord = {
+    id: string;
+    leadConversation?: string;
     number: string;
     title: string;
     description: string;
@@ -49,7 +52,6 @@ const STATUS_LABELS: Record<string, string> = {
 const RECORD_DELTA_TYPES: readonly string[] = ["job_changed", "job_status_changed", "job_done", "job_related_changed"];
 const PAGE_SIZE = 500;
 const EMPTY_VIEW: JobView = { phase: "loading", worklog: [], history: [] };
-const MISSING_VIEW: JobView = { ...EMPTY_VIEW, phase: "missing" };
 const isNotFound = (error: unknown) => error instanceof ClientError && error.code === "not_found";
 const TEXT_STYLE = "margin: 0; overflow-wrap: anywhere; white-space: pre-wrap;";
 const LIST_STYLE = "display: flex; flex-direction: column; gap: 0.5rem; margin: 0; padding: 0; list-style: none;";
@@ -142,7 +144,7 @@ const createJobController = (number: string, publish: (view: JobView) => void): 
             } catch (error) {
                 if (mine !== fullGeneration) return;
                 buffered = undefined;
-                show(isNotFound(error) ? MISSING_VIEW : withFailure(view, error));
+                show(isNotFound(error) ? { ...EMPTY_VIEW, phase: "missing" } : withFailure(view, error));
             }
         },
         onDelta(delta) {
@@ -202,6 +204,8 @@ const authorText = (author: Author): string => {
 };
 
 const valueText = (value: unknown): string => (typeof value === "string" ? value : JSON.stringify(value));
+const historyText = (entry: HistoryEntry): string =>
+    `${entry.field}: ${valueText(entry.old)} → ${valueText(entry.new)}`;
 
 const Field = ({ name, label, value }: { name: string; label: string; value: string }) =>
     h(
@@ -277,6 +281,7 @@ export const JobPage = ({ feed, number }: { feed: FeedConnection | null | undefi
         view.phase === "found" && view.record !== undefined
             ? [
                   h(JobFields, { record: view.record }),
+                  h(JobActivity, { feed, jobId: view.record.id, leadConversation: view.record.leadConversation }),
                   h(Entries, {
                       name: "worklog",
                       title: "Worklog",
@@ -286,11 +291,7 @@ export const JobPage = ({ feed, number }: { feed: FeedConnection | null | undefi
                       name: "history",
                       title: "History",
                       items: view.history.map((entry, index) =>
-                          h(EntryItem, {
-                              entry,
-                              text: `${entry.field}: ${valueText(entry.old)} → ${valueText(entry.new)}`,
-                              key: index,
-                          }),
+                          h(EntryItem, { entry, text: historyText(entry), key: index }),
                       ),
                   }),
               ]
