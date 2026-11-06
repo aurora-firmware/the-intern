@@ -189,6 +189,7 @@ Live following
   Redirect while parked for reports → page says "held until it continues"           REQ-006
   Stop → one confirmation → conversation aborted; already finished → page says so   REQ-006
   Stop on the lead → no reminder → Blocked "stopped by a team member" → an answer resumes   REQ-006
+  Stop on a lead parked for reports → one confirmation → it and its invoked agents end → Blocked   REQ-006
   Reset → one confirmation → conversation starts over                               REQ-007
 
 Any action
@@ -371,12 +372,12 @@ SHALL leave the browser's connections free for its actions (Assumptions and Depe
 
 ### REQ-006 — Stop and redirect
 
-The Job page SHALL offer Stop for a running conversation of the job, and Redirect for a running conversation or one
-parked for reports. Stop SHALL ask for one confirmation, then abort the conversation (S-001's cascade). Stopping the
-job's lead SHALL leave the job as S-004 REQ-008 states: no reminder, Blocked with the reason "stopped by a team member",
-and an answer resumes it. Redirect SHALL deliver the team member's words to the running agent after its current tool
-round (S-002's busy mode `steer`; S-001 REQ-020). For a conversation parked for reports, the service holds the words,
-and the page SHALL say "held until it continues" (ADR-004 decision 4).
+The Job page SHALL offer Stop and Redirect for a running conversation of the job or one parked for reports. Stop SHALL
+ask for one confirmation, then abort the conversation (S-001's cascade). Stopping the job's lead SHALL leave the job as
+S-004 REQ-008 states: no reminder, Blocked with the reason "stopped by a team member", and an answer resumes it.
+Redirect SHALL deliver the team member's words to the running agent after its current tool round (S-002's busy mode
+`steer`; S-001 REQ-020). For a conversation parked for reports, the service holds the words, and the page SHALL say
+"held until it continues" (ADR-004 decision 4).
 
 #### AC-006.1 — Redirect
 
@@ -412,6 +413,14 @@ and the page SHALL say "held until it continues" (ADR-004 decision 4).
 - **When:** a team member sends words through Redirect, and the invoked agent reports
 - **Then:** the page says "held until it continues" and no run starts; when the lead continues, the live activity shows
   the words once, from a team member with the way in `web interface`
+
+**Verification:** test — a browser test.
+
+#### AC-006.5 — Stop while parked
+
+- **Given:** a lead agent parked for a running invoked agent on the fake model
+- **When:** a team member presses Stop and confirms
+- **Then:** the lead and the invoked agent both end, and the job goes Blocked with the reason "stopped by a team member"
 
 **Verification:** test — a browser test.
 

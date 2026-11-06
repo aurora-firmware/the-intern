@@ -1,6 +1,6 @@
 ---
 title: Daemon and host runtime
-version: '0.13'
+version: '0.14'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-16'
 author: planner
@@ -604,9 +604,9 @@ Every operation MUST:
 - validate its input and refuse an invalid call without changing state
 - name its caller's actor and, for a team member, the details its way in observed, which S-001 records where it
   requires attribution
-- end with a result or one of a fixed set of error outcomes: not found, invalid input, busy (a reject-if-busy
-  submit), conflict, unavailable (the daemon isn't ready or is stopping), internal. Each outcome carries a message
-  that names what failed.
+- end with a result or one of a fixed set of error outcomes: not found, invalid input, busy (a reject-if-busy submit, or
+  a resource in use for now), conflict, unavailable (the daemon isn't ready or is stopping), internal. Each outcome
+  carries a message that names what failed.
 
 A control operation that creates something (a job, a role, a workspace registration) accepts an
 idempotency key. A repeated call with the same key returns the original result and creates nothing. Submits are
@@ -1008,3 +1008,4 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-05 | v0.12. No behaviour changes (CR-001): technology and implementation words leave the requirement text, and each REQ keeps its guarantee. Changed: AC-001.1, AC-001.2, REQ-002 (the same eight steps and numbers), AC-002.1, AC-002.2, AC-003.1, REQ-005, AC-005.1, AC-005.3, REQ-007, AC-007.1, REQ-008, REQ-009 (constants unchanged), REQ-010, AC-010.3, REQ-013, AC-016.1, REQ-017, REQ-019, AC-019.1, REQ-020, with the copies in Definitions, Users, Exclusions, Workflow and Implementation Order. Moved statements live in ADR-001 decisions 1, 2, 3, 4 and 5 and `docs/development/architecture.md`. AC-016.1 points to ADR-001 decision 2. No identifier added or retired. | CR-001, approved by the product owner. | T-202 (inspects AC-016.1); spec text otherwise |
 | 2026-11-05 | v0.13. No behaviour changes. Workflow and REQ-002 step 7: the daemon restores admission, applies the job repair rules, resumes unfinished work, then submits the input those rules owe (S-004 v0.12 REQ-018). REQ-008: a job operation cut off part way is completed by S-004 REQ-018 at the next start, before any listener answers a call other than `daemon.status`, in place of "before work resumes". | spec-truth reconciliation: the text was stale against the built behaviour, and the Architect found no behaviour change (D1). | None; spec text only |
 | 2026-11-05 | spec-truth reconciliation — PASS | Work in 8e1eaa08..HEAD confirmed against v0.13; step 7, Workflow and REQ-008 corrected for input submitted after the resume, before listeners open; earlier task logs not read | none |
+| 2026-11-06 | v0.14. No behaviour changes. REQ-013: the gloss of `busy` reads "a reject-if-busy submit, or a resource in use for now". No identifier added or retired. | S-006 second architecture consistency review, finding F3, product owner decision of 2026-11-06: `jobs.export` (S-004 REQ-016) and the export route (S-003 REQ-016) refuse `busy` for a resource in use, which the old gloss didn't cover. Approved with S-006 at Gate 1. | None; spec text only |
