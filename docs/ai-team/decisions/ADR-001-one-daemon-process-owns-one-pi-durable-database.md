@@ -114,7 +114,8 @@ code of our own, apart from the two bounded exceptions in decision 4.
 
    **Export and import copy the whole file.**
    - `jobs.export` writes a consistent copy of the whole database to a new path, owner-only, through SQLite's online
-     backup on the daemon's connection, while work goes on (S-004 REQ-016).
+     backup on the daemon's connection, while work goes on (S-004 REQ-016). The network listener's export route
+     (S-003 REQ-016) takes its copy through this same operation (decision 2), so there is one way to copy the file.
    - The import step is a separate process, run while the daemon is stopped (S-004 REQ-017). It holds the
      instance's single-owner lock while it runs, so a daemon that starts meanwhile is refused (S-002 REQ-001). It
      places the copy as the database file, owner-only, and only where no database file and no `-wal` or `-shm` file
@@ -137,6 +138,28 @@ code of our own, apart from the two bounded exceptions in decision 4.
      start and stop hooks a component registers with the daemon's lifecycle. They import the daemon and feed modules
      only as types. The one daemon file listener and client library code may load is the path layout,
      `src/daemon/state_layout.ts`, which imports only Node modules.
+   - The export route `GET /export` (S-003 REQ-016) follows these rules and adds no operation to the catalogue. It
+     calls `jobs.export` through the catalogue with the listener's caller, naming a new path in a folder it makes for
+     that download with `mkdtemp`, under an `exports` folder in the state directory, which it reads from
+     `daemon.status`. It then sends that file, using the size `jobs.export` returns as the response's length, and
+     removes the folder when the download ends. The copy is owner-only because `jobs.export` makes it so, and the
+     listener imports nothing of the host. Refusals before the first byte come from the catalogue with their usual
+     codes, `unavailable` outside the ready phase included, apart from the route's own two, which use the same codes.
+     - One download runs at a time. The route holds one slot in memory, taken before anything else and freed when the
+       download ends, and a request that finds it taken gets `busy`. The slot is no fact of decision 4: a kill loses it
+       with the process.
+     - With the slot taken and the phase ready, the route compares the free space of the `exports` folder's file
+       system (`statfs`) with the sizes of the database file and its `-wal` file (`stat`, at the paths
+       `src/daemon/state_layout.ts` gives) plus a built-in margin. Too little space gets `conflict`, and no copy is
+       made. These reads take metadata only, so listeners still reach the daemon's state only through the catalogue,
+       the feed and the hooks. `busy` means try again soon; `conflict` means a team member has to act first.
+     - The listener's stop hook waits for each running export to settle and for its folder to go, within the daemon's
+       stop bound.
+     - The network listener component removes what the `exports` folder still holds, first thing in its start hook.
+       That hook runs in S-002 REQ-002 step 8 whether or not `[network]` is set, and returns after the removal when the
+       section is missing, so leftovers go before the daemon reports ready and before the listener accepts a request.
+       Only a killed daemon leaves anything there. A failed removal is logged and stops nothing. The removal touches no
+       state the daemon resumes from, so it isn't one of the recoveries decision 4 bounds.
 
    **The service layer knows no transport (S-002 REQ-016).** No operation takes a request or connection as input. A
    listener turns what it receives into an operation's input and a caller, so every operation can be called in-process
@@ -167,6 +190,17 @@ code of our own, apart from the two bounded exceptions in decision 4.
      commit that, before pi-durable's abort, sets `parked` to `null` and empties `awaiting` and `held` (S-001 REQ-008).
      A document written without the field reads as not marked. The mark is spent once the invoker's `awaiting` no
      longer lists the conversation; it has no effect after that.
+   - The stop mark (`stopped`) records that a team member's abort stopped a job's lead, for S-004 REQ-008's turn-end
+     rule. pi-durable's settled input can't carry this: the abort of a lead parked for reports ends no run and settles
+     no input. The mark holds the ID of the lead's newest transcript entry. It is set only on a lead conversation that
+     `conversations.abort` or the front desk's stop tool names, never on one a cascade reaches, and only when its job is
+     In progress and the lead runs, has input queued, is parked or awaits a report. An idle lead's abort ends nothing
+     and sets no mark. It is set in the abort's own commit, in the job's section, where the job's status is read. A
+     document written without the field reads as not marked. The mark is live until an input entry follows the
+     entry it holds (an input entry as the second exception defines it, read as rule 3 reads it), and nothing clears
+     it; a block needs no clearing, because the input that resumes the job spends the mark. It delivers no input, so it
+     adds no redelivery path. When a crash falls after this commit and before pi-durable's abort, the abort stays
+     undone as below: the run resumes, and the rule blocks the job when that run ends.
    - The closed mark records that the conversation's job is Done (S-001 REQ-026). The job's abort sets it on every
      conversation of the job, in the abort's own commit, idle conversations included, and nothing clears it. That
      commit also removes every queued item from the conversation's pi-durable inbox and settles it `unanswered` with
@@ -282,6 +316,11 @@ code of our own, apart from the two bounded exceptions in decision 4.
      `host.resume()`, as above. It is the rule a lead's turn end runs, applied to saved state, so a crash between the
      end of a lead's turn and the daemon handling it loses nothing; it isn't a fifth repair rule (product owner
      decision, 2026-11-02).
+   - A live stop mark decides the turn-end rule before anything else: the job blocks with no reminder, whatever the
+     definition of done holds. An abort of a parked lead ends no run, so while the daemon runs the rule is also checked
+     when an abort that set the mark has ended with its cascade, and when a run of another conversation of the job ends
+     while the mark is live. The startup check above covers a crash before either: it reads the mark, so that job
+     blocks and gets no reminder. The block is the usual pairing, the job write and then the park, under rule 2.
    - A reminder is spent when pi-durable holds its input. The reminder's request id is `reminder:<jobId>:<n>`, where
      `n` counts the job's blocks and resumes in its history, so whether it is spent survives a restart without a fact
      of its own, and a repeated check submits it once.
@@ -433,3 +472,5 @@ second connection open. One shared handle orders every transaction and closes wi
 | 2026-11-05 | Decision 2: names what the harness host module is; listener and client library code imports none of the host module, pi-durable, `pi-ai`, `chord` or `pi-coding-agent`; listeners reach the daemon's state only through the catalogue, the feed and the lifecycle hooks; the service layer knows no transport. Decision 1: single ownership is a lock file, and the import step refuses a copy with a newer job or pi-durable schema. Decision 4: the front desk's input is in the order pi-durable admits it, with no lock of the daemon's own; S-004 REQ-018 states the repair rules in behaviour words; `blockedAfterEntry` is cited to rule 3, and isn't returned or recorded in the history. These statements come from the specs and change no behaviour. | CR-001: design statements leave the requirement text of S-001 to S-005, so a constraint needs a binding home first. |
 | 2026-11-05 | Decision 4, first bounded exception: the failed-close bullet now covers a team member's `jobs.complete` and `jobs.cancel` as well as a lead's complete tool, and a rejected abort as well as a rejected closed-mark commit. A rejected abort, of a compaction or of a conversation, is logged and stops no other. A compaction running in a conversation whose mark landed is aborted; a background compaction in a conversation without its mark goes on until rule 4 aborts it. A conversation whose own abort is rejected keeps running until the next start, on every path. The marks after a rejected commit aren't attempted: rule 4 already sets them, this adds no recovery path, and `closeJobConversations`, which rule 4 also uses, keeps rejecting. | Product owner decisions of 2026-11-05 on B-010; S-001 v0.13 REQ-026 and S-004 v0.11 REQ-007. The product owner left the remaining marks open, so this record decides them. |
 | 2026-11-05 | Decision 4, second bounded exception: states when each part of the repair takes effect. The rules run before `host.resume()` and make no call that turns scheduling on; rule 1's first inputs, the delivery of rule 3's held messages with the job's change to In progress, and the turn-end check's reminders are submitted after it, within step 7 and in that order, and the wait for marked conversations comes last; a rule a crash cuts short writes another entry. The decision itself is unchanged and nothing in the build changes. | Spec-truth reconciliation (S-004 REQ-018, S-002 REQ-002 step 7): "before work resumes" could not hold, because pi-durable's `Conversation.submit` turns scheduling on (`Harness.resume`; B-016, B-018). |
+| 2026-11-06 | Decisions 1 and 2: the export route takes its copy by calling `jobs.export` through the catalogue, into a folder of its own under the state directory's `exports` folder, sends it and removes it; a killed daemon's leftovers go at the listener's next start. S-002's catalogue gains no operation, and the listener imports nothing of the host. | Architecture consistency review of S-006 and S-003 v0.5, which left the route's place in the catalogue open (S-006 Open Questions). S-002 REQ-016 and S-000's Web interface boundary need every action to call an operation, and `jobs.export` already is that operation. |
+| 2026-11-06 | Decision 4: a new fact, the stop mark (`stopped`), set in the abort's own commit on a lead a team member's abort names, live until an input entry follows it. A live mark decides the turn-end rule first, the rule is also checked when such an abort ends and when another run of the job ends while the mark is live, and the startup check reads it. Decision 2: the export route's own two refusals, one download at a time (`busy`) and too little free space (`conflict`), and the removal of leftovers moves to the network listener component's start hook, which runs with or without `[network]`. | S-006 re-review of S-004 v0.13 REQ-008 and S-003 v0.5 REQ-016. Product owner decision of 2026-11-06: a team member's abort of a parked lead also blocks its job, with no reminder at the next start. That abort settles no input, so a fact is needed, and this decision requires its amendment first. |

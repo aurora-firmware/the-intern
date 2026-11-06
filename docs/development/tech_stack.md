@@ -43,8 +43,21 @@ approves it. A rule that comes from a spec or an ADR changes with that spec or A
 
 **Which test runner is used, and how are unit, whole-service and web-interface tests separated?**
 `node:test` with `node:assert/strict`. Tests are kept apart by folder: `test/unit`, `test/service` (the whole daemon,
-including crash and resume) and later `test/web`. `npm test` runs them all; `test:unit` and `test:service` run one
-folder each. The web-interface test tooling is open, to be decided in the Web interface spec.
+including crash and resume) and `test/web` (real pages in real browsers against a daemon child). `npm test` runs them
+all, `test/web` last and on its own, because its time checks suffer under the other folders' load; `test:unit`,
+`test:service` and `test:web` run one folder each. `test:web` runs at most 2 files at a time (`--test-concurrency=2`).
+
+**Which tool drives the browser in `test/web`?** `playwright-core` 1.65.0, a dev dependency, driven from `node:test`. It
+covers all of S-006 REQ-021's browsers: Chrome and Edge through their real builds (`channel: "chrome"`, `channel:
+"msedge"`) and Firefox through Playwright's own build, and it records downloads, separate contexts and keyboard input.
+Its test runner, `@playwright/test`, isn't used, so the project keeps one runner. `axe-core` 4.14.0, a dev dependency,
+runs the contrast check of S-006 AC-020.1 in the page. Puppeteer's Firefox and Edge support is thinner, and Selenium
+needs a driver per browser. Playwright can't drive a stock Firefox, so a by-hand pass covers one before a release.
+
+`npm run test:web:setup` runs `playwright-core install --with-deps chrome msedge firefox` in CI. On a developer's
+machine, `playwright-core install firefox` is enough next to an installed Chrome. A missing browser fails with a message
+naming that command when `BOB_WEB_ALL_BROWSERS=1`, as CI sets, and otherwise skips that browser's tests with a
+diagnostic, so a machine with no Edge can still run the rest.
 
 **How does a deterministic fake model stand in for a real one?**
 The fake model's reply is a pure function of the transcript.
@@ -73,6 +86,12 @@ macOS (Apple silicon) is checked by hand before a release. No API documentation 
 
 **Which job results are required before a change merges?**
 Every check listed under Quality checks: format, lint, typecheck, tests and the user documentation build.
+
+**How do the browser tests get real browsers in CI?** The `Tests` job keeps its name and image, so the required checks
+stay as they are. It adds one step before `npm test`, `npm run test:web:setup`, and sets `BOB_WEB_ALL_BROWSERS=1`. In
+`node:24.22.0-bookworm` as root, that step installed and then ran Chrome 157, Edge 157 and Firefox 159, measured on
+2026-11-06. It adds about 1.4 GB per run, downloaded again each time because the container is new. A prepared image is
+the way to cut that if the time matters; nothing depends on it.
 
 ## Installation and service setup
 
@@ -118,6 +137,28 @@ changes a shared term updates it in the same change, and the reviewer checks it.
 
 **Which HTTP support do the listeners and the client library use?**
 The HTTP support built into Node and the browser, so they add no runtime dependency.
+
+## Web interface
+
+These answers settle S-006's Open Questions. The reasons are in
+[ADR-006](../ai-team/decisions/ADR-006-web-pages-are-typescript-modules-with-no-build-step.md) and
+[ADR-007](../ai-team/decisions/ADR-007-one-shared-worker-holds-a-browser-s-feed-connections.md).
+
+**How are the pages written and built?** TypeScript ES modules in `web/ui/`, with erasable syntax only and no build step
+(ADR-006). The listener strips their types as it serves them, with `amaro` 1.1.11, the version Node 24.22.0 bundles, so
+moving Node moves this pin too.
+
+**Which rendering and style libraries do they use?** `preact` 11.1.1 with `h()` calls, and our own CSS on S-006
+REQ-016's tokens. Not Next.js, React, Tailwind, shadcn or Radix; the look comes from REQ-016's values and The Round
+Table's measures. Lucide's icons are copied as path data. The fonts are copied `woff2` files, under the SIL Open Font
+License.
+
+**How do the installed package and CI get the files?** They are source files, so nothing is generated: a release carries
+`web/ui/`, the two browser-safe client modules, `preact` and `amaro`. `npm run typecheck` adds `web/tsconfig.json` and
+`web/tsconfig.worker.json`. Biome adds `web/**`. There is no `web:build` script and no CI build step.
+
+**How do tabs share the browser's connections?**
+One module `SharedWorker` holds at most two feed streams per browser profile (ADR-007).
 
 ## Local runs and diagnostics
 
