@@ -723,7 +723,8 @@ waits for nothing. This is the same rule applied to saved state, not a repair ru
 - **When:** the abort names the lead, and it and its cascade end
 - **Then:** in each case no reminder is submitted, no invoked agent still runs, the job is Blocked with the reason
   "stopped by a team member", the history names the daemon as author and the lead is parked; a team member's answer then
-  sets the job In progress, and the lead's next stop gets the one reminder
+  sets the job In progress, and the lead's next stop gets the one reminder, or, in the third case, blocks the job with
+  "no definition of done"
 
 **Verification:** test — a service test on the fake model.
 
@@ -739,13 +740,14 @@ waits for nothing. This is the same rule applied to saved state, not a repair ru
 
 #### AC-008.7 — An abort that stops nothing
 
-- **Given:** an In progress job whose lead is idle and waits for nothing, and a Blocked job with the reason "which
-  system?"
+- **Given:** an In progress job with a definition of done, whose lead's turn has just ended, with the turn-end check
+  held at that point, and a Blocked job with the reason "which system?"
 - **When:** a team member's abort names each lead
-- **Then:** the first job stays In progress, with no reminder, no block and no new history entry; the second stays
-  Blocked with its reason
+- **Then:** for the first job, the abort adds no history entry; once the check goes on, the lead gets the one reminder
+  as for any turn end, and the job isn't blocked with "stopped by a team member". The second job stays Blocked with its
+  reason
 
-**Verification:** test — a service test on the fake model.
+**Verification:** test — a service test on the fake model, with an injected hold on the turn-end check.
 
 ### REQ-009 — Related jobs
 
