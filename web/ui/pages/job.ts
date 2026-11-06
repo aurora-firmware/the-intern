@@ -7,6 +7,7 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { ClientError } from "../client/client.ts";
 import { AnswerBox } from "../components/answer_box.ts";
+import { ConversationControls } from "../components/conversation_controls.ts";
 import { JobActions, UnrelateButton } from "../components/job_actions.ts";
 import { JobActivity } from "../components/job_activity.ts";
 import {
@@ -178,7 +179,13 @@ export const JobPage = ({ feed, number }: { feed: FeedConnection | null | undefi
                   }),
                   h(JobActions, { record: view.record }),
                   h(AnswerBox, { number, isBlocked: view.record.status === "blocked" }),
-                  h(JobActivity, { feed, jobId: view.record.id, leadConversation: view.record.leadConversation }),
+                  h(JobActivity, {
+                      feed,
+                      jobId: view.record.id,
+                      leadConversation: view.record.leadConversation,
+                      controls: (conversationId, state) =>
+                          h(ConversationControls, { number, conversationId, state, key: conversationId }),
+                  }),
                   h(Entries, {
                       name: "worklog",
                       title: "Worklog",
