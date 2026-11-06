@@ -282,3 +282,17 @@ textarea {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
+
+/* Board: the columns, and cards that are drawn only when they are near the screen */
+
+.board-columns {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1rem;
+    align-items: start;
+}
+
+.board-card {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 5rem;
+}
