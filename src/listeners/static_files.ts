@@ -123,6 +123,7 @@ function matchesEtag(header: string | undefined, etag: string): boolean {
 function sendInternalError(res: ServerResponse): void {
     const text = JSON.stringify({ error: { code: "internal", message: "The file could not be prepared for serving" } });
     res.writeHead(500, {
+        "cache-control": "no-cache",
         "content-type": "application/json; charset=utf-8",
         "content-length": Buffer.byteLength(text),
     });

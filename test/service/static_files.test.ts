@@ -264,6 +264,7 @@ describe("static files on the network listener", () => {
 
         assert.equal(answer.status, 500);
         assert.equal(JSON.parse(answer.body).error.code, "internal");
+        assert.equal(answer.headers["cache-control"], "no-cache");
     });
 
     it("serves the new stripped text after a .ts file changes", async () => {

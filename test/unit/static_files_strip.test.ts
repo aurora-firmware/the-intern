@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
+import { builtinModules } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -33,9 +34,17 @@ describe("the .ts files the web interface ships", () => {
         }
     });
 
-    it("loads no Node module from /ui/client/client.ts", async () => {
+    it("imports no Node module from /ui/client/client.ts", async () => {
         const code = await readFile(join(CLIENT_DIR, "client.ts"), "utf8");
+        const specifiers = [...code.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*)["']([^"']+)["']/g)].map(
+            (m) => m[1] ?? "",
+        );
+        const nodeModules = new Set(builtinModules.map((name) => name.replace(/^node:/, "")));
 
-        assert.doesNotMatch(code, /(?:from|import)\s*\(?\s*["'](?:node:|fs|path|http|https|net|os|child_process)/);
+        const imported = specifiers.filter(
+            (name) => name.startsWith("node:") || nodeModules.has(name.split("/")[0] ?? ""),
+        );
+
+        assert.deepEqual(imported, []);
     });
 });
