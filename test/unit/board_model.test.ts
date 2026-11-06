@@ -10,6 +10,8 @@ import {
     type JobDelta,
 } from "../../web/ui/model/board.ts";
 
+const DONE = { kind: "completed", justification: "all checks pass" } as const;
+
 const job = (number: string, status: BoardJob["status"], extra: Partial<BoardJob> = {}): BoardJob => ({
     number,
     title: `Job ${number}`,
@@ -87,14 +89,14 @@ describe("applyJobDelta", () => {
     });
 
     it("moves a job to the front of Done on job_done", () => {
-        const next = applyJobDelta(start(), { type: "job_done", number: "P1", resolution: "completed" });
+        const next = applyJobDelta(start(), { type: "job_done", number: "P1", resolution: DONE });
         assert.deepEqual(numbersOf(next, "done"), ["P1", "D2", "D1"]);
         assert.deepEqual(numbersOf(next, "in_progress"), []);
     });
 
     it("ignores job_done for a job the board does not hold", () => {
         const state = start();
-        assert.deepEqual(applyJobDelta(state, { type: "job_done", number: "Z9", resolution: "completed" }), state);
+        assert.deepEqual(applyJobDelta(state, { type: "job_done", number: "Z9", resolution: DONE }), state);
     });
 
     it("adds a created job to its column and leaves the others as they were", () => {
@@ -129,7 +131,7 @@ describe("applyJobDelta", () => {
     it("does not change the state it was given", () => {
         const state = start();
         const before = structuredClone(state);
-        applyJobDelta(state, { type: "job_done", number: "P1", resolution: "completed" });
+        applyJobDelta(state, { type: "job_done", number: "P1", resolution: DONE });
         assert.deepEqual(state, before);
     });
 });

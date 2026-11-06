@@ -20,6 +20,9 @@ export type BoardColumn = { status: BoardStatus; jobs: BoardJob[] };
 /** The four columns, in the order the Board shows them. */
 export type BoardState = BoardColumn[];
 
+/** How a job ended, as the feed's `job_done` delta carries it. */
+export type BoardResolution = { kind: "completed" | "cancelled"; justification: string };
+
 /** The job deltas of the instance feed. Declared here so the Board imports no daemon type. */
 export type JobDelta =
     | { type: "job_created"; job: BoardJob }
@@ -29,7 +32,7 @@ export type JobDelta =
           fields: Partial<Pick<BoardJob, "title" | "description" | "definitionOfDone">>;
       }
     | { type: "job_status_changed"; number: string; old: BoardStatus; new: BoardStatus; blockedReason?: string }
-    | { type: "job_done"; number: string; resolution: string }
+    | { type: "job_done"; number: string; resolution: BoardResolution }
     | { type: "job_related_changed"; numbers: [string, string] };
 
 const COLUMN_ORDER: readonly BoardStatus[] = ["to_do", "in_progress", "blocked", "done"];
