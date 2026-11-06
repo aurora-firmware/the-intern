@@ -232,11 +232,11 @@ describe("bob chat on a terminal", { skip }, () => {
         assert.equal(values[0]?.conversationId, await deskId(fixture.daemon));
         assert.ok(Array.isArray(values[1]?.entries), "the history answer follows the desk answer");
         assert.ok(
-            values.some((value) => "live" in value && Array.isArray(value.entries)),
+            values.some((value) => "live" in value),
             "a feed snapshot",
         );
         assert.ok(
-            values.some((value) => "seq" in value && "ops" in value),
+            values.some((value) => "seq" in value && "view" in value),
             "a feed delta",
         );
         assert.ok(JSON.stringify(values).includes(`echo: ${FIRST}`));
