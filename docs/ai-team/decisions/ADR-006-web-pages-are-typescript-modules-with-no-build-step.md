@@ -32,6 +32,11 @@ Probes made for this decision, on Node 24.22.0, against a test server over plain
 - `node:module` `stripTypeScriptTypes` works on Node 24.22.0 but prints an `ExperimentalWarning` to standard error.
 - `tsc` with `rootDirs` type-checks a page's `./client/client.ts` import against `src/client/`, and reports a missing
   prop on a Preact `h()` call.
+- Preact's own `h()` declarations leave most props unchecked, measured on Preact 11.1.1 and `tsc` 7.0.2. `h<P>` infers
+  `P` from the props argument as well, so `h(Greeting, { name: "x", extra: 1 })` passes. So do `h(Greeting, null)` with
+  a required prop, `h("a", { href: 1 })` and `h("div", { nonsense: 1 })`. A `paths` entry onto a stricter declaration
+  rejected all of these, and left clean a set of valid calls: `key`, `ref`, event handlers, children, `Fragment`,
+  generic and union-typed components, `svg`, `dialog`, `select` and `aria-*` and `data-*` attributes.
 - In a copy of the lockfile, adding `preact`, `amaro`, `playwright-core` and `axe-core` changes no pi package. The four
   stay on 1.4.0. `preact` 10, which VitePress's search brings in, moves to a nested folder.
 
@@ -52,8 +57,18 @@ types as it serves them. There is no build step, no bundler and no generated out
    with a dynamic `import()` at the first `.ts` request, and keeps the result in memory by path, modification time and
    size. Strip mode keeps every line in place, so a browser's stack traces match the source.
 3. **Preact renders the pages.** `preact` is a production dependency, pinned exactly. Pages call its `h()` with no JSX
-   and no template strings, so `tsc` checks every prop. Routing is a small hash router of our own, because S-006
-   Interfaces fixes the addresses.
+   and no template strings, and write props as an object literal or `null`, so `tsc` checks every prop. Routing is a
+   small hash router of our own, because S-006 Interfaces fixes the addresses.
+
+   Preact's own declarations don't give that check, so `web/tsconfig.json` maps `preact` through `paths` to
+   `web/types/preact.d.ts`. That file re-exports Preact's declarations and declares a stricter `h`:
+
+   - An element's props come from `JSX.IntrinsicElements`, and `data-*` attributes are allowed.
+   - A component's props come from the component alone, never from the call (`NoInfer`).
+   - `null` is accepted for an element, and for a component with no required prop.
+
+   The file exists only for `tsc`. Pages still import `h` from `preact`, the import map still gives them Preact's code,
+   and nothing under `web/types/` is served or shipped.
 4. **A fixed table serves what lies outside `web/ui/`.** `static_files.ts` maps exactly four addresses:
 
    | Address | File |
@@ -95,6 +110,8 @@ types as it serves them. There is no build step, no bundler and no generated out
 ### Negative
 
 - `h()` calls read less easily than JSX in a page with deep markup.
+- `web/types/preact.d.ts` is one more file to check when Preact moves. `tsc` applies its excess-property check only to
+  an object literal, so an undeclared prop passed in a variable or a spread still passes.
 - With no bundle, a page makes one request per module when it first opens, an estimated 40. Later loads use conditional
   requests, and S-006 targets a team's network. The browser tests hold it to REQ-019's 3 seconds.
 - We write our own component CSS, and the accessible behaviour of anything beyond native controls. S-006's pages need
@@ -149,7 +166,26 @@ that ourselves is more code than Preact's two modules, about 7 KB gzipped, so th
 **Description:** Commit Preact's files and serve them under `web/ui/`.
 **Rejected because:** The version would then live outside the lockfile, which is where every other dependency is pinned.
 
+### Alternative G: Keep Preact's declarations and check only missing props
+
+**Description:** Drop "every prop" from decision 3, and hold T-206 AC-2 to a required prop left out as `{}`.
+**Rejected because:** A misspelt attribute or a renamed prop would then pass `npm run typecheck`, and most `h()` calls
+would have no prop checking. "`tsc` checks every prop" is the reason decision 3 gives for `h()`, and the check costs one
+`paths` entry and one declaration file.
+
+### Alternative H: A typed wrapper module in `web/ui/`
+
+**Description:** Pages import `h` from a module of our own that casts Preact's `h` to a stricter type.
+**Rejected because:** It adds a module the browser loads for no behaviour, and a page importing `h` from `preact` skips
+the check unless a lint rule forbids it. The `paths` entry covers every import of `preact`.
+
+### Alternative I: Type arguments at each call
+
+**Description:** Pages write `h<GreetingProps>(Greeting, { ... })`.
+**Rejected because:** Nothing makes a page write the argument, and `h<GreetingProps>(Greeting, null)` still passes.
+
 ## Amendments
 
 | Date | Change | Reason |
 |---|---|---|
+| 2026-11-06 | Decision 3 states how `tsc` checks every prop: `paths` to `web/types/preact.d.ts`, with a stricter `h`, and props as an object literal or `null`. Context records the probe. Consequences and Alternatives G, H and I added. | T-206 found that Preact's own `h()` declarations don't check undeclared props, `null` for required props, or element attributes, so decision 3's statement was untrue. |

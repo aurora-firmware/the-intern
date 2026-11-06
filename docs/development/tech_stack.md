@@ -155,7 +155,8 @@ License.
 
 **How do the installed package and CI get the files?** They are source files, so nothing is generated: a release carries
 `web/ui/`, the two browser-safe client modules, `preact` and `amaro`. `npm run typecheck` adds `web/tsconfig.json` and
-`web/tsconfig.worker.json`. Biome adds `web/**`. There is no `web:build` script and no CI build step.
+`web/tsconfig.worker.json`, and `web/types/preact.d.ts` gives `tsc` a stricter `h()` (ADR-006 decision 3). Biome adds
+`web/**`. There is no `web:build` script and no CI build step.
 
 **How do tabs share the browser's connections?**
 One module `SharedWorker` holds at most two feed streams per browser profile (ADR-007).
