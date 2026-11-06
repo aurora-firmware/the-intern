@@ -5,6 +5,7 @@
 import type { IncomingMessage } from "node:http";
 import type { DaemonComponent } from "../daemon/daemon.ts";
 import type { ObservedDetails } from "../service/operations.ts";
+import { createExportRoute } from "./export_route.ts";
 import { createHttpFront, type Fallback } from "./http_front.ts";
 import { type ListenerServer, startListenerServer } from "./listener_server.ts";
 import { networkSection } from "./network_section.ts";
@@ -38,11 +39,18 @@ export function createNetworkListenerComponent(options: NetworkListenerOptions =
             const settings = ctx.config.current(networkSection);
             if (settings === undefined) return;
             const port = options.freePort ? ANY_FREE_PORT : settings.port;
+            const exportRoute = createExportRoute({
+                invoke: (name, input, caller) => ctx.catalogue.invoke(name, input, caller),
+                wayIn: "web interface",
+                observe: observePeer,
+                logger: ctx.logger,
+            });
+            const otherFiles = options.fallback ?? createStaticFiles(WEB_UI_DIR);
             const front = createHttpFront({
                 catalogue: ctx.catalogue,
                 wayIn: "web interface",
                 observe: observePeer,
-                fallback: options.fallback ?? createStaticFiles(WEB_UI_DIR),
+                fallback: async (req, res) => (await exportRoute(req, res)) || (await otherFiles(req, res)),
             });
             const started = await startListenerServer(front, { host: settings.address, port });
             listener = started;
