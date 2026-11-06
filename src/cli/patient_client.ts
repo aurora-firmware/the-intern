@@ -47,13 +47,14 @@ async function untilAnswered<T>(attempt: () => Promise<T>, options: PatienceOpti
 
 /**
  * Wraps `invoke` so it waits out an outage; `subscribe` and `subscribeConversations` are the follower's business and
- * are passed through.
+ * are passed through with their options, the abort signal among them.
  */
 export function patientClient(client: Client, options: PatienceOptions): Client {
     const reached: Reached = { value: false };
     return {
         invoke: (name, input) => untilAnswered(() => client.invoke(name, input), options, reached),
-        subscribe: (scope) => client.subscribe(scope),
-        subscribeConversations: (conversationIds) => client.subscribeConversations(conversationIds),
+        subscribe: (scope, subscribeOptions) => client.subscribe(scope, subscribeOptions),
+        subscribeConversations: (conversationIds, subscribeOptions) =>
+            client.subscribeConversations(conversationIds, subscribeOptions),
     };
 }
