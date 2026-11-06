@@ -17,8 +17,10 @@ import {
     seatLeadConversation,
     submitLeadFirstInput,
 } from "../service/job_operations.ts";
+import { allEntries, STORE_PAGE_SIZE } from "../service/job_record_operations.ts";
 import { ServiceError } from "../service/operations.ts";
 import { type JobActionDeps, resumeJob } from "./job_actions.ts";
+import { blockResumeCount } from "./job_model.ts";
 import type { Job } from "./job_store.ts";
 import { evaluateTurnEnd, type PendingReminder, submitReminder } from "./turn_end_rule.ts";
 
@@ -209,14 +211,24 @@ export async function submitPendingFirstInputs(ctx: ServiceContext, pending: Pen
     for (const input of pending) await submitLeadFirstInput(ctx, input.conversationId, input);
 }
 
+// The job's block-and-resume count, which changes with every block and every resume.
+async function blockResumeCountOf(ctx: ServiceContext, jobId: string): Promise<number> {
+    const history = await allEntries((cursor) =>
+        ctx.jobStore.listHistory(jobId, { limit: STORE_PAGE_SIZE, ...(cursor && { cursor }) }),
+    );
+    return blockResumeCount(history);
+}
+
 /**
- * Delivers the held messages rule 3 owed, then resumes the job (a no-op when the delivery's input already did). Call it
- * after `host.resume()`: the submission turns scheduling on.
+ * Delivers the held messages rule 3 owed, then resumes the job when the block rule 3 saw still stands. A delivery that
+ * submitted input has already resumed the job, and a block the lead made since stands (S-004 REQ-005). Call it after
+ * `host.resume()`: the submission turns scheduling on.
  */
 export async function deliverPendingHeld(deps: JobActionDeps, pending: PendingHeldDelivery[]): Promise<void> {
     for (const { conversationId, jobId } of pending) {
+        const countBefore = await blockResumeCountOf(deps.ctx, jobId);
         await continueWithHeld(deps.ctx.host, conversationId);
-        await resumeJob(deps, jobId, DAEMON);
+        if ((await blockResumeCountOf(deps.ctx, jobId)) === countBefore) await resumeJob(deps, jobId, DAEMON);
     }
 }
 

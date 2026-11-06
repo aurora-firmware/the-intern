@@ -17,7 +17,7 @@ import { conversationMetaDoc, createSeatedConversation, readConversationMeta } f
 import { steerConversation } from "../../src/host/steering.ts";
 import { blockJob, cancelJob, completeJob, type JobActionDeps } from "../../src/jobs/job_actions.ts";
 import { type JobAuthor, reminderRequestId } from "../../src/jobs/job_model.ts";
-import { repairJobs } from "../../src/jobs/job_repair.ts";
+import { deliverPendingHeld, repairJobs } from "../../src/jobs/job_repair.ts";
 import { createJobsComponent, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import { REMINDER_TEXT } from "../../src/jobs/turn_end_rule.ts";
 import { DEFAULT_LEAD_ROLE } from "../../src/roles/shipped_roles.ts";
@@ -925,6 +925,50 @@ describe("rule 3: the delivery of held messages is owed past the repair", () => 
         assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [3, 3]);
         await waitFor(() => rig.modelInputs.some((users) => users.includes(HELD_TEXT)), "the lead to take the message");
         assert.equal(rig.modelInputs.filter((users) => users.includes(HELD_TEXT)).length, 1);
+    });
+});
+
+describe("rule 3: a block the lead makes while the held messages are delivered", () => {
+    it("stands: the job stays Blocked and the lead stays parked for an answer", async () => {
+        const rig = await createRig();
+        const daemon = await rig.boot();
+        const job = await daemon.createJob();
+        await waitFor(() => isIdle(daemon.ctx, job.leadConversation), "the lead to be idle");
+        await parkConversation(daemon.ctx.host, job.leadConversation, { waitingFor: "reports", continueOn: "all" });
+        await daemon.ctx.jobStore.applyAction(job.id, "block", { blockedReason: REASON }, daemonAuthor);
+        await steerConversation(daemon.ctx.host, job.leadConversation, {
+            content: HELD_TEXT,
+            mode: "followUp",
+            actor: teamMember,
+            requestId: "held-1",
+        });
+        // The lead's run blocks the job the first time the delivery reads the job after its submit resumed it.
+        let isBlockedByLead = false;
+        const blockOnceResumed = async (): Promise<void> => {
+            if (isBlockedByLead || (await daemon.ctx.jobStore.getJob(job.id)).status !== "in_progress") return;
+            isBlockedByLead = true;
+            await blockJob(daemon.deps, job.id, "lead asks", daemonAuthor);
+        };
+        const jobStore = new Proxy(daemon.ctx.jobStore, {
+            get(target, property) {
+                const member = Reflect.get(target, property, target);
+                if (typeof member !== "function") return member;
+                if (property !== "getJob" && property !== "listHistory") return member.bind(target);
+                return async (...args: unknown[]) => {
+                    await blockOnceResumed();
+                    return member.apply(target, args);
+                };
+            },
+        });
+
+        await deliverPendingHeld({ ctx: { ...daemon.ctx, jobStore }, options: daemon.deps.options }, [
+            { conversationId: job.leadConversation, jobId: job.id },
+        ]);
+
+        assert.ok(isBlockedByLead, "the lead blocked the job after the delivery's submit");
+        assert.equal((await daemon.ctx.jobStore.getJob(job.id)).status, "blocked");
+        const parked = (await readConversationMeta(daemon.ctx.host, job.leadConversation))?.parked;
+        assert.deepEqual(parked, { waitingFor: "answer", continueOn: "each" });
     });
 });
 
