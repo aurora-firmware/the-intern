@@ -60,7 +60,9 @@ const WorkspaceRow = ({ workspace, reload }: { workspace: Workspace; reload: Rel
         "li",
         { class: "workspace", "data-path": workspace.path, "data-kind": workspace.kind },
         h("code", null, workspace.path),
-        workspace.kind === "role_default" ? ` (default of the ${workspace.role} role)` : null,
+        workspace.kind === "role_default"
+            ? [" (default of the ", h("span", { "data-verbatim": "" }, workspace.role), " role)"]
+            : null,
         workspace.kind === "registered"
             ? h(
                   "button",

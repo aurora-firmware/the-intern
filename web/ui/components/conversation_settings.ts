@@ -69,7 +69,7 @@ const Select = ({
             "select",
             { class: `seat-${name}`, name },
             hasDefault ? h("option", { value: DEFAULT_CHOICE }, DEFAULT_LABEL) : null,
-            ...values.map((value) => h("option", { value }, value)),
+            ...values.map((value) => h("option", { value, "data-verbatim": "" }, value)),
         ),
     );
 

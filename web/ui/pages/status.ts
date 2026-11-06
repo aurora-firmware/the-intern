@@ -60,8 +60,13 @@ const readUsage = async (): Promise<Usage> => {
 const readModels = async (): Promise<ModelSummary[]> =>
     (await pageClient().invoke("models.list", {})) as ModelSummary[];
 
-const field = (label: string, name: string, value: string | number) =>
-    h("div", null, h("dt", null, label), h("dd", { "data-field": name }, String(value)));
+const field = (label: string, name: string, value: string | number, isVerbatim = false) =>
+    h(
+        "div",
+        null,
+        h("dt", null, label),
+        h("dd", { "data-field": name, ...(isVerbatim ? { "data-verbatim": "" } : {}) }, String(value)),
+    );
 
 const StatusSection = ({ status }: { status: Status }) =>
     h(
@@ -75,10 +80,10 @@ const StatusSection = ({ status }: { status: Status }) =>
             field("Started", "startedAt", status.startedAt),
             field("The Intern", "intern", status.versions.intern),
             field("pi", "pi", status.versions.pi),
-            field("Config directory", "configDir", status.instance.configDir),
-            field("State directory", "stateDir", status.instance.stateDir),
-            field("Data directory", "dataDir", status.instance.dataDir),
-            field("Runtime directory", "runtimeDir", status.instance.runtimeDir),
+            field("Config directory", "configDir", status.instance.configDir, true),
+            field("State directory", "stateDir", status.instance.stateDir, true),
+            field("Data directory", "dataDir", status.instance.dataDir, true),
+            field("Runtime directory", "runtimeDir", status.instance.runtimeDir, true),
             field("Worker threads", "workerThreadCount", status.workerThreads.count),
             field("Worker threads in use", "workerThreadsInUse", status.workerThreads.inUse),
             field("Worker threads waiting", "workerThreadsWaiting", status.workerThreads.waiting.length),

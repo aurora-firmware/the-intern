@@ -1,7 +1,7 @@
 /**
  * The Job page's record (S-006 REQ-003): its types and the drawing of the job's fields, worklog and history.
  */
-import { h } from "preact";
+import { type ComponentChildren, h } from "preact";
 
 export type Observed = { remoteAddress?: string; remotePort?: number };
 export type Author =
@@ -56,10 +56,10 @@ const originText = (origin: Origin): string => {
     }
 };
 
-const authorText = (author: Author): string => {
+const authorText = (author: Author): ComponentChildren => {
     switch (author.kind) {
         case "agent":
-            return `${author.role} agent`;
+            return [h("span", { "data-verbatim": "" }, author.role), " agent"];
         case "team_member":
             return `Team member by ${author.wayIn}${addressOf(author.observed)}`;
         case "daemon":
@@ -137,8 +137,8 @@ export const EntryItem = ({ entry, text }: { entry: WorklogEntry | HistoryEntry;
     h(
         "li",
         { class: "card job-entry" },
-        h("span", { class: "caption" }, `${entry.at} ${authorText(entry.author)}`),
-        h("p", { style: TEXT_STYLE }, text),
+        h("span", { class: "caption" }, `${entry.at} `, authorText(entry.author)),
+        h("p", { style: TEXT_STYLE, "data-verbatim": "" }, text),
     );
 
 export const Missing = ({ number }: { number: string }) =>

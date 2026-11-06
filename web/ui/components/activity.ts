@@ -78,13 +78,16 @@ const textOf = (message: Message): string =>
         .join("\n");
 
 /** Long output shows its first lines and a button for the rest; the full text enters the DOM only when expanded. */
+/** Text the service supplies as it stands, such as a role's name: the vocabulary search leaves it out. */
+const verbatim = (text: string) => h("span", { "data-verbatim": "" }, text);
+
 const Output = ({ text }: { text: string }) => {
     const [isExpanded, setExpanded] = useState(false);
     const { isCollapsed, shown } = collapseOutput(text);
-    if (!isCollapsed || isExpanded) return h("pre", { class: "output", style: TEXT_STYLE }, text);
+    if (!isCollapsed || isExpanded) return h("pre", { class: "output", style: TEXT_STYLE, "data-verbatim": "" }, text);
     const kib = Math.ceil(new TextEncoder().encode(text).length / BYTES_PER_KIB);
     return [
-        h("pre", { class: "output output-collapsed", style: TEXT_STYLE }, shown),
+        h("pre", { class: "output output-collapsed", style: TEXT_STYLE, "data-verbatim": "" }, shown),
         h(
             "button",
             { type: "button", class: "output-more", onClick: () => setExpanded(true) },
@@ -93,7 +96,7 @@ const Output = ({ text }: { text: string }) => {
     ];
 };
 
-type Box = { kind: string; label: string; body: ComponentChild[] };
+type Box = { kind: string; label: ComponentChild; body: ComponentChild[] };
 
 const toolCall = (part: Part) =>
     h(
@@ -110,7 +113,13 @@ const seatBoxes = (entry: ActivityEntry): Box[] => {
     const { previous, next } = (entry.data ?? {}) as { previous?: Seating | null; next?: Seating };
     if (previous === null || previous === undefined || next === undefined) return [];
     const text = `${next.role} on ${next.model} in ${next.workspace}`;
-    return [{ kind: "seat", label: `Seat changed from ${previous.role} to ${next.role}`, body: [h(Output, { text })] }];
+    return [
+        {
+            kind: "seat",
+            label: ["Seat changed from ", verbatim(previous.role), " to ", verbatim(next.role)],
+            body: [h(Output, { text })],
+        },
+    ];
 };
 
 /** What an entry draws: one box per message of a tool result, one for the other kinds, none for the rest. */
@@ -141,7 +150,7 @@ const boxesOf = (entry: ActivityEntry): Box[] => {
             return [
                 {
                     kind: "report",
-                    label: `Report from ${actor?.role ?? NO_ROLE}`,
+                    label: ["Report from ", verbatim(actor?.role ?? NO_ROLE)],
                     body: [h(Output, { text: String(content ?? "") })],
                 },
             ];
@@ -233,10 +242,10 @@ export const ConversationActivity = ({ feed, conversationId, role, controls }: S
     return h(
         "details",
         { class: "activity", open: true, "data-conversation": conversationId },
-        h("summary", null, seatRole(entries) ?? role),
+        h("summary", null, verbatim(seatRole(entries) ?? role)),
         failure !== undefined ? h("div", { class: "error", role: "alert" }, failure) : null,
         h("ul", { style: LIST_STYLE }, ...entries.map((entry) => h(EntryItems, { entry, key: entry.id }))),
-        answer !== "" ? h("p", { class: "activity-live", style: TEXT_STYLE }, answer) : null,
+        answer !== "" ? h("p", { class: "activity-live", style: TEXT_STYLE, "data-verbatim": "" }, answer) : null,
         controls?.(conversationId, state) ?? null,
     );
 };

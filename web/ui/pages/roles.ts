@@ -196,10 +196,11 @@ const RoleCard = ({ role, data, reload }: { role: Role; data: Data; reload: Relo
             label,
         );
 
+    const origin = role.shipped ? (role.changed ? " (shipped, changed)" : " (shipped)") : " (team)";
     return h(
         "section",
         { class: "role", "data-role": role.name, "data-changed": String(role.changed) },
-        h("h3", null, role.name, role.shipped ? (role.changed ? " (shipped, changed)" : " (shipped)") : " (team)"),
+        h("h3", null, h("span", { "data-verbatim": "" }, role.name), origin),
         ...settingsFields(data, fields, set),
         failure !== undefined ? h(RefusalMessage, { error: failure.error }) : null,
         button("Save", "role-save", invoke("roles.change", inputOf(fields))),
