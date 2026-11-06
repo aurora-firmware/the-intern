@@ -40,6 +40,11 @@ async function isLeadStopped(host: HarnessHost, leadId: string): Promise<boolean
     return meta !== undefined && (await isStopMarkLive(host, leadId, meta));
 }
 
+async function isJobLeadStopped(host: HarnessHost, jobId: string): Promise<boolean> {
+    const leadId = await leadConversationOf(host, jobId);
+    return leadId !== undefined && (await isLeadStopped(host, leadId));
+}
+
 /** A reminder the rule owes a lead conversation. */
 export type PendingReminder = { leadId: string; input: SteerInput };
 
@@ -92,17 +97,24 @@ export async function checkTurnEnd(deps: JobActionDeps, jobId: string, knownLead
 }
 
 /**
- * Checks the job of each lead conversation whose run finishes, one at a time in the order the runs finished. `ready`
+ * Checks the job of each lead conversation whose run finishes, and of another conversation of a job whose lead is
+ * stopped, and of each lead handed to `leadStopped`, one at a time in the order the runs finished. `ready`
  * settles once the watch is in place, so runs that resume after a restart are seen.
  */
-export function startTurnEndRule(deps: JobActionDeps): { stop(): void; ready: Promise<void> } {
+export function startTurnEndRule(deps: JobActionDeps): {
+    stop(): void;
+    ready: Promise<void>;
+    leadStopped(leadId: string): void;
+} {
     const { ctx, options } = deps;
     let queue: Promise<void> = Promise.resolve();
     let isStopped = false;
     const check = async (conversationId: string): Promise<void> => {
         if (isStopped) return;
         const meta = await readConversationMeta(ctx.host, conversationId);
-        if (!meta?.isLead || meta.jobId === null) return;
+        if (meta === undefined || meta.jobId === null) return;
+        // The run of another conversation of the job matters only when its lead is stopped, which nothing else ends.
+        if (!meta.isLead && !(await isJobLeadStopped(ctx.host, meta.jobId))) return;
         await options.afterWrite?.("turn-ended", meta.jobId);
         await checkTurnEnd(deps, meta.jobId);
     };
@@ -125,5 +137,6 @@ export function startTurnEndRule(deps: JobActionDeps): { stop(): void; ready: Pr
             watching.then((watch) => watch.stop()).catch(() => undefined);
         },
         ready: watching.then(() => undefined),
+        leadStopped: enqueue,
     };
 }

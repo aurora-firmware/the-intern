@@ -358,8 +358,8 @@ async function clearRecursively(
     conversationId: string,
     cleared: Set<string>,
     isRoot = false,
-): Promise<void> {
-    if (cleared.has(conversationId)) return;
+): Promise<boolean> {
+    if (cleared.has(conversationId)) return false;
     // Read before clearing: the list is what the cascade follows. A conversation that was not seated has no
     // invocation links and awaits nothing.
     const meta = await readConversationMeta(host, conversationId);
@@ -369,6 +369,25 @@ async function clearRecursively(
     const stopped = isRoot ? await stopMarkDue(host, conversationId, meta) : null;
     await clearWaiting(host, conversationId, { isReportOwed, stopped });
     for (const awaitedId of meta?.awaiting ?? []) await clearRecursively(host, awaitedId, cleared);
+    return stopped !== null;
+}
+
+type LeadStoppedListener = (leadId: string) => void;
+
+const leadStoppedListeners = new WeakMap<HarnessHost, LeadStoppedListener[]>();
+
+/**
+ * Registers a listener that is called once an abort that set a stop mark on a lead has ended, its cascade included.
+ * An abort of a parked lead ends no run, so this is what tells the turn-end rule. Returns the function that removes it.
+ */
+export function onLeadStopped(host: HarnessHost, listener: LeadStoppedListener): () => void {
+    const listeners = leadStoppedListeners.get(host) ?? [];
+    listeners.push(listener);
+    leadStoppedListeners.set(host, listeners);
+    return () => {
+        const index = listeners.indexOf(listener);
+        if (index >= 0) listeners.splice(index, 1);
+    };
 }
 
 /**
@@ -380,9 +399,12 @@ async function clearRecursively(
  */
 export async function abortWithAwaited(host: HarnessHost, conversationId: string): Promise<string[]> {
     const cleared = new Set<string>();
-    await inOpenConversation(host, conversationId, () => clearRecursively(host, conversationId, cleared, true));
+    const isMarked = await inOpenConversation(host, conversationId, () =>
+        clearRecursively(host, conversationId, cleared, true),
+    );
     const aborted = [...cleared];
     for (const id of aborted) await abortConversation(host, id);
+    if (isMarked) for (const listener of [...(leadStoppedListeners.get(host) ?? [])]) listener(conversationId);
     return aborted;
 }
 
