@@ -71,6 +71,8 @@ export type HostDatabase = HostSqlExecutor & {
     transaction<T>(callback: (tx: HostSqlExecutor) => Promise<T>): Promise<T>;
 };
 
+export type EntryOrder = "ascending" | "descending";
+
 export type HarnessHost = {
     /** Starts the work the last run left unfinished. Nothing runs before this is called. */
     resume(): void;
@@ -80,8 +82,14 @@ export type HarnessHost = {
     createConversation(input: { agent: AgentChoice }): Promise<string>;
     listConversations(): Promise<ConversationInfo[]>;
     conversationInfo(id: string): Promise<ConversationInfo | undefined>;
-    /** Entries oldest first, including those before a reset or compaction. `next` is the `after` of the next page. */
-    readEntries(id: string, page: { after?: string; limit: number }): Promise<{ entries: HostEntry[]; next?: string }>;
+    /**
+     * Entries oldest first, or newest first with `order: "descending"`, including those before a reset or compaction.
+     * `next` is the `after` of the next page, which keeps the order.
+     */
+    readEntries(
+        id: string,
+        page: { after?: string; limit: number; order?: EntryOrder },
+    ): Promise<{ entries: HostEntry[]; next?: string }>;
     /** The ID of the conversation's newest entry as `readEntries` shows it, or `null` when it has none. */
     readNewestEntryId(id: string): Promise<string | null>;
     /** The entries the model sees now. */
@@ -323,7 +331,7 @@ function createHost(harness: Harness): HarnessHost {
             const cursor = page.after === undefined ? undefined : decodeCursor(page.after);
             let result: Awaited<ReturnType<Conversation["entries"]>>;
             try {
-                result = await conversation.entries({ order: "ascending" }, page.limit, cursor, context);
+                result = await conversation.entries({ order: page.order ?? "ascending" }, page.limit, cursor, context);
             } catch (error) {
                 // An invalid read fails only that call (pi-durable, Errors rule 2); a bad cursor is the caller's input.
                 if (page.after !== undefined && error instanceof StorageRequestError) {

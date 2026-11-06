@@ -5,11 +5,18 @@
 import type { Admission, AdmissionSnapshot } from "../admission/admission.ts";
 import {
     type ConversationInfo,
+    type EntryOrder,
     type HarnessHost,
     type HostEntry,
     HostInvalidCursorError,
 } from "../host/harness_host.ts";
-import { type Origin, readConversationMeta, SEAT_RECORD_KIND, type SeatSummary } from "../host/seating.ts";
+import {
+    type Origin,
+    readConversationMeta,
+    SEAT_RECORD_KIND,
+    type SeatRecord,
+    type SeatSummary,
+} from "../host/seating.ts";
 import type { Seat } from "../roles/role_model.ts";
 import { type AttributedEntry, attributeEntries } from "./attribution.ts";
 import { defineOperation, type Operation, ServiceError } from "./operations.ts";
@@ -32,7 +39,7 @@ export type InvocationTree = { id: string; role: string | null; status: Conversa
 
 type ReadContext = { host: HarnessHost; admission: Admission };
 type ConversationRef = { conversationId: string };
-type EntriesInput = ConversationRef & { after?: string; limit: number };
+type EntriesInput = ConversationRef & { after?: string; limit: number; order: EntryOrder };
 type ListInput = { jobId?: string };
 
 const DEFAULT_ENTRIES_LIMIT = 100;
@@ -101,11 +108,12 @@ function parseConversationRef(raw: unknown): ConversationRef {
 }
 
 function parseEntriesInput(raw: unknown): EntriesInput {
-    const { after, limit = DEFAULT_ENTRIES_LIMIT } = asRecord(raw);
+    const { after, limit = DEFAULT_ENTRIES_LIMIT, order = "ascending" } = asRecord(raw);
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit < MIN_ENTRIES_LIMIT || limit > MAX_ENTRIES_LIMIT)
         throw new Error(`limit must be an integer from ${MIN_ENTRIES_LIMIT} to ${MAX_ENTRIES_LIMIT}`);
     if (after !== undefined && typeof after !== "string") throw new Error("after must be a string");
-    return { ...parseConversationRef(raw), limit, ...(after !== undefined && { after }) };
+    if (order !== "ascending" && order !== "descending") throw new Error('order must be "ascending" or "descending"');
+    return { ...parseConversationRef(raw), limit, order, ...(after !== undefined && { after }) };
 }
 
 async function requireConversation(host: HarnessHost, conversationId: string): Promise<ConversationInfo> {
@@ -202,20 +210,91 @@ async function seatRecordBefore(host: HarnessHost, conversationId: string, first
     return latest === undefined ? [] : [latest];
 }
 
+const ASSISTANT_ENTRY_KIND = "pi.assistant";
+
+// The seat the latest seat record of the transcript made current, or none while the conversation has no seat.
+function currentSeatOf(meta: Awaited<ReturnType<typeof readConversationMeta>>): SeatSummary | undefined {
+    return meta === undefined || meta.seat.model === "" ? undefined : summarizeSeat(meta.seat);
+}
+
+// A descending page below the first takes its seat from the nearest seat record newer than the page: that record's
+// `previous`, or the current seat when no seat record is newer.
+async function seatAtPageTop(
+    host: HarnessHost,
+    conversationId: string,
+    firstEntryId: string,
+    currentSeat: SeatSummary | undefined,
+): Promise<SeatSummary | undefined> {
+    let nearest: HostEntry | undefined;
+    let cursor: string | undefined;
+    do {
+        const page = await host.readEntries(conversationId, {
+            limit: MAX_ENTRIES_LIMIT,
+            order: "descending",
+            ...(cursor !== undefined && { after: cursor }),
+        });
+        for (const entry of page.entries) {
+            if (entry.id === firstEntryId) return nearest === undefined ? currentSeat : seatBefore(nearest);
+            if (entry.kind === SEAT_RECORD_KIND) nearest = entry;
+        }
+        cursor = page.next;
+    } while (cursor !== undefined);
+    return nearest === undefined ? currentSeat : seatBefore(nearest);
+}
+
+function seatBefore(seatRecord: HostEntry): SeatSummary | undefined {
+    return (seatRecord.data as SeatRecord).previous ?? undefined;
+}
+
+// Walking newest to oldest, a seat record hands the seat over to the entries before it.
+function attributeDescending(entries: HostEntry[], topSeat: SeatSummary | undefined): AttributedEntry[] {
+    let seat = topSeat;
+    return entries.map((entry) => {
+        if (entry.kind === SEAT_RECORD_KIND) seat = seatBefore(entry);
+        if (entry.kind !== ASSISTANT_ENTRY_KIND || seat === undefined) return entry;
+        return { ...entry, seat };
+    });
+}
+
+async function readDescending(
+    host: HarnessHost,
+    { conversationId, after, limit }: EntriesInput,
+): Promise<{ entries: AttributedEntry[]; next?: string }> {
+    const page = await host.readEntries(conversationId, {
+        limit,
+        order: "descending",
+        ...(after !== undefined && { after }),
+    });
+    const currentSeat = currentSeatOf(await readConversationMeta(host, conversationId));
+    const firstEntry = page.entries[0];
+    const topSeat =
+        after === undefined || firstEntry === undefined
+            ? currentSeat
+            : await seatAtPageTop(host, conversationId, firstEntry.id, currentSeat);
+    return { ...page, entries: attributeDescending(page.entries, topSeat) };
+}
+
+async function readAscending(
+    host: HarnessHost,
+    { conversationId, after, limit }: EntriesInput,
+): Promise<{ entries: AttributedEntry[]; next?: string }> {
+    const page = await host.readEntries(conversationId, after === undefined ? { limit } : { after, limit });
+    const firstEntry = page.entries[0];
+    const prefix =
+        after === undefined || firstEntry === undefined
+            ? []
+            : await seatRecordBefore(host, conversationId, firstEntry.id);
+    return { ...page, entries: attributeEntries([...prefix, ...page.entries]).slice(prefix.length) };
+}
+
 const entriesOperation = defineOperation<ReadContext, EntriesInput, { entries: AttributedEntry[]; next?: string }>({
     name: "conversations.entries",
     kind: "read",
     parse: parseEntriesInput,
-    async run({ host }, { conversationId, after, limit }) {
-        await requireConversation(host, conversationId);
+    async run({ host }, input) {
+        await requireConversation(host, input.conversationId);
         try {
-            const page = await host.readEntries(conversationId, after === undefined ? { limit } : { after, limit });
-            const firstEntry = page.entries[0];
-            const prefix =
-                after === undefined || firstEntry === undefined
-                    ? []
-                    : await seatRecordBefore(host, conversationId, firstEntry.id);
-            return { ...page, entries: attributeEntries([...prefix, ...page.entries]).slice(prefix.length) };
+            return input.order === "descending" ? await readDescending(host, input) : await readAscending(host, input);
         } catch (error) {
             if (error instanceof HostInvalidCursorError) throw new ServiceError("invalid_input", error.message);
             throw error;
