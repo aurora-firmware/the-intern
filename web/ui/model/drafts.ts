@@ -1,40 +1,42 @@
 /** The part of `Storage` the drafts use, so a test or a page passes its own. */
 export type DraftStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
-/** Text held while the storage throws (a private window, a full quota); it is lost with the page. */
-const memoryDrafts = new Map<string, string>();
+/** The storage a page keeps drafts in, and the text held here while that storage throws (a full quota, a refusal). */
+export type DraftStore = { storage: DraftStorage; held: Map<string, string> };
+
+export const createDraftStore = (storage: DraftStorage): DraftStore => ({ storage, held: new Map() });
 
 const draftKey = (page: string, box: string): string => JSON.stringify(["draft", page, box]);
 
-export const loadDraft = (storage: DraftStorage, page: string, box: string): string | null => {
+export const loadDraft = (store: DraftStore, page: string, box: string): string | null => {
     const key = draftKey(page, box);
-    const held = memoryDrafts.get(key);
+    const held = store.held.get(key);
     if (held !== undefined) {
         return held;
     }
     try {
-        return storage.getItem(key);
+        return store.storage.getItem(key);
     } catch {
         return null;
     }
 };
 
-export const saveDraft = (storage: DraftStorage, page: string, box: string, text: string): void => {
+export const saveDraft = (store: DraftStore, page: string, box: string, text: string): void => {
     const key = draftKey(page, box);
     try {
-        storage.setItem(key, text);
-        memoryDrafts.delete(key);
+        store.storage.setItem(key, text);
+        store.held.delete(key);
     } catch {
-        memoryDrafts.set(key, text);
+        store.held.set(key, text);
     }
 };
 
-export const clearDraft = (storage: DraftStorage, page: string, box: string): void => {
+export const clearDraft = (store: DraftStore, page: string, box: string): void => {
     const key = draftKey(page, box);
-    memoryDrafts.delete(key);
+    store.held.delete(key);
     try {
-        storage.removeItem(key);
+        store.storage.removeItem(key);
     } catch {
-        // The text was held in memory only, and that is already gone.
+        // The text was held here only, and that is already gone.
     }
 };
