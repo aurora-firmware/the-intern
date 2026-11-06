@@ -541,6 +541,103 @@ describe("conversations.entries", () => {
         assert.ok(assistantEntries.every((entry) => entry.seat?.role === "developer"));
     });
 
+    it("pages newest first with order descending, each next leading to older entries and repeating none", async () => {
+        const fixture = await openFixture();
+        const id = await fixture.newConversation();
+        await exchange(fixture, id, "one");
+        await exchange(fixture, id, "two");
+        const ascending = (await fixture.call("conversations.entries", { conversationId: id })) as EntriesResult;
+        const collected: EntriesResult["entries"] = [];
+        let after: string | undefined;
+        let pages = 0;
+
+        do {
+            const page = (await fixture.call("conversations.entries", {
+                conversationId: id,
+                order: "descending",
+                limit: 2,
+                ...(after !== undefined && { after }),
+            })) as EntriesResult;
+            collected.push(...page.entries);
+            after = page.next;
+            pages++;
+        } while (after !== undefined);
+
+        assert.ok(pages > 1);
+        assert.deepEqual(
+            collected.map((entry) => entry.id),
+            ascending.entries.map((entry) => entry.id).reverse(),
+        );
+    });
+
+    it("pages oldest first when order is ascending", async () => {
+        const fixture = await openFixture();
+        const id = await fixture.newConversation();
+        await exchange(fixture, id, "one");
+        const byDefault = (await fixture.call("conversations.entries", { conversationId: id })) as EntriesResult;
+
+        const explicit = (await fixture.call("conversations.entries", {
+            conversationId: id,
+            order: "ascending",
+        })) as EntriesResult;
+
+        assert.deepEqual(explicit, byDefault);
+    });
+
+    it("rejects an order other than ascending or descending with invalid_input", async () => {
+        const fixture = await openFixture();
+        const id = await fixture.newConversation();
+        for (const order of ["newest", "", "DESCENDING", 1, null]) {
+            assert.equal(
+                await rejectionCode(fixture.call("conversations.entries", { conversationId: id, order })),
+                "invalid_input",
+                `order ${String(order)}`,
+            );
+        }
+    });
+
+    it("attributes each assistant entry to its seat on descending pages, the first page and later ones", async () => {
+        const fixture = await openFixture();
+        const id = await fixture.seated({}, fixture.seatOf("developer"));
+        await exchange(fixture, id, "one");
+        await changeSeat(fixture.host, id, { seat: fixture.seatOf("reviewer"), actor });
+        await exchange(fixture, id, "two");
+        await changeSeat(fixture.host, id, { seat: fixture.seatOf("tester"), actor });
+        await exchange(fixture, id, "three");
+        type SeatedEntries = { entries: { kind: string; seat?: { role: string } }[]; next?: string };
+        const roles: (string | undefined)[] = [];
+        let after: string | undefined;
+
+        do {
+            const page = (await fixture.call("conversations.entries", {
+                conversationId: id,
+                order: "descending",
+                limit: 1,
+                ...(after !== undefined && { after }),
+            })) as SeatedEntries;
+            for (const entry of page.entries) if (entry.kind === "pi.assistant") roles.push(entry.seat?.role);
+            after = page.next;
+        } while (after !== undefined);
+
+        assert.deepEqual(roles, ["tester", "reviewer", "developer"]);
+    });
+
+    it("answers 200 entries for a descending limit of 200 on a conversation with more", async () => {
+        const fixture = await openFixture();
+        const id = await fixture.newConversation();
+        for (let exchanges = 0; exchanges < 105; exchanges++) await exchange(fixture, id, `message ${exchanges}`);
+
+        const page = (await fixture.call("conversations.entries", {
+            conversationId: id,
+            order: "descending",
+            limit: 200,
+        })) as EntriesResult;
+
+        assert.equal(page.entries.length, 200);
+        assert.equal(page.entries[0]?.id, await fixture.host.readNewestEntryId(id));
+        assert.notEqual(page.next, undefined);
+    });
+
     it("keeps entries from before a compaction", async () => {
         const fixture = await openFixture();
         const id = await fixture.newConversation();
