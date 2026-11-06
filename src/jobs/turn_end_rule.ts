@@ -3,7 +3,7 @@
  * the daemon either reminds the lead once or blocks the job. The daemon is the actor of the reminder and the author of
  * the block (S-001 v0.7 REQ-007).
  */
-import { hasQueuedUserInput, hasSubmissionWithRequestId } from "../host/conversation_control.ts";
+import { hasQueuedUserInput, hasSubmissionWithRequestId, isStopMarkLive } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { watchInstance } from "../host/host_observation.ts";
 import { readConversationMeta } from "../host/seating.ts";
@@ -32,6 +32,12 @@ async function isLeadWaiting(deps: JobActionDeps, jobId: string, leadId: string)
         if (busy && id !== leadId && (await readConversationMeta(host, id))?.jobId === jobId) return true;
     }
     return false;
+}
+
+// A team member's stop of the lead's run leaves a live stop mark, which blocks the job without a reminder.
+async function isLeadStopped(host: HarnessHost, leadId: string): Promise<boolean> {
+    const meta = await readConversationMeta(host, leadId);
+    return meta !== undefined && (await isStopMarkLive(host, leadId, meta));
 }
 
 /** A reminder the rule owes a lead conversation. */
@@ -70,6 +76,7 @@ export async function evaluateTurnEnd(
     const decision = turnEndDecision({
         definitionOfDone: job.definitionOfDone,
         isReminderSpent: await hasSubmissionWithRequestId(ctx.host, leadId, requestId),
+        isStopped: await isLeadStopped(ctx.host, leadId),
     });
     if (decision.kind === "block") {
         await blockJob(deps, job.id, decision.reason, { kind: "daemon" });
