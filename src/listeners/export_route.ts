@@ -4,7 +4,7 @@
  * `exports` folder, then sent as a file attachment. The route adds no operation and imports nothing of the host.
  */
 
-import { mkdir, mkdtemp, open, rm, stat, statfs } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readdir, rm, stat, statfs } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { pipeline } from "node:stream";
@@ -131,20 +131,81 @@ function whenClosed(res: ServerResponse, action: () => void): void {
 /**
  * The one place the temporary copy goes: the response's close follows every ending, finished, failed or abandoned.
  * A client that left while the folder was being made has closed the response already, so the folder goes at once.
+ * The promise settles once the folder is gone, or its removal has been logged as failed.
  */
-function removeWhenClosed(res: ServerResponse, folder: string, logger: Logger): void {
-    whenClosed(res, () => {
-        rm(folder, { recursive: true, force: true }).catch((error: unknown) => {
-            logger.error("export copy not removed", { folder, error: describeError(error) });
+function removeWhenClosed(res: ServerResponse, folder: string, logger: Logger): Promise<void> {
+    return new Promise((resolve) => {
+        whenClosed(res, () => {
+            rm(folder, { recursive: true, force: true })
+                .catch((error: unknown) => {
+                    logger.error("export copy not removed", { folder, error: describeError(error) });
+                })
+                .then(resolve);
         });
     });
 }
 
+/**
+ * Removes what the `exports` folder holds, which only a daemon that died mid-download leaves. A failure is logged and
+ * never raised, so the start goes on (S-003 REQ-016).
+ */
+export async function removeExportLeftovers(stateDir: string, logger: Logger): Promise<void> {
+    const exportsFolder = join(stateDir, EXPORTS_FOLDER);
+    try {
+        const names = await readdir(exportsFolder);
+        await Promise.all(names.map((name) => rm(join(exportsFolder, name), { recursive: true, force: true })));
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+        logger.error("export leftovers not removed", { folder: exportsFolder, error: describeError(error) });
+    }
+}
+
+export type ExportRoute = Fallback & {
+    /** Resolves once every export that was running has ended and its folder is gone. */
+    settled(): Promise<void>;
+};
+
+/** Makes the copy and sends it; resolves, once the download is under way, to the promise of its folder's removal (wrapped, so it is not awaited). */
+async function serveExport(
+    options: ExportRouteOptions,
+    req: IncomingMessage,
+    res: ServerResponse,
+): Promise<{ removed: Promise<void> }> {
+    let removed = Promise.resolve();
+    try {
+        const observed = options.observe(req);
+        const caller: Caller = { actor: { kind: "team_member", wayIn: options.wayIn, observed } };
+        const { folder, stateDir } = await makeFolder(options, caller);
+        removed = removeWhenClosed(res, folder, options.logger);
+        if (res.closed) return { removed };
+        const copy = (await options.invoke("jobs.export", { path: join(folder, COPY_FILE_NAME) }, caller)) as Copy;
+        const file = await open(copy.path);
+        options.logger.info("export download", {
+            wayIn: options.wayIn,
+            remoteAddress: observed.remoteAddress ?? "",
+            remotePort: observed.remotePort ?? 0,
+        });
+        res.writeHead(200, {
+            "content-type": SQLITE_MEDIA_TYPE,
+            "content-disposition": `attachment; filename="${fileNameOf(stateDir)}"`,
+            "content-length": copy.size,
+        });
+        // A failure after the first byte destroys the response, which closes the connection short of its length.
+        pipeline(file.createReadStream(), res, (failure) => {
+            if (failure) options.logger.error("export download cut short", { error: describeError(failure) });
+        });
+    } catch (error) {
+        sendError(res, error, options.logger);
+    }
+    return { removed };
+}
+
 /** Creates the route as a fallback of the HTTP front: it answers `GET /export` and declines every other request. */
-export function createExportRoute(options: ExportRouteOptions): Fallback {
+export function createExportRoute(options: ExportRouteOptions): ExportRoute {
     // The one download slot, in memory: taken before anything else, freed when the response closes (ADR-001 decision 2).
     let isSlotTaken = false;
-    return async (req, res) => {
+    const running = new Set<Promise<void>>();
+    const route: Fallback = async (req, res) => {
         if (!isExportRequest(req)) return false;
         if (isSlotTaken) {
             sendError(
@@ -158,31 +219,16 @@ export function createExportRoute(options: ExportRouteOptions): Fallback {
         whenClosed(res, () => {
             isSlotTaken = false;
         });
-        try {
-            const observed = options.observe(req);
-            const caller: Caller = { actor: { kind: "team_member", wayIn: options.wayIn, observed } };
-            const { folder, stateDir } = await makeFolder(options, caller);
-            removeWhenClosed(res, folder, options.logger);
-            if (res.closed) return true;
-            const copy = (await options.invoke("jobs.export", { path: join(folder, COPY_FILE_NAME) }, caller)) as Copy;
-            const file = await open(copy.path);
-            options.logger.info("export download", {
-                wayIn: options.wayIn,
-                remoteAddress: observed.remoteAddress ?? "",
-                remotePort: observed.remotePort ?? 0,
-            });
-            res.writeHead(200, {
-                "content-type": SQLITE_MEDIA_TYPE,
-                "content-disposition": `attachment; filename="${fileNameOf(stateDir)}"`,
-                "content-length": copy.size,
-            });
-            // A failure after the first byte destroys the response, which closes the connection short of its length.
-            pipeline(file.createReadStream(), res, (failure) => {
-                if (failure) options.logger.error("export download cut short", { error: describeError(failure) });
-            });
-        } catch (error) {
-            sendError(res, error, options.logger);
-        }
+        const served = serveExport(options, req, res);
+        const settling = served.then(({ removed }) => removed);
+        running.add(settling);
+        settling.finally(() => running.delete(settling));
+        await served;
         return true;
     };
+    return Object.assign(route, {
+        settled: async () => {
+            await Promise.all(running);
+        },
+    });
 }
