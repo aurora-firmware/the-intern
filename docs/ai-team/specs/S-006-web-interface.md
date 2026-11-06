@@ -142,7 +142,7 @@ operations and feed each page relies on. No page calls anything else, apart from
 |---|---|---|
 | Every page | `daemon.status`, to check the connection and the version (ADR-007 decisions 6 and 9) | — |
 | Board | `jobs.list`, instance feed (`GET /feed?scope=instance`) | — |
-| Job page | `jobs.get`, `jobs.history.list`, `jobs.worklog.list`, `conversations.get`, `conversations.entries`, `conversations.invocations`, `models.list`, `roles.list`, `workspaces.list`, instance feed, one stream for the job's conversations (`GET /feed?scope=conversations`, S-003 REQ-006) | `jobs.update`, `jobs.complete`, `jobs.cancel`, `jobs.resume`, `jobs.relate`, `jobs.unrelate`, `conversations.submit`, `conversations.abort`, `conversations.compact`, `conversations.reset`, `conversations.seat` |
+| Job page | `jobs.get`, `jobs.history.list`, `jobs.worklog.list`, `conversations.get`, `conversations.entries`, `conversations.invocations`, `models.list`, `roles.list`, `workspaces.list`, instance feed, the job's conversations on the shared stream (`GET /feed?scope=conversations`, S-003 REQ-006; ADR-007) | `jobs.update`, `jobs.complete`, `jobs.cancel`, `jobs.resume`, `jobs.relate`, `jobs.unrelate`, `conversations.submit`, `conversations.abort`, `conversations.compact`, `conversations.reset`, `conversations.seat` |
 | Front desk | `desk.get`, `conversations.entries`, `submissions.get`, conversation feed, which reaches the page on the shared stream (`GET /feed?scope=conversations`, S-003 REQ-006; ADR-007) | `conversations.submit`, `conversations.abort`, `jobs.create` |
 | Roles | `roles.list`, `models.list`, `workspaces.list`, instance feed | `roles.create`, `roles.change`, `roles.remove`, `roles.restore` |
 | Workspaces | `workspaces.list`, instance feed | `workspaces.register`, `workspaces.unregister` |
@@ -151,9 +151,9 @@ operations and feed each page relies on. No page calls anything else, apart from
 On the Job page, the instance feed is the only source of job deltas (S-004 REQ-015), and its `conversation_created`
 delta names a newly invoked conversation. `workspaces.list` gives the workspaces for a change of seat.
 
-**Contract** (`conversations.entries`): the operation takes an optional input `order`, `"ascending"` or `"descending"`.
-It is `"ascending"` by default, so S-002 AC-012.4's oldest-first read and S-002's catalogue row stay true and S-002
-isn't amended. Pages read newest first, 200 entries at a time (`docs/development/architecture.md`, Reading entries).
+**Contract** (`conversations.entries`): the operation takes an optional input `order`, `"ascending"` or `"descending"`,
+and is `"ascending"` by default, as S-002 AC-012.4 states. With `"descending"`, a page holds the newest entries first,
+and its `next` leads to older entries. Pages use `"descending"`.
 
 **Contract** (answers and Redirect on the Job page): an answer is `jobs.resume` with `text`, and a second answer, once
 the job is no longer Blocked, is refused `conflict`. `conversations.submit` is for Redirect only, with busy mode
@@ -801,8 +801,9 @@ None. The web interface adds no setting. The existing `[network]` section of `co
 - **Accepted risk, confirmed by the product owner on 2026-11-06.** Anyone who can reach the page can download every
   conversation and the whole job record, with no login. The confirmation on the Status page and the manual state this.
 - **S-001 to S-005** provide the operations and the feed named in Interfaces. Amendments on this spec's planning branch
-  provide the rest. S-003 v0.5 adds the export route (REQ-016) and one stream for several conversations (REQ-006). S-004
-  v0.13 adds the block after a team member's stop (REQ-008) and the "related changed" delta (REQ-015).
+  provide the rest, apart from the `order` input of `conversations.entries`, which this spec's Interfaces add. S-003
+  v0.5 adds the export route (REQ-016) and one stream for several conversations (REQ-006). S-004 v0.13 adds the block
+  after a team member's stop (REQ-008) and the "related changed" delta (REQ-015).
 - **Browser connections.** Plain HTTP allows a browser 6 connections per host across its tabs. A Job page reads the
   instance feed and the stream for its conversations, so 3 Job pages that each hold both would use all 6 and leave none
   for actions. ADR-007 decides how the pages stay within the limit, so that AC-005.4 holds.
@@ -832,9 +833,10 @@ None. The web interface adds no setting. The existing `[network]` section of `co
 
 1. **The shell.** The served files, style, sidebar, addresses, connection banner and the browser test setup. Delivers
    REQ-001, REQ-014, REQ-016, REQ-017. Depends on nothing else here.
-2. **See the work.** Board and Job page, read-only, with live activity, one stream for a job's conversations, staying
-   within the browser's connections, and delta size bounded by what an entry adds (AC-019.3). Delivers REQ-002, REQ-003,
-   REQ-005, REQ-018, REQ-019, S-003 REQ-006's stream and S-004 REQ-015's "related changed" delta. Depends on phase 1.
+2. **See the work.** Board and Job page, read-only, with live activity, the shared stream for the conversations pages
+   follow, the `order` input of `conversations.entries`, staying within the browser's connections, and delta size
+   bounded by what an entry adds (AC-019.3). Delivers REQ-002, REQ-003, REQ-005, REQ-018, REQ-019, S-003 REQ-006's
+   stream and S-004 REQ-015's "related changed" delta. Depends on phase 1.
 3. **Steer the work.** Answering, editing, cancelling, Stop, Redirect, conversation controls, the Front desk and
    refusals. Delivers REQ-004, REQ-006, REQ-007, REQ-008, REQ-013, REQ-015 and S-004 REQ-008's block after a stop.
    Depends on phase 2.
@@ -857,4 +859,4 @@ Both were for the Architect, and Feature Architecture resolved them. Neither cha
 
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| 2026-11-06 | v0.2. Interfaces: the service calls table adds `daemon.status` for every page; the Front desk row names the shared `scope=conversations` stream; a Contract notes `conversations.entries`' optional `order` input, ascending by default, with pages reading newest first, 200 at a time. Open Questions: both marked resolved. Assumptions and Dependencies: "Browser connections" points to ADR-007 and "Delta size" to ADR-008. No REQ or AC changed. S-002 isn't amended. | Spec findings from Feature Architecture. Driving ADRs: ADR-006 (technology preference), ADR-007 (decisions 4, 6 and 9, and the shared stream), ADR-008 (delta size). The `order` input's text is in `docs/development/architecture.md`, Reading entries. | None; S-006 isn't broken down yet |
+| 2026-11-06 | v0.2. Interfaces: the service calls table adds `daemon.status` for every page; the Front desk row names the shared `scope=conversations` stream; a Contract adds `conversations.entries`' optional `order` input, ascending by default, and pages use `"descending"`; the Job page row also names the shared stream. Assumptions and Dependencies names that Contract as the source of `order`. Implementation Order phase 2 delivers it and names the shared stream. Open Questions: both marked resolved. Assumptions and Dependencies: "Browser connections" points to ADR-007 and "Delta size" to ADR-008. No REQ or AC changed. S-002 isn't amended. | Spec findings from Feature Architecture. Driving ADRs: ADR-006 (technology preference), ADR-007 (decisions 4, 6 and 9, and the shared stream), ADR-008 (delta size). | None; S-006 isn't broken down yet |
