@@ -79,13 +79,21 @@ function listening(fixture: Fixture): boolean {
     }
 }
 
-async function countRows(folder: string, file: Buffer): Promise<{ jobs: number; worklog: number; history: number }> {
+async function countRows(
+    folder: string,
+    file: Buffer,
+): Promise<{ jobs: number; worklog: number; history: number; conversations: number }> {
     const path = join(folder, "downloaded.sqlite");
     await writeFile(path, file);
     const copy = new DatabaseSync(path, { readOnly: true });
     try {
         const count = (table: string) => (copy.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
-        return { jobs: count("intern_jobs"), worklog: count("intern_worklog"), history: count("intern_history") };
+        return {
+            jobs: count("intern_jobs"),
+            worklog: count("intern_worklog"),
+            history: count("intern_history"),
+            conversations: count("conversations"),
+        };
     } finally {
         copy.close();
     }
@@ -198,6 +206,7 @@ describe("GET /export on the network listener", () => {
         assert.equal(counts.jobs, 1);
         assert.equal(counts.worklog, 1);
         assert.ok(counts.history >= 1);
+        assert.equal(counts.conversations, 1, "the job's lead conversation is in the copy");
         assert.equal(await isBusy(), true, "the run goes on during the download");
         const logged = fixture.lines.find((line) => line.includes("export download"));
         assert.ok(logged, "the daemon logs the download");
@@ -259,5 +268,19 @@ describe("GET /export on the network listener", () => {
         assert.equal(await exists(join(fixture.env.stateDir, "exports")), false);
         stopGate.resolve();
         await stopped;
+    });
+
+    it("logs the cause and answers an internal error when the route cannot make its folder", async () => {
+        const fixture = await readyDaemon();
+        await writeFile(join(fixture.env.stateDir, "exports"), "in the way");
+
+        const answer = await get(fixture.target, "/export");
+
+        assert.equal(answer.status, 500);
+        assert.equal(JSON.parse(answer.body.toString()).error.code, "internal");
+        const logged = fixture.lines.find((line) => line.includes("export failed"));
+        assert.ok(logged, "the daemon logs the failure");
+        assert.match(logged, /exports/);
+        assert.match(logged, /E(EXIST|NOTDIR)/);
     });
 });
