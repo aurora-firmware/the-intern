@@ -218,6 +218,19 @@ describe("createFeedHub status check", () => {
     });
 });
 
+describe("createFeedHub status check without instance events", () => {
+    it("opens_no_instance_feed_after_a_failed_status_check_when_no_tab_asked_for_instance_events", async () => {
+        const { timers, instanceFeeds, status, tab } = setup();
+        const a = tab();
+        a.send({ type: "follow", conversationIds: [] });
+        status.answer = () => Promise.reject(new Error("refused"));
+        a.send({ type: "call-failed" });
+        await timers.advance(1000);
+        assert.deepEqual(connections(a.messages), [false]);
+        assert.equal(instanceFeeds.length, 0);
+    });
+});
+
 describe("createFeedHub leaving tabs", () => {
     it("drops_a_leaving_tabs_conversations_from_the_union_at_the_next_change_and_sends_it_nothing", async () => {
         const { timers, conversationFeeds, tab } = setup();

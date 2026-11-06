@@ -190,7 +190,7 @@ export function createFeedHub({ client, setTimer }: { client: Client; setTimer: 
             .then((isHealthy) => {
                 if (isHealthy) return;
                 setConnected(false);
-                instanceLoop.restart(RETRY_MS);
+                if ([...tabs.values()].some((tab) => tab.wantsInstance)) instanceLoop.restart(RETRY_MS);
                 if (openedIds.size > 0) conversationLoop.restart(RETRY_MS);
             })
             .finally(() => {
