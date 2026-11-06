@@ -1,5 +1,5 @@
 import { h } from "preact";
-import { useContext, useRef, useState } from "preact/hooks";
+import { useContext, useEffect, useRef, useState } from "preact/hooks";
 import { pageClient } from "../feed_connection.ts";
 import { createDraftStore, loadDraft } from "../model/drafts.ts";
 import { requestId } from "../model/request_id.ts";
@@ -9,6 +9,7 @@ import { RefusalMessage } from "./refusal.ts";
 import { DraftTextBox } from "./text_box.ts";
 
 const BOX_PREFIX = "redirect";
+const OFFERED_STATUSES: readonly string[] = ["running", "parked", "waiting for a worker thread"];
 const FINISHED_STATUSES: readonly string[] = ["idle", "closed"];
 const FINISHED_TEXT = "The agent has already finished.";
 const redirects = createDraftStore(window.sessionStorage);
@@ -43,11 +44,17 @@ const hasFinished = async (conversationId: string, state: FeedState): Promise<bo
     return FINISHED_STATUSES.includes(listing.status);
 };
 
-const StopButton = ({ conversationId, state }: { conversationId: string; state: FeedState }) => {
+type StopProps = { conversationId: string; state: FeedState; onEngaged: (isEngaged: boolean) => void };
+
+/** Stop with its confirmation. It tells `onEngaged` while the dialog is open or its answer is shown. */
+const StopButton = ({ conversationId, state, onEngaged }: StopProps) => {
     const connected = useContext(isConnected);
     const dialog = useRef<HTMLDialogElement>(null);
     const [message, setMessage] = useState<string | undefined>(undefined);
+    const [isOpen, setOpen] = useState(false);
     const { sending, failure, run } = useCall();
+    const isEngaged = isOpen || sending || message !== undefined || failure !== undefined;
+    useEffect(() => onEngaged(isEngaged), [isEngaged, onEngaged]);
 
     const confirm = async () => {
         dialog.current?.close();
@@ -67,13 +74,16 @@ const StopButton = ({ conversationId, state }: { conversationId: string; state: 
                 type: "button",
                 class: "button button-destructive stop-open",
                 disabled: !connected || sending,
-                onClick: () => dialog.current?.showModal(),
+                onClick: () => {
+                    dialog.current?.showModal();
+                    setOpen(true);
+                },
             },
             "Stop",
         ),
         h(
             "dialog",
-            { ref: dialog, class: "stop-dialog" },
+            { ref: dialog, class: "stop-dialog", onClose: () => setOpen(false) },
             h("p", null, "Stop this agent? Whatever it is doing ends."),
             h(
                 "div",
@@ -140,13 +150,40 @@ const RedirectBox = ({ number, conversationId }: RedirectProps) => {
     );
 };
 
+/**
+ * Whether the conversation is running or parked for reports. A run in the feed's state says it is running; a parked
+ * conversation shows no run there, so the status is read again whenever the run starts or ends.
+ */
+const useIsOffered = (conversationId: string, isBusy: boolean): boolean => {
+    const [status, setStatus] = useState<string | undefined>(undefined);
+    useEffect(() => {
+        let isClosed = false;
+        pageClient()
+            .invoke("conversations.get", { conversationId })
+            .then((listing) => {
+                if (!isClosed) setStatus((listing as { status: string }).status);
+            })
+            .catch(() => {
+                if (!isClosed) setStatus(undefined);
+            });
+        return () => {
+            isClosed = true;
+        };
+    }, [conversationId, isBusy]);
+    return isBusy || (status !== undefined && OFFERED_STATUSES.includes(status));
+};
+
 type ControlsProps = { number: string; conversationId: string; state: FeedState };
 
-/** Stop and Redirect for one conversation of a job (S-006 REQ-006); the Job page passes it to its activity. */
-export const ConversationControls = ({ number, conversationId, state }: ControlsProps) =>
-    h(
+/** Stop and Redirect for a running conversation of a job or one parked for reports (S-006 REQ-006). */
+export const ConversationControls = ({ number, conversationId, state }: ControlsProps) => {
+    const [isEngaged, setEngaged] = useState(false);
+    const isOffered = useIsOffered(conversationId, state.busy);
+    if (!isOffered && !isEngaged) return null;
+    return h(
         "div",
         { class: "conversation-controls", "data-busy": String(state.busy) },
-        h(StopButton, { conversationId, state }),
+        h(StopButton, { conversationId, state, onEngaged: setEngaged }),
         h(RedirectBox, { number, conversationId }),
     );
+};

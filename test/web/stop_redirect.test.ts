@@ -227,6 +227,26 @@ describe("stopping and redirecting a conversation from the Job page in chrome", 
         t.assert.equal(statuses.includes("running"), false, JSON.stringify(tree));
     });
 
+    it("draws no Stop or Redirect for a conversation that is neither running nor parked", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const rig = await startRig("invoke-parked", { delayMs: 500, turnEndRule: false });
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        await until("the lead to finish", async () => {
+            const tree = (await rig.daemon.invoke("conversations.invocations", { conversationId: rig.lead })) as Tree;
+            return (
+                [tree, ...tree.invoked].length === 3 && [tree, ...tree.invoked].every((node) => node.status === "idle")
+            );
+        });
+        const page = await browser.newPage();
+        await page.goto(pageUrl(rig.port, `/ui/#/jobs/${rig.job.number}`));
+
+        await waitFor(page, `document.querySelectorAll("main details.activity").length === 3`);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        t.assert.equal(await page.locator("main .conversation-controls").count(), 0);
+    });
+
     it("disables Stop and Redirect while the service can't be reached", { timeout: TEST_TIMEOUT_MS }, async (t) => {
         const rig = await startRig("gated");
         const proxy = await startWebProxy();
