@@ -15,16 +15,19 @@ const EXPAND_LIMIT_MS = 500;
 const LONG_ENTRIES = 2000;
 const SHORT_ENTRIES = 20;
 const ENTRIES_PER_PAGE = 500;
-const LONG_INPUT_BYTES = 64 * 1024;
-const LONG_INPUT = "0123456789abcdef".repeat(LONG_INPUT_BYTES / 16);
+const LONG_RESULT_BYTES = 1024 * 1024;
 const ENTRIES_PER_INPUT = 2;
-const SHORT_ENTRY_TEXT = "one more";
+// A long result adds the input, the call, the result, a compaction with its system entry, and the answer.
+const ENTRIES_PER_LONG_RESULT = 6;
+// The `long-output` lead answers an input starting with this with text; any other input gets a long tool result.
+const TEXT_ONLY = "text only: ";
+const SHORT_ENTRY_TEXT = `${TEXT_ONLY}one more`;
 const SECTION = "main details.activity";
 const ENTRY = `${SECTION} .activity-entry`;
-const LONG_ENTRY = `${ENTRY}:has(button.output-more)`;
+const LONG_ENTRY = `${SECTION} .activity-tool-result:has(button.output-more)`;
 
 type Job = { id: string; number: string };
-type Entry = { id: string };
+type Entry = { id: string; kind: string };
 type Page_ = { entries: Entry[]; next?: string };
 
 const envs: HermeticEnv[] = [];
@@ -43,14 +46,14 @@ afterEach(async () => {
 async function startRig(): Promise<{ daemon: DaemonProcess; port: number }> {
     const env = await createHermeticEnv();
     envs.push(env);
-    const daemon = startDaemon({ hermetic: env, script: "echo", turnEndRule: false, networkListener: true });
+    const daemon = startDaemon({ hermetic: env, script: "long-output", turnEndRule: false, networkListener: true });
     daemons.push(daemon);
     await daemon.ready;
     return { daemon, port: await daemon.networkPort() };
 }
 
-async function entryCount(daemon: DaemonProcess, conversationId: string): Promise<number> {
-    let count = 0;
+async function entryKinds(daemon: DaemonProcess, conversationId: string): Promise<string[]> {
+    const kinds: string[] = [];
     let after: string | undefined;
     do {
         const page = (await daemon.invoke("conversations.entries", {
@@ -58,40 +61,52 @@ async function entryCount(daemon: DaemonProcess, conversationId: string): Promis
             limit: ENTRIES_PER_PAGE,
             ...(after !== undefined && { after }),
         })) as Page_;
-        count += page.entries.length;
+        kinds.push(...page.entries.map((entry) => entry.kind));
         after = page.next;
     } while (after !== undefined);
-    return count;
+    return kinds;
 }
 
-async function waitForEntries(daemon: DaemonProcess, conversationId: string, wanted: number): Promise<void> {
+const entryCount = async (daemon: DaemonProcess, conversationId: string) =>
+    (await entryKinds(daemon, conversationId)).length;
+
+/** Waits until the conversation holds `entries` entries and `results` tool results and its newest entry is an answer. */
+async function waitSettled(daemon: DaemonProcess, conversationId: string, entries: number, results = 0): Promise<void> {
     const deadline = Date.now() + WAIT_MS * 4;
-    while ((await entryCount(daemon, conversationId)) < wanted) {
-        if (Date.now() > deadline) throw new Error(`${conversationId} did not reach ${wanted} entries`);
+    for (;;) {
+        const kinds = await entryKinds(daemon, conversationId);
+        const toolResults = kinds.filter((kind) => kind === "pi.tool-result").length;
+        if (kinds.at(-1) === "pi.assistant" && kinds.length >= entries && toolResults >= results) return;
+        if (Date.now() > deadline) throw new Error(`${conversationId} did not settle at ${entries} entries`);
         await new Promise((resolve) => setTimeout(resolve, POLL_MS));
     }
 }
 
 /**
- * A job whose lead holds at least `entries` entries from short inputs submitted through the service, and then one long
- * input, so the long entry is on the first page the Job page reads. The lead of `long-output` never answers a second
- * input, so a long input stands in for its long tool result.
+ * A job whose lead of `long-output` holds the 1 MiB tool result of its first answer, short entries from inputs
+ * submitted through the service, and a second long tool result from an input without the text-only marker, so a long
+ * result is among the newest entries, on the first page the Job page reads. It holds `entries` entries in all.
  */
 async function buildJob(daemon: DaemonProcess, label: string, entries: number): Promise<Job & { lead: string }> {
     const job = (await daemon.invoke("jobs.create", { text: `start ${label}` })) as Job;
     const detail = (await daemon.invoke("jobs.get", { job: job.id })) as { leadConversation: string };
     const lead = detail.leadConversation;
-    for (let round = 0; (await entryCount(daemon, lead)) < entries; round++) {
+    await waitSettled(daemon, lead, 0, 1);
+    // The first input after a long result also compacts, which adds entries the later ones don't.
+    const beforeFirst = await entryCount(daemon, lead);
+    await submit(daemon, lead, `${label}-first`, `${TEXT_ONLY}${label} first`);
+    await waitSettled(daemon, lead, beforeFirst + ENTRIES_PER_INPUT);
+    const shortEntries = entries - ENTRIES_PER_LONG_RESULT;
+    while ((await entryCount(daemon, lead)) < shortEntries) {
         const before = await entryCount(daemon, lead);
-        const inputs = Math.ceil((entries - before) / ENTRIES_PER_INPUT);
+        const inputs = Math.ceil((shortEntries - before) / ENTRIES_PER_INPUT);
         for (let index = 0; index < inputs; index++) {
-            await submit(daemon, lead, `${label}-${round}-${index}`, `${label} input ${round}-${index}`);
+            await submit(daemon, lead, `${label}-${before}-${index}`, `${TEXT_ONLY}${label} input ${before}-${index}`);
         }
-        await waitForEntries(daemon, lead, before + inputs * ENTRIES_PER_INPUT);
+        await waitSettled(daemon, lead, before + inputs * ENTRIES_PER_INPUT);
     }
-    const beforeLong = await entryCount(daemon, lead);
-    await submit(daemon, lead, `${label}-long`, LONG_INPUT);
-    await waitForEntries(daemon, lead, beforeLong + ENTRIES_PER_INPUT);
+    await submit(daemon, lead, `${label}-long`, `${label} wants a long result`);
+    await waitSettled(daemon, lead, entries, 2);
     return { ...job, lead };
 }
 
@@ -169,7 +184,7 @@ for (const name of BROWSERS) {
                         };
                         check();
                     }),
-                [LONG_ENTRY, LONG_INPUT_BYTES] as [string, number],
+                [LONG_ENTRY, LONG_RESULT_BYTES] as [string, number],
             );
             expectAtMost(t, "Expanding the output", expanded, EXPAND_LIMIT_MS, "ms");
         });
