@@ -27,6 +27,8 @@ export type FakeModelOptions = {
     onRequest?: (transcript: FakeTranscript) => void;
     /** An answer waits until this promise settles (or the run is aborted), for a test that decides when a run ends. */
     gate?: Promise<void>;
+    /** With `gate`: only the answers to the transcripts it accepts wait; all of them do when it is absent. */
+    isGated?: (transcript: FakeTranscript) => boolean;
     /**
      * An answer streams its first piece of text, then waits until this promise settles (or the run is aborted) before it
      * streams the rest, so a test can look at a partial answer while the turn is still running.
@@ -156,7 +158,8 @@ export function createFakeModel(
         const transcript = toFakeTranscript(context);
         options.onRequest?.(transcript);
         await waitUnlessAborted(options.delayMs?.(transcript) ?? 0, streamOptions?.signal);
-        if (options.gate) await untilOrAborted(options.gate, streamOptions?.signal);
+        if (options.gate && (options.isGated?.(transcript) ?? true))
+            await untilOrAborted(options.gate, streamOptions?.signal);
         return messageFor(reply(transcript), transcript);
     };
     registration.setResponses([answerFromTranscript]);

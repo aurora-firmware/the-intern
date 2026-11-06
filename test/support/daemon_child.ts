@@ -6,7 +6,7 @@
  * reach it over `bob.sock` too.
  */
 import { spawn } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { Type } from "@earendil-works/pi-ai";
@@ -24,10 +24,12 @@ import { readConversationMeta } from "../../src/host/seating.ts";
 import { blockJob, cancelJob } from "../../src/jobs/job_actions.ts";
 import { createJobsComponent, type JobsComponentOptions, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
+import { createNetworkListenerComponent, type NetworkListenerComponent } from "../../src/listeners/network_listener.ts";
+import { networkSection } from "../../src/listeners/network_section.ts";
 import type { InternModels } from "../../src/models/model_runtime.ts";
 import { createJob, type JobView } from "../../src/service/job_operations.ts";
 import { type Caller, defineOperation, ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
-import { RESUME_MARKER, type StartDaemonOptions } from "./daemon_process.ts";
+import { NETWORK_STATE_OPERATION, RESUME_MARKER, type StartDaemonOptions } from "./daemon_process.ts";
 import { createFakeModel, type FakeReply, type FakeTranscript } from "./fake_model.ts";
 import { createTestOperations, type StorageSwitch } from "./test_operations.ts";
 
@@ -36,6 +38,11 @@ const READY_POLL_INTERVAL_MS = 10;
 const DEFAULT_SLOW_DELAY_MS = 1_000;
 const DEFAULT_SLEEP_SECONDS = "1";
 const FAILURE_EXIT_STATUS = 1;
+const LOOPBACK_ADDRESS = "127.0.0.1";
+// The listener ignores the configured port when it listens on a free one, but the section must hold a valid port.
+const UNUSED_CONFIGURED_PORT = 1;
+const LONG_OUTPUT_LENGTH = 1024 * 1024;
+const INVOKE_MANY_COUNT = 8;
 
 type Switches = Omit<StartDaemonOptions, "hermetic">;
 
@@ -100,7 +107,64 @@ function invokeAndCompleteReply(transcript: FakeTranscript): FakeReply {
     return { toolCall: hasToolResult(transcript) ? SINGLE_INVOKE_CALL : UPDATE_JOB_CALL };
 }
 
+const BLOCK_JOB_NAME = "block_job";
+const LONG_OUTPUT_CALL = { name: "bash", arguments: { command: "print the long output" } };
+const LONG_OUTPUT_TEXT = "0123456789abcdef".repeat(LONG_OUTPUT_LENGTH / 16);
+const DESK_CREATE_JOB_PREFIX = "create job ";
+const INVOKE_MANY_CALL = {
+    name: "invoke",
+    arguments: {
+        agents: Array.from({ length: INVOKE_MANY_COUNT }, (_, index) => ({
+            role: "gp",
+            contextMode: "clean",
+            jobPrompt: `${INVOKED_JOB_PROMPT_PREFIX} ${index + 1}`,
+        })),
+        // biome-ignore lint/suspicious/noThenProperty: `then` is the invoke tool's parameter name
+        then: "parked",
+    },
+};
+
+function firstUserText(transcript: FakeTranscript): string {
+    return transcript.find((turn) => turn.role === "user")?.text ?? "";
+}
+
+function toolResultCount(transcript: FakeTranscript): number {
+    return transcript.filter((turn) => turn.role === "toolResult").length;
+}
+
+/** The lead's answer has arrived: its block call has a result, and a team member's text follows it. */
+function isAnswerToBlock(transcript: FakeTranscript): boolean {
+    return toolResultCount(transcript) === 1 && transcript.at(-1)?.role === "user";
+}
+
+/** Blocks with the job's text, then after the answer sets a definition of done, completes the job, and says so. */
+function blockWithReasonReply(transcript: FakeTranscript): FakeReply {
+    const results = toolResultCount(transcript);
+    if (results === 0) return { toolCall: { name: BLOCK_JOB_NAME, arguments: { reason: firstUserText(transcript) } } };
+    if (results === 1) return isAnswerToBlock(transcript) ? { toolCall: UPDATE_JOB_CALL } : "blocked";
+    return results === 2 ? { toolCall: COMPLETE_JOB_CALL } : "done";
+}
+
+function invokeManyReply(transcript: FakeTranscript): FakeReply {
+    const isInvokedAgent = lastUserText(transcript).startsWith(INVOKED_JOB_PROMPT_PREFIX);
+    const reply = `echo: ${lastUserText(transcript)}`;
+    return isInvokedAgent || hasToolResult(transcript) ? reply : { toolCall: INVOKE_MANY_CALL };
+}
+
+function deskCreateJobReply(transcript: FakeTranscript): FakeReply {
+    const lastText = lastUserText(transcript);
+    if (!lastText.startsWith(DESK_CREATE_JOB_PREFIX) || hasToolResult(transcript)) return `echo: ${lastText}`;
+    return { toolCall: { name: "create_job", arguments: { text: lastText.slice(DESK_CREATE_JOB_PREFIX.length) } } };
+}
+
 type Script = NonNullable<Switches["script"]>;
+
+/** The scripts whose runs wait for `releaseRuns()`, and which answers of them wait. */
+const GATED_ANSWERS: Partial<Record<Script, (transcript: FakeTranscript) => boolean>> = {
+    gated: () => true,
+    "block-with-reason": isAnswerToBlock,
+    "invoke-many": (transcript) => lastUserText(transcript).startsWith(INVOKED_JOB_PROMPT_PREFIX),
+};
 
 /** `bash-sleep` takes its duration in seconds from the input, so a test sets how long the tool runs. */
 function replyFor(script: Script, transcript: FakeTranscript): FakeReply {
@@ -129,6 +193,10 @@ function replyFor(script: Script, transcript: FakeTranscript): FakeReply {
             },
         };
     }
+    if (script === "block-with-reason") return blockWithReasonReply(transcript);
+    if (script === "invoke-many") return invokeManyReply(transcript);
+    if (script === "long-output") return hasToolResult(transcript) ? "done" : { toolCall: LONG_OUTPUT_CALL };
+    if (script === "desk-create-job") return deskCreateJobReply(transcript);
     if (script !== "bash-sleep") return echo;
     if (hasToolResult(transcript)) return "slept";
     const seconds = /^\d+(\.\d+)?$/.test(lastText) ? lastText : DEFAULT_SLEEP_SECONDS;
@@ -151,19 +219,27 @@ function delayFor(switches: Switches, transcript: FakeTranscript): number {
     return 0;
 }
 
-// A stand-in for pi-durable's bash tool that only waits for its command, and ends it when the call is aborted.
-function createBashExtension() {
+/**
+ * A stand-in for pi-durable's bash tool that only waits for its command, and ends it when the call is aborted. Its
+ * result is `ran: <command>`, or the given text, which the lead of `long-output` gets: pi's own bash tool would keep at
+ * most 50 KiB of it.
+ */
+function createBashExtension(resultText?: string) {
     const bash = defineTool({
         name: "bash",
         description: "Runs a shell command",
         parameters: Type.Object({ command: Type.String() }),
+        // The harness keeps 50 KiB of a result by default; a given text is kept whole.
+        ...(resultText !== undefined && {
+            outputLimits: { maxBytes: resultText.length * 2, maxLines: resultText.length },
+        }),
         execute: async ({ command }, _api, toolContext) => {
             const shell = spawn("bash", ["-c", command], { stdio: "ignore", signal: toolContext.abortSignal });
             await new Promise<void>((resolve) => {
                 shell.on("error", () => resolve());
                 shell.on("close", () => resolve());
             });
-            return { output: [{ type: "text", text: `ran: ${command}` }] };
+            return { output: [{ type: "text", text: resultText ?? `ran: ${command}` }] };
         },
     });
     return defineExtension({ name: "bash", tools: [bash] });
@@ -262,6 +338,9 @@ function createComponents(switches: Switches, release: Promise<void>): DaemonCom
                 if (!check.ok) throw new Error(check.reason);
             },
         });
+    }
+    if (switches.script === "long-output") {
+        components.push({ name: "bash", extensions: [createBashExtension(LONG_OUTPUT_TEXT)] });
     }
     if (switches.killOnSteer) components.push(killOnSteerComponent());
     if (switches.holdStart) components.push({ name: "hold-start", start: () => release });
@@ -392,6 +471,48 @@ function submissionStateOperation() {
     });
 }
 
+type NetworkState = { hasStarted: boolean; port?: number };
+
+/** The network listener, noting that its start hook ran. */
+function observedNetworkListener(options: { freePort: boolean }) {
+    const listener: NetworkListenerComponent = createNetworkListenerComponent({ freePort: options.freePort });
+    const state = (): NetworkState => {
+        const address = listener.address();
+        return { hasStarted, ...(address && { port: address.port }) };
+    };
+    let hasStarted = false;
+    const component: NetworkListenerComponent = {
+        ...listener,
+        async start(ctx) {
+            await listener.start?.(ctx);
+            hasStarted = true;
+        },
+    };
+    return { component, state };
+}
+
+function networkStateOperation(state: () => NetworkState) {
+    return defineOperation<ServiceContext, Record<string, never>, NetworkState>({
+        name: NETWORK_STATE_OPERATION,
+        kind: "read",
+        parse: (raw) => raw as Record<string, never>,
+        run: async () => state(),
+    });
+}
+
+const NETWORK_SECTION_PATTERN = /^\[network\][^\n]*\n(?:(?!\[)[^\n]*\n?)*/m;
+
+/** Rewrites the `[network]` section of `config.toml`, so a restart on the same directories never repeats it. */
+async function writeNetworkSection(configFile: string, port: number | undefined): Promise<void> {
+    const existing = await readFile(configFile, "utf8").catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return "";
+        throw error;
+    });
+    const others = existing.replace(NETWORK_SECTION_PATTERN, "");
+    const section = port === undefined ? "" : `[network]\naddress = "${LOOPBACK_ADDRESS}"\nport = ${port}\n`;
+    await writeFile(configFile, `${others}${section}`);
+}
+
 function errorFields(error: unknown): { code: ServiceErrorCode; message: string } {
     if (error instanceof ServiceError) return { code: error.code, message: error.message };
     return { code: "internal", message: error instanceof Error ? error.message : String(error) };
@@ -417,10 +538,12 @@ function parseFlags(args: readonly string[]) {
 
 async function main(): Promise<void> {
     const switches = JSON.parse(process.argv[2] ?? "{}") as Switches;
+    const flags = parseFlags(process.argv.slice(3));
     const send = process.send?.bind(process);
     if (!send) throw new Error("daemon_child.ts must be started with an IPC channel");
 
     const runGate = Promise.withResolvers<void>();
+    const isGated = GATED_ANSWERS[switches.script ?? "echo"];
     const modelRequests: { firstUserText: string; phase: string }[] = [];
     let currentPhase: () => string = () => "none";
     const fake = switches.realModels
@@ -432,12 +555,19 @@ async function main(): Promise<void> {
                       firstUserText: transcript.find((turn) => turn.role === "user")?.text ?? "",
                       phase: currentPhase(),
                   }),
-              ...(switches.script === "gated" && { gate: runGate.promise }),
+              ...(isGated && { gate: runGate.promise, isGated }),
               ...(switches.script === "streaming-gated" && { streamGate: runGate.promise }),
           });
     const fakeModelId = fake ? `${fake.getModel().provider}/${fake.getModel().id}` : undefined;
     const storageSwitch: StorageSwitch = { isFailing: false };
     const hold = Promise.withResolvers<void>();
+    const network = switches.networkListener
+        ? observedNetworkListener({ freePort: switches.fixedPort === undefined })
+        : undefined;
+    if (network) {
+        const configured = switches.omitNetworkSection ? undefined : (switches.fixedPort ?? UNUSED_CONFIGURED_PORT);
+        await writeNetworkSection(join(flags.configDir ?? "", "config.toml"), configured);
+    }
 
     if (fake) await writeFakeModelDefault(fake);
     const logger = createLogger({ verbose: false });
@@ -455,11 +585,11 @@ async function main(): Promise<void> {
         ...(switches.deskCrashAt !== undefined && { afterCreate: killingDeskAt(switches.deskCrashAt) }),
     });
     const daemon = runDaemon({
-        flags: parseFlags(process.argv.slice(3)),
+        flags,
         env: process.env,
         homeDir: process.env.HOME ?? "",
         logger,
-        sections: agents.sections,
+        sections: [...agents.sections, networkSection],
         // The jobs and desk components and the local socket follow the agents component, as in `src/cli/bob.ts`.
         components: [
             // First, so its hook runs in the tick that resumes the host, before any model request can start.
@@ -473,6 +603,7 @@ async function main(): Promise<void> {
             jobs.component,
             desk.component,
             createLocalSocketComponent(),
+            ...(network ? [network.component] : []),
             ...createComponents(switches, hold.promise),
         ],
         operations: [
@@ -485,6 +616,7 @@ async function main(): Promise<void> {
             modelRequestsOperation(modelRequests),
             waitingOperation(),
             submissionStateOperation(),
+            networkStateOperation(() => network?.state() ?? { hasStarted: false }),
             ...createTestOperations({
                 storageSwitch,
                 modelFor: (ctx) => modelFor(ctx, fakeModelId, switches.model),
