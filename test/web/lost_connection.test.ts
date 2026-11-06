@@ -109,6 +109,22 @@ async function openBlockedJobWithAnswer(page: Page, rig: Rig, answer: string): P
     return { job, lead };
 }
 
+/** Reads an instance feed of the daemon from the test, to see how the daemon ends it. */
+async function watchInstanceFeed(port: number): Promise<{ text(): string; whenClosed: Promise<void> }> {
+    const response = await fetch(`http://127.0.0.1:${port}/feed?scope=instance`);
+    if (response.body === null) throw new Error("The feed answered with no body");
+    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+    let received = "";
+    const whenClosed = (async () => {
+        try {
+            for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) received += chunk.value;
+        } catch {
+            // A killed daemon resets the connection; what arrived before is all there is.
+        }
+    })();
+    return { text: () => received, whenClosed };
+}
+
 async function expectKeptAndOffline(t: TestContext, page: Page, answer: string) {
     await waitForBanner(page, true);
     await waitForSendEnabled(page, false);
@@ -155,7 +171,11 @@ describe("a Job page that loses its connection, in chrome", () => {
         const page = await browser.newPage();
         const { lead } = await openBlockedJobWithAnswer(page, rig, "jade-answer");
 
+        const feed = await watchInstanceFeed(rig.port);
+
         await rig.stop("terminate");
+        await feed.whenClosed;
+        t.assert.match(feed.text(), /event: end\ndata: \{"reason":"stopped"\}/);
         await expectKeptAndOffline(t, page, "jade-answer");
 
         await rig.start();
