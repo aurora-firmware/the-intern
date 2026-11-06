@@ -147,7 +147,7 @@ describe("checkEdit", () => {
 describe("turn-end rule", () => {
     it("blocks for an empty definition of done", () => {
         for (const isReminderSpent of [false, true]) {
-            assert.deepEqual(turnEndDecision({ definitionOfDone: "  ", isReminderSpent }), {
+            assert.deepEqual(turnEndDecision({ definitionOfDone: "  ", isReminderSpent, isStopped: false }), {
                 kind: "block",
                 reason: "no definition of done",
             });
@@ -155,11 +155,22 @@ describe("turn-end rule", () => {
     });
 
     it("reminds once, then blocks", () => {
-        assert.deepEqual(turnEndDecision({ definitionOfDone: "d", isReminderSpent: false }), { kind: "remind" });
-        assert.deepEqual(turnEndDecision({ definitionOfDone: "d", isReminderSpent: true }), {
+        assert.deepEqual(turnEndDecision({ definitionOfDone: "d", isReminderSpent: false, isStopped: false }), { kind: "remind" });
+        assert.deepEqual(turnEndDecision({ definitionOfDone: "d", isReminderSpent: true, isStopped: false }), {
             kind: "block",
             reason: "the lead stopped without completing or blocking",
         });
+    });
+
+    it("blocks as stopped by a team member whatever the definition of done and the reminder hold", () => {
+        for (const definitionOfDone of ["d", "  "]) {
+            for (const isReminderSpent of [false, true]) {
+                assert.deepEqual(turnEndDecision({ definitionOfDone, isReminderSpent, isStopped: true }), {
+                    kind: "block",
+                    reason: "stopped by a team member",
+                });
+            }
+        }
     });
 
     it("derives request ids", () => {
