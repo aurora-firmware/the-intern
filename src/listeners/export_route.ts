@@ -38,8 +38,17 @@ function isExportRequest(req: IncomingMessage): boolean {
     return new URL(req.url ?? "/", "http://front.invalid").pathname === EXPORT_PATH;
 }
 
-function sendError(res: ServerResponse, error: unknown): void {
-    const known = error instanceof ServiceError ? error : new ServiceError("internal", "The export could not be made");
+function describeError(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
+/** A refusal from the catalogue goes out as it is; any other failure is logged with its cause, since the catalogue never saw it. */
+function sendError(res: ServerResponse, error: unknown, logger: Logger): void {
+    if (!(error instanceof ServiceError)) logger.error("export failed", { error: describeError(error) });
+    const known =
+        error instanceof ServiceError
+            ? error
+            : new ServiceError("internal", "The export could not be made; the daemon's log names the cause");
     const text = JSON.stringify({ error: { code: known.code, message: known.message } });
     res.writeHead(STATUS_BY_CODE[known.code], {
         "content-type": "application/json; charset=utf-8",
@@ -96,9 +105,11 @@ export function createExportRoute(options: ExportRouteOptions): Fallback {
                 "content-length": copy.size,
             });
             // A failure after the first byte destroys the response, which closes the connection short of its length.
-            pipeline(file.createReadStream(), res, () => {});
+            pipeline(file.createReadStream(), res, (failure) => {
+                if (failure) options.logger.error("export download cut short", { error: describeError(failure) });
+            });
         } catch (error) {
-            sendError(res, error);
+            sendError(res, error, options.logger);
         }
         return true;
     };
