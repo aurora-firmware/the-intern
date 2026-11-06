@@ -30,7 +30,8 @@ const READY_POLL_TIMEOUT_MS = 30_000;
  * calls `releaseRuns()`, then sets a definition of done and completes the job.
  * `invoke-many`: a lead's first answer is a parked invoke of 8 `gp` agents, whose answers wait until the test calls
  * `releaseRuns()`.
- * `long-output`: a lead's first answer calls a test tool whose result is 1 MiB of text.
+ * `long-output`: a lead's first answer, and that of any input after its old result is compacted away, calls a test tool
+ * whose result is 1 MiB of text; an input starting `text only: ` and a compaction summary request are answered with text.
  * `desk-create-job`: an input `create job <text>` makes the answering agent call `create_job` with that text.
  * All of the others answer anything else with an echo.
  */
