@@ -17,6 +17,7 @@ import {
     type EntriesRead,
     heldNotice,
     mergeEntries,
+    seatRole,
 } from "../model/activity.ts";
 
 /** What a conversation's feed state says: whether a run is going on, and the answer being written. */
@@ -102,6 +103,16 @@ const toolCall = (part: Part) =>
         h(Output, { text: `${part.name ?? "tool"} ${JSON.stringify(part.arguments ?? {})}` }),
     );
 
+type Seating = { role: string; model: string; workspace: string };
+
+/** A seat change names the previous and the new role. A conversation's first seat record has no previous and stays undrawn. */
+const seatBoxes = (entry: ActivityEntry): Box[] => {
+    const { previous, next } = (entry.data ?? {}) as { previous?: Seating | null; next?: Seating };
+    if (previous === null || previous === undefined || next === undefined) return [];
+    const text = `${next.role} on ${next.model} in ${next.workspace}`;
+    return [{ kind: "seat", label: `Seat changed from ${previous.role} to ${next.role}`, body: [h(Output, { text })] }];
+};
+
 /** What an entry draws: one box per message of a tool result, one for the other kinds, none for the rest. */
 const boxesOf = (entry: ActivityEntry): Box[] => {
     const messages = messagesOf(entry.data);
@@ -138,6 +149,12 @@ const boxesOf = (entry: ActivityEntry): Box[] => {
             const text = heldNotice(entry) ?? (typeof content === "string" ? content : undefined);
             return text === undefined ? [] : [{ kind: "steer", label: "Input", body: [h(Output, { text })] }];
         }
+        case "intern.seat":
+            return seatBoxes(entry);
+        case "pi.compaction":
+            return [{ kind: "compaction", label: "Compacted", body: [] }];
+        case "pi.reset":
+            return [{ kind: "reset", label: "Reset", body: [] }];
         default:
             return [];
     }
@@ -171,6 +188,7 @@ export const ConversationActivity = ({ feed, conversationId, role, controls }: S
     const [state, setState] = useState<FeedState>({ busy: false, live: null });
     const [failure, setFailure] = useState<string | undefined>();
     const known = useRef<ActivityEntry[]>([]);
+    const wasBusy = useRef(false);
 
     useEffect(() => {
         if (!feed) return;
@@ -188,11 +206,19 @@ export const ConversationActivity = ({ feed, conversationId, role, controls }: S
             if (event.type === "conversation-snapshot" && event.conversationId === conversationId) {
                 const snapshot = event.snapshot as ActivitySnapshot & FeedState;
                 setState({ busy: snapshot.busy, live: snapshot.live });
+                wasBusy.current = snapshot.busy;
                 catchUp(known.current, snapshot, readPage).then(merge, fail);
             } else if (event.type === "conversation-delta" && event.conversationId === conversationId) {
                 const delta = event.delta as Delta;
                 if (delta.view !== undefined) setState({ busy: delta.view.busy, live: delta.view.live });
                 merge(delta.entries ?? []);
+                // A compaction is listed as live work until it ends, and the entry it adds comes in no delta, so the
+                // end of work reads the newest entries again.
+                if (delta.view !== undefined) {
+                    const hasEnded = wasBusy.current && !delta.view.busy;
+                    wasBusy.current = delta.view.busy;
+                    if (hasEnded) readPage(FIRST_PAGE).then((page) => merge(page.entries), fail);
+                }
             }
         });
         // The page asked the worker to follow before it drew this section, so what is read now meets the stream by id.
@@ -207,7 +233,7 @@ export const ConversationActivity = ({ feed, conversationId, role, controls }: S
     return h(
         "details",
         { class: "activity", open: true, "data-conversation": conversationId },
-        h("summary", null, role),
+        h("summary", null, seatRole(entries) ?? role),
         failure !== undefined ? h("div", { class: "error", role: "alert" }, failure) : null,
         h("ul", { style: LIST_STYLE }, ...entries.map((entry) => h(EntryItems, { entry, key: entry.id }))),
         answer !== "" ? h("p", { class: "activity-live", style: TEXT_STYLE }, answer) : null,

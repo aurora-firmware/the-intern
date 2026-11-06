@@ -115,7 +115,7 @@ describe("the Job page's live activity in chrome", () => {
                 hasText: `job ${prompt}`,
             });
             t.assert.equal(await invoked.count(), 1);
-            t.assert.equal(await invoked.locator("summary").textContent(), "gp");
+            t.assert.equal(await invoked.locator("> summary").textContent(), "gp");
         }
         t.assert.equal(await sectionOf(page, lead).locator("summary").first().textContent(), "bob");
         t.assert.equal(await page.evaluate(() => "notReloaded" in globalThis), true);

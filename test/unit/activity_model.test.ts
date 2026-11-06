@@ -9,6 +9,7 @@ import {
     type EntriesRead,
     heldNotice,
     mergeEntries,
+    seatRole,
 } from "../../web/ui/model/activity.ts";
 
 const entry = (id: number, extra: Partial<ActivityEntry> = {}): ActivityEntry => ({
@@ -148,5 +149,22 @@ describe("heldNotice", () => {
 
     it("gives no notice for another kind of entry", () => {
         assert.equal(heldNotice(entry(5)), undefined);
+    });
+});
+
+describe("seatRole", () => {
+    const seatEntry = (id: number, role: string): ActivityEntry =>
+        entry(id, { kind: "intern.seat", data: { previous: null, next: { role } } });
+
+    it("gives nothing when no entry is a seat record", () => {
+        assert.equal(seatRole([entry(1), entry(2)]), undefined);
+    });
+
+    it("gives the role of the only seat record", () => {
+        assert.equal(seatRole([entry(1), seatEntry(2, "gp")]), "gp");
+    });
+
+    it("gives the role of the newest seat record, comparing ids as numbers", () => {
+        assert.equal(seatRole([seatEntry(9, "gp"), seatEntry(10, "bob"), seatEntry(2, "old")]), "bob");
     });
 });
