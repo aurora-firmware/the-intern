@@ -54,16 +54,18 @@ It needs a second computer on the same network as the machine that runs the daem
      --runtime-dir "$PWD/.tmp/dev-lan/runtime"
    ```
 
-4. On the other computer, open `http://192.168.1.20:8080/ui/` in a browser. Until the web interface is released, the
-   page reads "The web interface comes later."
-5. On the other computer, call `daemon.status`:
+4. On the other computer, open `http://192.168.1.20:8080/ui/` in a browser. The Board opens; the
+   [web interface chapter](../manual/web_interface.md) describes the pages.
+5. On the other computer, use the pages, and create a job on the Front desk page.
+6. Read the job's origin on its Job page, and with `bob jobs get <number>` on the service's machine.
+7. On the other computer, call `daemon.status`:
 
    ```
    curl -X POST -H 'Content-Type: application/json' http://192.168.1.20:8080/operations/daemon.status
    ```
 
    The answer is `{"result":{"phase":"ready",…}}`.
-6. Stop the daemon with Ctrl-C.
+8. Stop the daemon with Ctrl-C.
 
 The network listener has no login and no encryption (S-003). Run this check only on a network you trust.
 
