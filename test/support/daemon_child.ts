@@ -110,6 +110,10 @@ function invokeAndCompleteReply(transcript: FakeTranscript): FakeReply {
 const BLOCK_JOB_NAME = "block_job";
 const LONG_OUTPUT_CALL = { name: "bash", arguments: { command: "print the long output" } };
 const LONG_OUTPUT_TEXT = "0123456789abcdef".repeat(LONG_OUTPUT_LENGTH / 16);
+// pi-durable's compaction summary request wraps the conversation in this tag (pi-durable 1.4.0).
+const SUMMARY_REQUEST_TAG = "<conversation>";
+/** An input starting with this text is answered with text and no tool call by the lead of `long-output`. */
+const TEXT_ONLY_INPUT_PREFIX = "text only: ";
 const DESK_CREATE_JOB_PREFIX = "create job ";
 const INVOKE_MANY_CALL = {
     name: "invoke",
@@ -123,6 +127,18 @@ const INVOKE_MANY_CALL = {
         then: "parked",
     },
 };
+
+/**
+ * The lead of `long-output` calls the tool unless the transcript already holds a result, the input is marked for a
+ * text answer, or the request is a compaction summary, which only text can answer. Compaction drops an old result, so
+ * every unmarked input after one gets a new long result.
+ */
+function longOutputReply(transcript: FakeTranscript): FakeReply {
+    const lastText = lastUserText(transcript);
+    if (lastText.includes(SUMMARY_REQUEST_TAG)) return "summary";
+    if (lastText.startsWith(TEXT_ONLY_INPUT_PREFIX) || hasToolResult(transcript)) return "done";
+    return { toolCall: LONG_OUTPUT_CALL };
+}
 
 function firstUserText(transcript: FakeTranscript): string {
     return transcript.find((turn) => turn.role === "user")?.text ?? "";
@@ -195,7 +211,7 @@ function replyFor(script: Script, transcript: FakeTranscript): FakeReply {
     }
     if (script === "block-with-reason") return blockWithReasonReply(transcript);
     if (script === "invoke-many") return invokeManyReply(transcript);
-    if (script === "long-output") return hasToolResult(transcript) ? "done" : { toolCall: LONG_OUTPUT_CALL };
+    if (script === "long-output") return longOutputReply(transcript);
     if (script === "desk-create-job") return deskCreateJobReply(transcript);
     if (script !== "bash-sleep") return echo;
     if (hasToolResult(transcript)) return "slept";
