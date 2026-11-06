@@ -155,7 +155,9 @@ describe("turn-end rule", () => {
     });
 
     it("reminds once, then blocks", () => {
-        assert.deepEqual(turnEndDecision({ definitionOfDone: "d", isReminderSpent: false, isStopped: false }), { kind: "remind" });
+        assert.deepEqual(turnEndDecision({ definitionOfDone: "d", isReminderSpent: false, isStopped: false }), {
+            kind: "remind",
+        });
         assert.deepEqual(turnEndDecision({ definitionOfDone: "d", isReminderSpent: true, isStopped: false }), {
             kind: "block",
             reason: "the lead stopped without completing or blocking",
