@@ -1,7 +1,7 @@
 ---
 id: S-007
 title: Schedules
-version: '0.1'
+version: '0.2'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-07'
 author: planner
@@ -190,7 +190,7 @@ The Job page of a scheduled run shows the entry, the fire time and whether it wa
 | Tool | Offered to | Does |
 |---|---|---|
 | read schedule runs | every agent of a job, and the front desk | returns an entry's run history as `schedules.runs` does (REQ-010) |
-| list, create, change, remove and run schedules | the front desk only | act as the matching operations; a call repeated after a crash acts once, keyed by its tool call id (REQ-013) |
+| list, create, change, remove and run schedules | the front desk only | act as the matching operations; a call with the same tool call id acts once (REQ-013) |
 
 Tool names and parameter layouts are not contract; the tasks fix them, as in S-004.
 
@@ -214,7 +214,7 @@ Team member adds an entry: command, page, front desk or hand edit               
 Daemon ready → fires begin                                                                   REQ-007
 Due time arrives, in local time                                                              REQ-005
   (clocks repeat the time → once; time doesn't exist that day → no fire)                     REQ-005
-  (daemon stopped or machine off or asleep → no fire, no record)                             REQ-007
+  (daemon stopped, machine off or a long sleep → no fire, no record)                          REQ-007
   (entry has an open scheduled run → skipped fire naming the scheduled run)                  REQ-006
   (workspace folder missing, or job refused → skipped fire with the reason)                  REQ-006
 Job S-n created with a fresh lead conversation and the entry's seat values                   REQ-004
@@ -234,7 +234,8 @@ naming the entry, the key and the reason:
 
 - `name`: required and unique in the instance, 1 to 64 characters of letters, digits and hyphens, starting with a letter
   or digit. A name is compared case-sensitively and can't be changed.
-- `cron`: required, a valid cron expression of five fields (REQ-005).
+- `cron`: required, a valid cron expression of five fields that can come due (REQ-005). One that can never be due, such
+  as `0 0 31 2 *`, is not valid.
 - `request`: required, non-empty text.
 - `role`: optional, an existing role. Missing means `bob` (S-001 REQ-012).
 - `model`, `thinking_level`: optional, as `jobs.create` accepts them (S-004). Missing means the role's default.
@@ -248,7 +249,8 @@ checks only that the thinking level is a known one (REQ-006 covers a model that 
 #### AC-001.1 — Refused values
 
 - **Given:** a running daemon with no entries
-- **When:** a team member calls `schedules.create` with, in turn, a name with a space, `cron = "not cron"`, an empty
+- **When:** a team member calls `schedules.create` with, in turn, a name with a space, `cron = "not cron"`, `cron = "0 0
+  31 2 *"`, an empty
   request, an unknown role, an unregistered workspace, an unknown model and an invalid thinking level
 - **Then:** each call is refused `invalid_input` naming the key, the file is unchanged, and no entry exists
 
@@ -313,7 +315,8 @@ leave its jobs and history in place, stop its fires and leave any running job to
 that has history SHALL continue that history, and the open scheduled run rule of REQ-006 counts those earlier scheduled
 runs.
 
-Removing a role that an entry names SHALL be refused (S-001 REQ-003), and unregistering a workspace that an entry names
+Removing a role that an entry names, or whose default workspace an entry names, SHALL be refused (S-001 REQ-003), and
+unregistering a workspace that an entry names
 SHALL be refused, each naming the entry.
 
 #### AC-003.1 — A change applies at once and survives a restart
@@ -343,9 +346,10 @@ SHALL be refused, each naming the entry.
 
 #### AC-003.4 — An entry holds what it names
 
-- **Given:** an entry naming the team role `ops` and the workspace `/srv/infra`
-- **When:** a team member removes `ops` and unregisters `/srv/infra`
-- **Then:** both are refused, each naming the entry, and nothing changes
+- **Given:** an entry naming the team role `ops` and the workspace `/srv/infra`, and an entry naming the default
+  workspace of the team role `docs`
+- **When:** a team member removes `ops`, unregisters `/srv/infra` and removes `docs`
+- **Then:** all three are refused, each naming the entry, and nothing changes
 
 **Verification:** test — `test/service/schedule_operations.test.ts`.
 
@@ -453,8 +457,9 @@ and the creation of the job SHALL happen as one step, so two starts of one entry
 ### REQ-007 — Missed due times
 
 Fires SHALL begin once the daemon is ready (S-002 REQ-003). A due time that passes while the daemon is stopped or
-starting, the machine is off or the machine is asleep SHALL create no job and no record, however short the gap. The
-entry's next fire SHALL be its next due time. A due time that passed more than one minute ago SHALL NOT fire.
+starting or the machine is off SHALL create no job and no record, however short the gap. The entry's next fire SHALL be
+its next due time. A due time that passed more than one minute ago SHALL NOT fire, which also covers a machine asleep
+for more than a minute; a due time passed in a shorter sleep fires when the machine wakes.
 
 #### AC-007.1 — No catching up
 
@@ -623,7 +628,9 @@ fire time and whether it was run on demand.
 
 The front desk SHALL be offered tools to list, create, change, remove and run schedule entries and to read their run
 history. Each SHALL act as the matching service operation, a refusal SHALL return an error result and the agent's run
-goes on, and a call repeated after a crash SHALL act once. These tools SHALL be offered in no other conversation, apart
+goes on, and a call with the same tool call id SHALL act once. An interrupted call settles as an error result, and a
+new call from the model is a new call under the operation's rules. These tools SHALL be offered in no other
+conversation, apart
 from read schedule runs (REQ-010). A scheduled run the front desk starts SHALL have the letter `S` and record in its
 origin the way in of the team member's input and the front desk, with no address.
 
@@ -782,10 +789,10 @@ This spec adds no other setting. One minute (REQ-015, REQ-007) is built in.
 
 ## Open Questions
 
-- **Scheduling library.** Owner: Architect. The feature review from before S-000 suggested `croner`; this is a
-  preference to weigh, not a choice this spec makes. Decided in Feature Architecture.
+None. Feature Architecture settled the scheduling library question (`docs/development/tech_stack.md`, Schedules).
 
 ## Amendment Log
 
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
+| 2026-11-07 | v0.2. REQ-007: a sleep shorter than a minute isn't detected, so a due time passed in one fires on waking. REQ-013 and Interfaces: an interrupted tool call settles as an error and isn't repeated, and a same-id call acts once. REQ-001, AC-001.1: a cron that can never be due is refused. REQ-003, AC-003.4: removing a role is refused when an entry names its default workspace, because the next start would otherwise stop. Open Questions closed. | Feature Architecture spec findings, 2026-11-07. No approved journey changes. | S-007's tasks |
