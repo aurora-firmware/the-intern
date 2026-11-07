@@ -63,8 +63,10 @@ through `conversations.entries`.
    added, in order, often none. Each entry reads as `conversations.entries` shows it: by its own data, and an assistant
    entry with the seat that produced it. `view` keeps the path `bob chat` reads. `ops` leaves the delta.
 3. **New entries come from ids, not from `ops`.** Entry ids only grow. `watchConversation` keeps the newest id it has
-   passed on, walks the frame's `view.entries` back from its end to that id, and maps only those. A reset or a
-   compaction replaces the active window, and its own entry reaches clients as a new entry. Clients treat a
+   passed on, takes every entry of the frame's `view.entries` with a higher id, in id order, and maps only those. It
+   reads the whole view, because a compaction puts its entry before the kept entries, whose ids are lower, so a new
+   entry isn't always at the end. At attachment the newest id is the highest id in the view, for the same reason. A
+   reset or a compaction replaces the active window, and its own entry reaches clients as a new entry. Clients treat a
    conversation's entries as an append-only list, as `conversations.entries` does (S-002 AC-012.4).
 4. **The seat on a delta's entries.** The subscription takes the seat from the latest seat record in the view at
    attachment and otherwise from the `intern.conversation` document, then moves on with each new seat record.
@@ -77,8 +79,9 @@ through `conversations.entries`.
 
 - A delta's size follows from the entries it adds, and from the partial answer being written, whatever the length of the
   conversation. AC-019.3 holds by construction.
-- A delta no longer costs the daemon work per frame in proportion to the conversation's length, and a slow subscriber's
-  1,000 pending deltas stay small.
+- A delta maps only the entries it adds, and a slow subscriber's 1,000 pending deltas stay small. The daemon still
+  compares the id of each entry of the active view once per frame and subscriber, so that one comparison grows with the
+  active view. It sends nothing more, so REQ-019 and AC-019.3 aren't affected.
 - A snapshot costs the same for any conversation, so reopening a stream and recovering from `lagging` cost little.
 - `bob chat`'s and `bob jobs follow`'s text output doesn't change, and neither needs a code change.
 
@@ -128,3 +131,4 @@ mean two code paths for one fact.
 
 | Date | Change | Reason |
 |---|---|---|
+| 2026-11-07 | Decision 3: new entries are every entry of the view with a higher id, in id order, not a walk back from the end, and the newest id at attachment is the highest in the view. Consequences, Positive: a delta maps only what it adds, and the id comparison still reads the active view once per frame and subscriber. | B-024: after a compaction the view holds the compaction entry before kept entries with lower ids, so the walk back found nothing and the delta left the entry out. The fix in `src/host/host_observation.ts` (`createEntryTracker`) is right, and the decision text was stale. Found by the spec-truth reconciliation of S-006. |
