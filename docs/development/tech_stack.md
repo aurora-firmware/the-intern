@@ -5,7 +5,8 @@ This file records the answers to the "Decisions needed" of the development infra
 one section per component, and each answer sits under the question it settles. A question that is still open says so
 and names where it is decided.
 
-Control endpoint isn't one of those components: it records technology choices moved out of S-003.
+Control endpoint, Web interface and Schedules aren't among those components: they record the technology choices of
+S-003, S-006 and S-007.
 
 ## Development environment
 
@@ -169,6 +170,29 @@ License.
 
 **How do tabs share the browser's connections?**
 One module `SharedWorker` holds at most two feed streams per browser profile (ADR-007).
+
+## Schedules
+
+This answer settles S-007's Open Question. The design is in [architecture.md](architecture.md), Schedules.
+
+**Which library works out due times?** None. `src/schedules/schedule_time.ts` is a small module of our own, with no new
+dependency. `croner` was the feature review's preference, and version 11.0.0 was measured against REQ-005 on 2026-11-07:
+
+| Rule | `croner` 11.0.0, `TZ=Europe/Madrid` | REQ-005 |
+|---|---|---|
+| `30 2 * * *` on 28 March 2027, when 02:30 doesn't exist | Runs at 03:00 | Doesn't fire |
+| `*/20 2 * * *` on 31 October 2027, when 02:00 to 02:59 repeat | Runs each time in both passes, 6 runs | Each time once, 3 runs |
+| `0 0 L * *`, `0 0 * * MON`, `@daily`, and six and seven fields | Accepts them | Five fields of `*`, numbers, lists, ranges and steps |
+| Both day fields restricted, 0 and 7 as Sunday | Either day is due, 7 is Sunday | The same |
+
+So `croner` would need a matcher of our own to catch the moved and repeated runs and a parser of our own to refuse the
+extra forms. The scheduler's tick reads an injected clock and applies REQ-007's one-minute rule itself, so `croner`'s
+timer wouldn't be used either. That leaves it nothing to do, and `coding_guidelines.md` adds a dependency only when it
+removes real code. JavaScript's local-time rule gives both clock change rules directly: `new Date(y, m, d, h, min)`
+moves a time that doesn't exist forward, so reading it back shows it, and takes the earlier instant of a repeated one.
+This was measured on Node 24.22.0 in Madrid, Lord Howe and Havana.
+
+**Where does the local time zone come from?** The daemon process's own, through `Date`. S-007 has no time zone setting.
 
 ## Local runs and diagnostics
 

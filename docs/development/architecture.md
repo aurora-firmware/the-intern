@@ -17,7 +17,7 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
 
 ```
  ways in: command line (local) · web interface (network) · email
-        │                                job sources: schedules, triggers
+        │                                job sources: schedules
         ▼                                          │
    listeners ──────────────┐                       │
                            ▼                       ▼
@@ -56,7 +56,7 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   5).
 - **Job origin.** The service layer builds a job's origin from the caller, never from the input: a team member's job
   records a request with the caller's way in, an agent's job a follow-up of its conversation, and only a job source
-  states its own origin (S-002 REQ-012, AC-012.5).
+  states its own origin (S-002 REQ-012, AC-012.5). The scheduler and `schedules.run` are that job source; see Schedules.
 - **Observation feed.** The one source of live data for clients: a snapshot, then deltas. A client that is slow or
   gone never affects an agent run (S-002). A conversation's snapshot and deltas carry its state and the entries each
   commit added, never its whole view, and clients read stored history through `conversations.entries`
@@ -111,7 +111,8 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   owner-only and gives the same handle to `SqliteStorage.open` and, through `hostDatabase(host)`, to the job store, so
   both wait in one transaction queue (`src/host/harness_host.ts`, `openOwnerOnlyDatabase`, `openStorageOnHostDatabase`
   and `narrowToHostDatabase`). The job store never reads pi-durable's tables, and the handle it gets can't close the
-  file. Its schema version lives in the `intern_schema` table, not in the file's `user_version`.
+  file. Its schema version lives in the `intern_schema` table, not in the file's `user_version`. The store also keeps
+  skipped fires and answers the run history (see Schedules).
 - **Startup steps for jobs** (`src/daemon/daemon.ts`, `startUp`). Step 4 opens the host and, before pi-durable opens
   the file, reads the job schema version through `beforeStorageOpen: checkJobSchemaVersion`; a newer version stops
   startup and leaves the file unchanged. It then calls `migrateJobStore`, builds the job store and binds it to the
@@ -138,13 +139,14 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   `worklog.add`, `worklog.list`, `history.list`, `relate`, `unrelate`, `resume`, `complete`, `cancel` and `export`.
   `jobs.startLead` is no longer an operation: `jobs.create` starts the lead in-process
   (`src/service/job_operations.ts`). Every role carries the `intern.jobs` extension (`src/jobs/job_tools_extension.ts`),
-  with the tools `read_job`, `update_job`, `add_worklog`, `create_job` and `relate_jobs` for every agent of the job, and
-  `block_job` and `complete_job` for its lead only. A job's status changes only through the actions in
+  with the tools `read_job` (which may name another job, read-only), `update_job`, `add_worklog`, `create_job`,
+  `relate_jobs` and `read_schedule_runs` for every agent of the job, and `block_job` and `complete_job` for its lead
+  only. A job's status changes only through the actions in
   `src/jobs/job_actions.ts`, and each job write is committed before the pi-durable change it goes with.
 - **Job feed deltas.** The instance scope of the observation feed carries the jobs that aren't Done in its snapshot,
   then the deltas `job_created`, `job_changed`, `job_worklog_added`, `job_status_changed`, `job_related_changed` (with
-  both short numbers, S-004 REQ-015) and `job_done`, published after their job store commit
-  (`src/feed/instance_feed.ts`).
+  both short numbers, S-004 REQ-015), `job_done` and `schedule_fire_skipped` (S-007 Interfaces), published after their
+  job store commit (`src/feed/instance_feed.ts`).
 - **Export and import.** `jobs.export` copies the whole database to a new owner-only file with SQLite's online backup
   on the daemon's connection, while work goes on (`src/host/database_copy.ts`, `backupDatabase`). `importDatabase` in
   `src/host/database_import.ts` places an exported file as the database of a stopped instance, under the single-owner
@@ -172,8 +174,9 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   usage errors and the notice for a reserved group, and otherwise runs the command and returns its exit code. The table
   lists `CommandSpec` entries (group, verb, positionals, options, `isData`, `callsService`, `run`), and the parser adds
   `--help` to each, `--json` to a data command and `--runtime-dir` to a command that calls the service. The groups are
-  `jobs`, `conversations`, `roles`, `workspaces` and `models` (`jobs_commands.ts`, `conversations_commands.ts`,
-  `roles_commands.ts`), and the top-level commands are `serve`, `status`, `usage`, `export`, `import`, `follow` and
+  `jobs`, `conversations`, `roles`, `workspaces`, `models` and `schedules` (`jobs_commands.ts`,
+  `conversations_commands.ts`, `roles_commands.ts`, `schedules_commands.ts`), and the top-level commands are `serve`,
+  `status`, `usage`, `export`, `import`, `follow` and
   `chat` (`instance_commands.ts`, `follow_commands.ts`, `chat_command.ts`, `chat_terminal.ts`). Text output is built in
   `job_text.ts`, `conversation_text.ts` and `feed_text.ts`. Data an agent or a team member wrote goes through
   `terminal_text.ts` first (`flat`, `block` and `continued`), which removes control sequences and line breaks that would
@@ -213,7 +216,7 @@ A requirement number with no spec named in this section is S-001's.
 │ web, email)      │             │   ├─ invokes #m      [role: gp]    │         │  lead), gp, desk,│
 ├──────────────────┤             │   │    └─ invokes …  [role: any]   │         │  team roles      │
 │ schedule fire,   │──new job───►│   ├─ steerable or parked           │         │                  │
-│ trigger          │             │   └─ handoff / reset: same conv,   │         │ each: instr.,    │
+│ run on demand    │             │   └─ handoff / reset: same conv,   │         │ each: instr.,    │
 ├──────────────────┤             │      next agent, context mode      │         │  tools, skills;  │
 │ follow-up job    │──new job───►│ job B: lead conversation [gp]      │         │  default model,  │
 │ (from an agent)  │             │ front desk [desk], no job          │         │  thinking,       │
@@ -236,7 +239,7 @@ A requirement number with no spec named in this section is S-001's.
 | Role prompt | Builds what the model sees: the-intern's preamble, role instructions, role skills, workspace instructions (`AGENTS.md`/`CLAUDE.md`) and workspace skills | Stays byte-stable while the seat and the role are unchanged (AC-005.4) |
 | Agent coordination | Agent-callable handoff, agent invocation and steer capabilities; parking and continuing invoking conversations; the report-back clean-up step; the depth cap and the worker threads | Every role is offered the same coordination capabilities in a job's conversations, and none in the front desk (REQ-022). Consumes seating, conversation reset, compaction and fork, conversation creation, the inbox of the target conversation, and each conversation's own `intern.conversation` document (below) |
 | Entry routing | Starts a job's lead conversation for each job source with the role it names (`bob` when it names none) and records its origin; at startup, makes sure the front desk exists and records its conversation id (REQ-021); serves team members' requests to reset conversations | Holds no channel knowledge beyond choosing the role and recording the origin. Called by the Jobs component when a job is created, and by startup for the front desk |
-| Front-desk tools | The tools offered only in the front desk: the job tools that name a job, the state reads and the steering of a job's conversations (REQ-022) | Calls the job operations (S-004) and the same paths as `conversations.submit` and `conversations.abort`, recording the jobs and the input it passes on as from the front desk (REQ-023) |
+| Front-desk tools | The tools offered only in the front desk: the job tools that name a job, the state reads, the steering of a job's conversations and the schedule tools (REQ-022) | Calls the job operations (S-004), the `schedules.*` operations (S-007) and the same paths as `conversations.submit` and `conversations.abort`, recording the jobs and the input it passes on as from the front desk (REQ-023) |
 | Monitoring | Lists conversations with their job, lead flag, front-desk mark, seats, origins, status, invocation links and live transcripts | Read-only. Abort, reset and steer go through other components |
 
 **The conversation's own document.** Each conversation's `intern.conversation` document holds the conversation's parked
@@ -258,7 +261,7 @@ small.
 
 ```
  clients (S-003 listeners)        job sources                agents (tools)
- bob CLI (local socket) ·         schedules, triggers,        coordination tools (S-001)
+ bob CLI (local socket) ·         schedules,                  coordination tools (S-001)
  web interface (network)          email                             │
         │ read / control ops            │ control ops               │ control ops
         ▼                               ▼                           ▼
@@ -493,11 +496,305 @@ Chrome and Firefox are the required browsers; Edge is good to have (S-006 REQ-02
 | Firefox as well | 21 tests, in nine groups: the page shell (`shell.test.ts`, 5), the connection banner (`connection_banner.test.ts`, 5), moving between pages (`navigation.test.ts`, 2), the shared worker (`feed_worker.test.ts`, 2), long activity (`activity_scale.test.ts`, 2), timeliness and a full board (`board_scale.test.ts`, 2), the journey (`browsers.test.ts`, 1), many agents (`many_agents.test.ts`, 1) and the host probe (`browser_support.test.ts`, 1). They carry AC-021.1, AC-005.4 and AC-001.2, which depend on the shared worker (ADR-007). Firefox doesn't reach the connection limit with 6 streams, so there AC-005.4 checks the shared worker and not the limit, which only Chrome and Edge test. Long activity and the full board carry AC-018.1 and AC-019.1 to AC-019.3 |
 | Edge as well, where it is installed | The same tests as Firefox. Edge is good to have, not required: its tests are skipped where it isn't installed |
 
+## Schedules
+
+This is how S-007's behaviour is built. A requirement number with no spec named in this section is S-007's. The library
+question is answered in [tech_stack.md](tech_stack.md). The durable parts are already decided: `intern_` tables in
+ADR-001 decision 1, a fire as a job source in ADR-001 decision 4, and the first input in ADR-004 decision 5. Everything
+else here can change inside its module, so this feature adds no ADR.
+
+```
+ bob schedules · Schedules page · front desk tools
+        │ schedules.create, change, remove
+        ▼
+ config store ──► config.toml [[schedule]]
+        │ current entries
+        ▼
+ scheduler (clock, a tick each minute)      schedules.run
+        │ fire                                   │ run on demand
+        └──────────► startScheduledRun ◄─────────┘
+                       │ seat and folder checks
+                       ▼
+                     createJob ──► job store, one transaction: key, open run, number, job ──► lead start
+                       │ refused
+          ┌────────────┴─────────────┐
+          ▼                          ▼
+ fire: skip row, feed delta    run on demand: the refusal
+```
+
+### Modules
+
+| Part | Where | Holds |
+|---|---|---|
+| Pure model | `src/schedules/schedule_model.ts` | The entry's type, the rules of REQ-001 that need no other component, the fire's key |
+| Pure time | `src/schedules/schedule_time.ts` | Reading a cron expression, the next due time, the local time text |
+| Configuration | `src/schedules/schedule_section.ts` | The `schedule` section |
+| Scheduler | `src/schedules/scheduler.ts` | The tick and the clock. It imports no pi package |
+| Component | `src/schedules/schedules_component.ts` | The daemon hooks, the holds on roles and workspaces, the test clock |
+| Operations | `src/service/schedule_operations.ts` | `schedules.*` and `startScheduledRun` |
+| Saved history | `src/jobs/schedule_history.ts`, called by `job_store.ts` | The skip rows and the run history queries |
+| Front desk tools | `src/desk/desk_schedule_tools.ts` | The schedule tools, including the front desk's `read_schedule_runs` |
+| Commands | `src/cli/schedules_commands.ts`, `src/cli/schedule_text.ts` | S-005's conventions, on the client library |
+| Page | `web/ui/pages/schedules.ts`, `web/ui/model/schedules.ts` | The page and its pure model |
+
+`serve.ts` places the component after `desk` and before the listeners, and adds the section to `sections`. The component
+needs the agents component, for the catalog, and the jobs component's options, for `createJob`. The tools reach the
+operations by name through the catalogue, so the jobs and desk components don't import the schedules component.
+
+### Due times
+
+A due time is a whole minute. `nextDueTime(cron, after)` walks calendar dates forward, starting one day before the local
+date of `after`. On each date the month and day fields match, it tries each matching hour and minute in order, builds
+`new Date(y, m, d, h, min)` and reads the local fields back:
+
+- A local time that doesn't exist reads back differently, because JavaScript moves it forward. It's passed over, so it
+  doesn't fire (REQ-005).
+- A repeated local time gives the earlier of its two instants, by the language's rule. So it's due once, and the second
+  pass of the hour holds no due time, whichever minutes the expression names.
+
+This also holds for a change of 30 minutes (Lord Howe) and one at midnight (Havana). The walk reads no clock: the caller
+passes `after`. Its bound is 8 years, the longest gap between two 29 Februaries.
+
+The reading rules are REQ-005's and no more:
+
+- Fields are separated by one or more spaces, and there are exactly five.
+- A field is a comma-separated list. Each item is `*`, a number or a range, and `*` or a range may carry a `/step`. So
+  `5/15` is refused, and `5-59/15` says what it means. A range runs upward.
+- Names, `?`, `L`, `W`, `#` and shortcuts such as `@daily` are refused.
+- Day of week 7 reads as 0.
+- A day field counts as restricted when its values don't cover its whole range. So `*/2` is restricted, and `*/1` and
+  `0-7` aren't. When both day fields are restricted, a match on either is due.
+- An expression whose month and day of month can never meet, with day of week unrestricted, such as `0 0 31 2 *`, has
+  no due time. It's refused as not valid.
+
+Fire times, due times and next due times are text in the machine's local time with its offset:
+`2026-11-08T02:00:00.000+01:00`. A team member reads 02:00 for `0 2 * * *` wherever the browser is, and `Date` parses
+the text to the right instant. The store also keeps each one in UTC for ordering. The zone is the daemon process's own.
+
+### The scheduler
+
+The scheduler wakes at each whole minute of the clock, and holds one value, `checkedUntil`, which starts at the moment
+it starts. A tick at time `T` does this:
+
+1. If the daemon's phase isn't `ready`, it sets `checkedUntil` to `T` and fires nothing.
+2. It takes `from`, the later of `T` minus one minute and the earlier of `checkedUntil` and `T`.
+3. For each entry in `config.current`, it starts a fire for each due time after `from` and up to `T`.
+4. It sets `checkedUntil` to `T`.
+
+| Case | What the rule gives |
+|---|---|
+| Stopped or starting at a due time | The window opens at the start, so nothing earlier fires and nothing is recorded (REQ-007) |
+| Clock jumps from 01:59 to 02:30 | `from` is 02:29, so 02:00 has no job and no skip (AC-007.2) |
+| Clock goes back | Due times pass again. The fire's key returns the existing job, and the skip's key writes nothing (REQ-016) |
+| An entry changed or added at 02:00:20 | `checkedUntil` has passed 02:00, so the new values only reach later due times (REQ-003) |
+| Run on demand | The scheduler holds nothing about it, so the next due time doesn't move (REQ-008) |
+| No keeping up after a stall | A tick later than one minute gives up the older due times (REQ-007, REQ-015) |
+
+Every entry is read at each tick, so a write through the operations applies at once. The tick doesn't wait for its
+fires, so a slow one holds back neither the next tick nor another entry. `stop` ends the wait and waits for the fires in
+flight, and the component stops before the host closes.
+
+### One path for fires and runs on demand
+
+`startScheduledRun(ctx, jobs, entry, { fireTime, onDemand, idempotencyKey })` makes the three checks of REQ-006 and
+REQ-008 in one place:
+
+1. `catalog.seatFor(role ?? bob, overrides)` resolves the seat, and refuses a model that has gone, as `invalid_input`.
+2. It checks that a folder exists at the seat's workspace, and refuses as `invalid_input` naming the folder. Only a
+   missing folder counts; the ownership checks of registering a workspace don't run here.
+3. `createJob` runs, with the caller `{ kind: "job_source", source: "schedule" }`, the entry's request as `text` and the
+   entry's values as the role and overrides.
+
+Its callers differ only in what they do with a refusal. A fire records `busy`, `invalid_input`, `not_found` or
+`conflict` as a skipped fire with the message. `unavailable` and `internal` aren't refusals of the job, so the fire logs
+them and records nothing, and that due time is missed. `schedules.run` passes every refusal to its caller and records
+nothing. A refusal after the job is written is `createJob`'s existing cancel, which gives a cancelled scheduled run
+(S-004 REQ-007).
+
+So the reason a fire names follows that order: when the folder is gone and a run is open, the reason names the folder.
+
+**The fire's identity.** The fire's `idempotencyKey` is `schedule:<entry>:<due time>`, in the unique `idempotency_key`
+column, so the job and its key are one commit (REQ-016). A crash before that commit leaves the due time missed. A crash
+after it leaves the existing pairing of a job and its lead start, which repair rule 1 finishes (S-004 REQ-018; ADR-001
+decision 4).
+
+**The open run check.** `NewJob` gains `schedule: { entry, firedAt }`, which `createJob` takes from the origin.
+`insertIn` works in this order inside its one transaction:
+
+1. It looks up the key, so a repeat returns its original job, even an open one (REQ-008).
+2. When `schedule` is given, it reads for a job of that entry with status `to_do` or `in_progress`. If it finds one, it
+   throws a refusal carrying the short number, before a number is allocated.
+3. It allocates the number and writes the job.
+
+The file has one connection and one transaction queue, so two starts of one entry can't both pass (REQ-006). The refusal
+counts as a refusal in `transact`, not a storage failure. `createJob` maps it to a `busy` `ServiceError` subclass that
+carries the short number, so the fire can write it to the skip. Re-adding a removed name counts earlier runs, because
+the check reads jobs and not entries (REQ-003).
+
+**`schedules.run`.** It reads for its key first, so a repeat returns the original job even if the entry has since gone
+or its folder is missing. It then answers `not_found` for an unknown entry, and calls `startScheduledRun`. Its key is
+stored as `schedules.run:<key>`, so it can't meet a `jobs.create` key. The limit of 200 characters applies to the
+caller's key, before the prefix. A team member or the front desk can call it; any other actor is refused
+`invalid_input`.
+
+### The origin
+
+```
+{ kind: "schedule"; entry; fireTime; onDemand?: { wayIn; observed?; frontDesk? } }
+```
+
+`schedules.run` builds `onDemand` from its caller, as `describeCaller` does for a request: a team member's way in and
+observed details, or the front desk's way in and its conversation id, with no address (REQ-008, REQ-013). The input
+can't state it, because `parseOrigin` is reached only by a job source, so a team member's `jobs.create` naming any
+origin stays refused (S-002 AC-012.5).
+
+- `checkBeforeWrite` refuses overrides only for a follow-up, as S-001 AC-012.3 now reads.
+- `leadOrigin` drops `onDemand`, as it drops a request's observed details, so the conversation's origin stays entry and
+  fire time.
+- The job source is the seat actor in both cases (S-001 AC-012.2), and the job's origin records who asked.
+- `leadStart` stores the overrides when the job is written, so a later change of the entry leaves a running job and its
+  repair as they were (REQ-003).
+
+### Saved data
+
+Job schema version 3 adds, as one migration in `JOB_MIGRATIONS`:
+
+- `intern_jobs.schedule_entry` and `intern_jobs.schedule_fired_at` (UTC), with an index on the two. No backfill: no job
+  source has ever written an `S` job.
+- `intern_schedule_skips (entry, due_at, due_time, reason, open_run)`, with the primary key `(entry, due_at)`. `due_at`
+  is UTC and `due_time` is the local text. `open_run` is a short number or null.
+
+The table sits in the job store's file, so skips survive a restart and travel with `bob export` and `bob import`, and an
+imported older file migrates at its next start (S-004 REQ-017). `recordSkip` inserts and ignores a row that exists, and
+reports a new `JobChange` only when it wrote one.
+
+### Reading schedules
+
+- **`schedules.runs`** reads the newest `limit + 1` of the entry's jobs and of its skips, each from its index, and
+  merges them by UTC time, a run before a skip at the same minute. The cursor holds the time, the kind and the rowid,
+  encoded as the job list's cursor is. The limit rules are the job list's. It answers `not_found` when the entry isn't
+  in the configuration and the first page is empty, so a removed entry with history works.
+- **`jobs.list`** gains the `schedule` condition on `schedule_entry`.
+- **`schedules.list` and `schedules.get`** read the entries from the configuration store and take the next due time from
+  `nextDueTime(cron, clock.now())`, so the test clock applies. `schedules.list` reads each entry's newest job.
+
+### Entries in the file
+
+`[[schedule]]` is a top-level array, so `ConfigSection.serialize` widens to return an array as well as a table. `parse`
+already takes `unknown`, `renderToml` already leaves out a value equal to the default `[]`, and `smol-toml` writes the
+array back as `[[schedule]]` sections. Nothing else in the writer changes, so the atomic owner-only write and the
+fingerprint conflict come as they are (S-002 REQ-022).
+
+The checks fall into two places, because `parse` can't see the catalog:
+
+- **`parse`** applies what needs no other component: the keys, the name, a unique name, the cron expression, a non-empty
+  request, an absolute workspace path and a known thinking level. pi-ai's main entry doesn't export its list of levels,
+  so `schedule_model.ts` holds one, and a unit test checks that every level the registered models report is in it, which
+  catches a pi upgrade that adds one. A failure at startup stops step 1, and `ConfigError` names the file and
+  `schedule.<name>.<key>`, or the entry's position when it has no name (REQ-002).
+- **The component's `ensureWorkspaces` hook** checks that each entry's role exists and its workspace is registered. It
+  runs at step 6, after the agents component, because an entry may name a per-role default workspace and those are
+  ensured there. A failure throws the same `ConfigError`, and nothing has fired by then. Model availability isn't
+  checked at startup (REQ-002).
+
+**Writes.** `ConfigStore` gains `update(section, (current) => next)`, which runs the function inside the store's serial
+queue. Today's callers compute `next` before they queue it, so two creates at once would lose one. The operations use
+`update` to check and write as one step:
+
+- `schedules.create` refuses a taken name `conflict`. It then checks the entry with `catalog.seatFor`, the same call a
+  fire makes, which refuses an unknown role, an unregistered workspace, a model that isn't available and an unsupported
+  thinking level. Each of these is `invalid_input`, naming the entry and the key (AC-001.1), including the catalog's
+  `not_found` for a role. `ConfigChangeRefused` maps as `role_operations.ts` maps it.
+- `schedules.change` does the same on the entry merged with the change. A value absent from the input is left alone, and
+  `null` clears an optional value. So a change to an entry whose model has gone is refused until the model is changed or
+  cleared, as `roles.change` checks a whole role.
+- `schedules.remove` filters the entry out.
+
+`schedules.create` with a key follows `roles.create`: `settingsResultOnce`, with a body that returns an identical
+existing entry, so a repeat after a crash between the file write and the key's record doesn't answer `conflict`.
+
+**Holds.** The component registers `catalog.addReferenceSource` at step 5. Its `referrersOf(role)` names each entry
+whose `role` is that role, and each entry whose `workspace` is that role's default path, because removing the role would
+unregister the path and the next start would stop. `WorkspaceRegistry` gains the same `addReferenceSource`, and
+`unregister` refuses with each entry named (REQ-003).
+
+### What the lead is told
+
+`leadStartFor` adds `scheduledRunNotice(entry)` to the first input for a job with a schedule origin, between the Request
+text and `LEAD_DUTY`. The notice sits beside `LEAD_DUTY` in `src/prompt/role_prompt.ts`, and names the entry and the
+`read_schedule_runs` tool. The first input stays plain `pi.user` (ADR-004 decision 5), and `job.request.text` holds the
+entry's request exactly. Because the text comes from the job's origin and is never stored, repair rule 1 rebuilds the
+same text, and the request id `lead:<jobId>` still deduplicates it. A job of any other letter gets no notice (AC-010.2).
+The system prompt doesn't change, so S-001 AC-005.4 holds.
+
+### Tools
+
+`read_schedule_runs` joins `JOB_TOOL_NAMES`, so every agent of a job has it, and `FRONT_DESK_TOOL_NAMES`, with the five
+tools below. It calls `schedules.runs` through the catalogue, so an unknown name is an error result and the run goes on
+(REQ-010). `read_job` gains an optional `job` for S-004 REQ-013, which it lacks today.
+
+pi-durable never runs one of these tools again after a crash. A call cut short settles as an error result, "Tool X was
+interrupted and may have partially run", because only a tool declared `replay: "safe"` reruns, and
+`docs/research/pi-durable-knowledge.md` keeps that for read-only tools. The model can then call again with a new call
+id, so the key doesn't match it, and the operation's own rules make it act once. A same-id repeat is the case S-004's
+`create_job` covers, and the tools key it the same way, as `<tool>:<conversationId>:<callId>`.
+
+| Tool | Acts through | Same call id again | A new call after an interrupted one |
+|---|---|---|---|
+| `list_schedules` | `schedules.list` | Only reads | Only reads |
+| `create_schedule` | `schedules.create` with the key | The recorded result, or the identical entry | `conflict` naming the entry, if the first call wrote it |
+| `change_schedule` | `settingsResultOnce` around `schedules.change` | The recorded result | Writes the same values, which leaves the same end state |
+| `remove_schedule` | `settingsResultOnce` around `schedules.remove` | The recorded result | `not_found`, if the first call removed it |
+| `run_schedule` | `schedules.run` with the key | The original job: the job and its key are one commit | `busy` naming the run, while it's open |
+
+The tools that act take the front desk's caller, with `latestWayIn` as `create_job` does, and are refused while no team
+member has written. A refusal is an error result and the run goes on.
+
+### Feed, commands and page
+
+`JobChange` gains `schedule_fire_skipped`, and `instance_feed.ts` publishes it after the commit, as it does the job
+deltas. Entry changes arrive as `settings_changed` with the section `schedule`, from the existing config listener. The
+page reads `schedules.list` again after that delta and after a job delta for an `S` number, and adds a skip from its
+delta. `job_record.ts` shows the origin's entry, fire time and `onDemand`.
+
+### Removing triggers
+
+The trigger origin and the letter `T` leave these places. The letter lists don't show in a search for "trigger":
+
+- `Letter`, `LETTERS`, `JobOrigin` and `letterFor` in `src/jobs/job_model.ts`
+- `LETTERS` in `src/service/job_record_operations.ts`, and the letter union in `src/desk/desk_tools_extension.ts`
+- `SourceOrigin`, `ORIGIN_FIELDS` and `sourceOrigin` in `src/service/job_operations.ts`
+- `Origin` in `src/host/seating.ts`
+- the reserved groups in `src/cli/command_line.ts`, where `schedules` leaves as well
+- `src/roles/shipped/bob.md` and `web/ui/components/job_record.ts`
+
+`sourceOrigin` then refuses anything but a schedule origin, so a trigger origin is `invalid_input` and uses no number
+(AC-014.2). A short number such as `T-1` then reads as an ID and names no job.
+
+### Tests
+
+`SchedulesComponentOptions.clock` is a test-only `{ now(); wait(until, signal) }`, passed as `afterWrite` is, and
+`daemon_child.ts` takes a switch for it, so a child process can run under the test clock. The real clock is `Date.now`
+and `setTimeout`. `schedule_time.test.ts` sets `process.env.TZ`, which Node applies at once, to reach each clock change.
+
+Restarting within the same minute doesn't reach the key, because the new window opens after the due time. So AC-016.1
+also restarts with the test clock set back before the due time, which is the case the key is for.
+
 ## Rejected approaches
 
 Implementation approaches weighed and rejected. ADR-001, Alternatives Considered, gives the full reasoning for the ones
 it records.
 
+- **A scheduling library, or one timer per entry.** See [tech_stack.md](tech_stack.md), Schedules. One tick reads the
+  entries as they are, so a change needs no timers rebuilt, and a clock jump needs no special case.
+- **Skipped fires as pi-durable documents or a file.** S-004 chose tables for saved job data (ADR-001, Alternative G),
+  and skips must travel with the database and be read in order with jobs.
+- **The open run check in the scheduler, before `createJob`.** Two starts could both pass it. REQ-006 asks for one step,
+  and only the store's transaction gives it.
+- **A notice stored in the job, or a new input kind for it.** Storing it risks the Request's exactness, and ADR-004
+  decision 5 keeps a first input `pi.user`.
+- **Noticing a machine's sleep by comparing the wall clock with a monotonic one.** It would also drop a due time that
+  passed while awake in the same minute, against REQ-015.
 - **One database per session or conversation** (durable-pi's layout). Rejected: S-001 fixes one database per
   instance, and the daemon keeps its own state as documents in that database, not in a second store.
 - **Several processes sharing one database, or operating-system threads or worker processes per agent run.**
@@ -524,7 +821,7 @@ that defines it.
 | Intern service | The one long-running process: saved state, many jobs at once, resume after a restart, models, the shared operations, the feed, the listeners | S-002 (process, service layer, feed); S-003 (listeners, client library) |
 | Agents and roles | Roles, seats, the lead and handoff, invoking specialist agents, monitoring of who works on what, the front desk, closed conversations | S-001 (the front desk's tools and job operations also S-004) |
 | Jobs | The job record and the life of a job, blocked jobs and answers, history, export and import | S-004 |
-| Schedules and triggers | Starts jobs at set times and on events, with run history and on-demand runs | No spec yet |
+| Schedules | Starts jobs at set times, with run history and on-demand runs | S-007 |
 | Email | The Intern's own mailbox as a way in and out | No spec yet |
 | Web interface | The team's browser view and configuration, built only on service operations | S-006 for jobs, conversations, roles, workspaces, status and the export download; later specs add their own pages |
 | Command line | The `bob` commands, built only on service operations | S-005 |
@@ -541,6 +838,8 @@ are not described here.
   decision) and imports nothing. `src/jobs/job_store.ts` imports no pi package: it uses only the host's `HostDatabase`
   type and never touches pi-durable's tables. Other files in `src/jobs/` reach pi-durable only through the host
   modules, except the `intern.jobs` extension, which is one of the-intern's own pi-durable extensions.
+- **Schedules.** `src/schedules/schedule_model.ts` and `schedule_time.ts` import nothing with I/O or a clock, so
+  REQ-005's rules are tested without a daemon. `scheduler.ts` imports no pi package.
 - **pi-durable only behind the host.** Only the harness host module and the-intern's own pi-durable extensions import
   pi-durable. The service layer and every other component depend on the host's interface, so an upgrade of the pi
   packages touches a few files.
