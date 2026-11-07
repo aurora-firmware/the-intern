@@ -94,8 +94,8 @@ Every check listed under Quality checks: format, lint, typecheck, tests and the 
 **How do the browser tests get real browsers in CI?** The `Tests` job keeps its name and image, so the required checks
 stay as they are. It sets `HOME=/root` for the whole job, because the runner's `/github/home` is owned by `node` and
 Firefox won't start as root there; the install and the tests then share `/root/.cache/ms-playwright`. It adds two
-steps before `npm test`, and sets `BOB_WEB_ALL_BROWSERS=1`. `Install Chrome and Firefox for web tests` runs `npm run
-test:web:setup` and fails the job when it fails. `Install Edge for web tests` runs `npm run test:web:setup:edge` with
+steps before `npm test`, and sets `BOB_WEB_ALL_BROWSERS=1`. `Install Chrome and Firefox for web tests` runs
+`npm run test:web:setup` and fails the job when it fails. `Install Edge for web tests` runs `npm run test:web:setup:edge` with
 `continue-on-error: true` and `timeout-minutes: 15`, so a failed or hung Edge install doesn't fail the job, and Edge's
 tests are then skipped. In `node:24.22.0-bookworm` as root, one install step, as it was before it split in two,
 installed Chrome 157, Edge 157 and Firefox 159, and the tests then ran on all three, measured on 2026-11-06. It adds
