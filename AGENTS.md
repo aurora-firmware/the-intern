@@ -11,8 +11,8 @@ This file gives coding agents the commands and conventions they need to work in 
 ## Status
 
 The Intern (`bob`) is one TypeScript/Node package that embeds pi as a library on `@earendil-works/pi-durable`.
-The package and its tooling exist (TypeScript, tests, lint, formatting, CI and the user manual site), but there is no
-product code yet.
+The package, its tooling and the product code exist: S-001 to S-006 are built, from the service and its control
+endpoint to the command line and the web interface. Specs after S-006 are still to come.
 
 Read these before designing anything:
 
