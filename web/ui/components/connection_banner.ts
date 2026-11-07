@@ -16,7 +16,6 @@ export const ConnectionBanner = () =>
               {
                   class: "connection-banner",
                   role: "alert",
-                  style: "margin-bottom: 1rem; padding: 0.75rem 1rem; background: var(--color-orange-subtle); border-left: 4px solid var(--color-orange); color: var(--color-dark-blue);",
               },
               "The service can't be reached. Trying to connect again; what you type is kept.",
           );

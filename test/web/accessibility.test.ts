@@ -10,6 +10,8 @@ const TEST_TIMEOUT_MS = 120_000;
 const MOST_TABS = 60;
 const BANNER = ".connection-banner";
 const REFUSAL = "main .job-actions .refusal";
+const RED = "rgb(230, 59, 38)";
+const DARK_BLUE = "rgb(8, 10, 36)";
 const AXE_FILE = createRequire(import.meta.url).resolve("axe-core/axe.min.js");
 
 type Job = { id: string; number: string };
@@ -110,7 +112,7 @@ describe("contrast and keyboard use in chrome", () => {
         t.assert.deepEqual(found, []);
     });
 
-    it("reaches 4.5:1 on the connection banner", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+    it("reaches 4.5:1 on the connection banner, drawn Dark Blue on Red", { timeout: TEST_TIMEOUT_MS }, async (t) => {
         const { daemon, port } = await startBlockedJob();
         const browser = await launchBrowser(t, "chrome");
         if (browser === undefined) return;
@@ -122,6 +124,11 @@ describe("contrast and keyboard use in chrome", () => {
         await page.waitForSelector(BANNER, { timeout: WAIT_MS });
         await page.evaluate(() => document.fonts.ready);
 
+        const drawn = await page.locator(BANNER).evaluate((el) => ({
+            background: getComputedStyle(el).backgroundColor,
+            color: getComputedStyle(el).color,
+        }));
+        t.assert.deepEqual(drawn, { background: RED, color: DARK_BLUE });
         t.assert.deepEqual(await contrastViolations(page), []);
     });
 
