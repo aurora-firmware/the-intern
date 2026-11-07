@@ -152,7 +152,7 @@ describe("contrast and keyboard use in chrome", () => {
             .locator("main details.activity > summary")
             .evaluateAll((names) => names.map((name) => getComputedStyle(name).fontFamily));
 
-        t.assert.ok(families.length > 0);
+        t.assert.notEqual(families.length, 0);
         t.assert.deepEqual(
             families.filter((family) => !family.startsWith('"Bruno Ace"')),
             [],
