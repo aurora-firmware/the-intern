@@ -98,10 +98,9 @@ steps before `npm test`, and sets `BOB_WEB_ALL_BROWSERS=1`. `Install Chrome and 
 `npm run test:web:setup` and fails the job when it fails. `Install Edge for web tests` runs
 `npm run test:web:setup:edge` with `continue-on-error: true` and `timeout-minutes: 15`, so a failed or hung Edge
 install doesn't fail the job, and Edge's tests are then skipped. In `node:24.22.0-bookworm` as root, one install step,
-as it was before it split in two,
-installed Chrome 157, Edge 157 and Firefox 159, and the tests then ran on all three, measured on 2026-11-06. It adds
-about 1.4 GB per run, downloaded again each time because the container is new. A prepared image is the way to cut that
-if the time matters; nothing depends on it.
+as it was before it split in two, installed Chrome 157, Edge 157 and Firefox 159, and the tests then ran on all three,
+measured on 2026-11-06. It adds about 1.4 GB per run, downloaded again each time because the container is new. A
+prepared image is the way to cut that if the time matters; nothing depends on it.
 
 ## Installation and service setup
 
