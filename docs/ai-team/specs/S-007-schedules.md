@@ -2,7 +2,7 @@
 id: S-007
 title: Schedules
 version: '0.1'
-status: review  # draft | review | approved | superseded
+status: approved  # draft | review | approved | superseded
 created: '2026-11-07'
 author: planner
 ---
