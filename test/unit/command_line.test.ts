@@ -32,9 +32,9 @@ const COMMANDS: CommandSpec[] = [
         run,
     },
     {
-        group: "schedules",
+        group: "skills",
         verb: "list",
-        summary: "List schedules.",
+        summary: "List skills.",
         positionals: [],
         options: {},
         isData: true,
@@ -163,7 +163,7 @@ describe("usage errors", () => {
 });
 
 describe("reserved groups", () => {
-    for (const argv of [["schedules", "list"], ["schedules"], ["mail", "--help"], ["knowledge", "x", "--bogus"]]) {
+    for (const argv of [["skills", "list"], ["skills"], ["mail", "--help"], ["knowledge", "x", "--bogus"]]) {
         it(`returns a reserved-group result naming the group for ${argv.join(" ")}`, () => {
             const result = parse(...argv);
             assert.equal(result.kind, "reserved-group");

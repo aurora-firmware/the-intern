@@ -45,13 +45,22 @@ describe("bob command line", () => {
         assert.ok(result.stderr.includes("Usage: bob <command>"), result.stderr);
     });
 
-    it("says on standard error that schedules aren't available yet and exits 2 for a reserved group", async () => {
-        const result = await runBob(["schedules", "list"]);
+    it("says on standard error that skills aren't available yet and exits 2 for a reserved group", async () => {
+        const result = await runBob(["skills", "list"]);
 
         assert.equal(result.status, 2);
         assert.equal(result.stdout, "");
-        assert.ok(result.stderr.includes("schedules"), result.stderr);
+        assert.ok(result.stderr.includes("skills"), result.stderr);
         assert.ok(result.stderr.includes("isn't available yet"), result.stderr);
+    });
+
+    it("fails triggers as an unknown group, printing the usage on standard error and exiting 2", async () => {
+        const result = await runBob(["triggers", "list"]);
+
+        assert.equal(result.status, 2);
+        assert.equal(result.stdout, "");
+        assert.ok(result.stderr.includes("Usage: bob <command>"), result.stderr);
+        assert.ok(!result.stderr.includes("isn't available yet"), result.stderr);
     });
 
     it("loads no daemon module when the command table is loaded and help is printed", () => {
