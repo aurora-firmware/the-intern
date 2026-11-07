@@ -195,21 +195,6 @@ describe("web proxy", () => {
         assert.deepEqual(upstream.calls, ["POST /operations/jobs.list"]);
     });
 
-    it("answers every call of a held operation 503 unavailable until the hold is released", async () => {
-        const release = proxy.holdUnavailable("jobs.list");
-        const url = `http://${INTERN_HOST}:${upstream.port}/operations/jobs.list`;
-
-        const first = await fetchThroughProxy(proxy, url, {}, "POST");
-        const second = await fetchThroughProxy(proxy, url, {}, "POST");
-        release();
-        const third = await fetchThroughProxy(proxy, url, {}, "POST");
-
-        assert.equal(first.status, 503);
-        assert.equal(second.status, 503);
-        assert.equal(third.status, 201);
-        assert.deepEqual(upstream.calls, ["POST /operations/jobs.list"]);
-    });
-
     it("forwards calls of other operations while one is forced unavailable", async () => {
         proxy.forceUnavailable("jobs.list");
 

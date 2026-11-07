@@ -3,7 +3,7 @@
  * requests, so a test that must see or change them runs the browser through this proxy. It forwards plain HTTP
  * requests, resolves the name `intern.test` to the loopback address itself, records each request's URL and `Referer`,
  * counts the bytes of `/feed` responses, and can drop feed events, end the open feed streams, or answer an operation
- * `503 unavailable` once, or on every call while it is held.
+ * `503 unavailable` once.
  */
 import { type ClientRequest, createServer, type IncomingMessage, request, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -32,8 +32,6 @@ export type WebProxy = {
     forceFeedEnd(reason: FeedEndReason): void;
     /** Answers the next call of the operation `503` with the `unavailable` error body. */
     forceUnavailable(operationName: string): void;
-    /** Answers every call of the operation `503` until the returned function releases it. */
-    holdUnavailable(operationName: string): () => void;
     stop(): Promise<void>;
 };
 
@@ -66,7 +64,6 @@ export async function startWebProxy(): Promise<WebProxy> {
     const openFeeds = new Set<OpenFeed>();
     const openUpstreams = new Set<ClientRequest>();
     const unavailableOnce = new Set<string>();
-    const unavailableHeld = new Set<string>();
     let feedByteCount = 0;
     let isDroppingFeedEvents = false;
 
@@ -123,10 +120,7 @@ export async function startWebProxy(): Promise<WebProxy> {
         const target = new URL(req.url ?? "/");
         recorded.push({ url: req.url ?? "", referer: req.headers.referer });
         const operationName = operationNameOf(target);
-        if (
-            operationName !== undefined &&
-            (unavailableHeld.has(operationName) || unavailableOnce.delete(operationName))
-        ) {
+        if (operationName !== undefined && unavailableOnce.delete(operationName)) {
             req.resume();
             sendUnavailable(res, operationName);
             return;
@@ -152,12 +146,6 @@ export async function startWebProxy(): Promise<WebProxy> {
         },
         forceUnavailable: (operationName) => {
             unavailableOnce.add(operationName);
-        },
-        holdUnavailable: (operationName) => {
-            unavailableHeld.add(operationName);
-            return () => {
-                unavailableHeld.delete(operationName);
-            };
         },
         stop: async () => {
             for (const { res, upstream } of openFeeds) {

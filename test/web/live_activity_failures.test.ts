@@ -99,21 +99,13 @@ describe("the Job page's live activity when a read fails, in chrome", () => {
         const browser = await launchBrowser(t, "chrome", { proxyPort: proxy.port });
         if (browser === undefined) return;
         const page = await browser.newPage();
-        // The banner is transient: the tab's probe clears it once the service answers. Hold the probe unavailable as
-        // soon as the entries call has failed, so the banner stays until the test has seen it, however slow the
-        // browser is.
         proxy.forceUnavailable("conversations.entries");
 
         await page.goto(pageUrl(port, `/ui/#/jobs/${job.number}`));
 
-        while (!proxy.requests().some((request) => request.url.endsWith("/operations/conversations.entries"))) {
-            await wait(POLL_MS / 10);
-        }
-        const releaseStatus = proxy.holdUnavailable("daemon.status");
         await page.waitForSelector(".connection-banner", { timeout: WAIT_MS });
         t.assert.equal(await page.locator(`main details.activity[data-conversation="${lead}"]`).count(), 1);
         t.assert.equal(await page.locator("main details.activity [role='alert']").count(), 0);
-        releaseStatus();
     });
 
     it("leaves out a conversation of another job that is created while the page is open", {
