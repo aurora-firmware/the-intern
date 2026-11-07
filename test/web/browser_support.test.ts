@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
-import { type BrowserName, launchBrowser, pageUrl } from "../support/browser.ts";
+import { type BrowserName, launchBrowser, launchFailureAction, pageUrl } from "../support/browser.ts";
 
 const run = promisify(execFile);
 const BROWSERS = ["chrome", "msedge", "firefox"] as const;
@@ -75,16 +75,17 @@ test("launchBrowser sends the page's requests through the forward proxy of proxy
     assert.ok(seen.includes("http://intern.test:4321/ui/"));
 });
 
-/** Runs `launchBrowser("firefox")` in a child process whose Playwright browser directory is empty. */
-async function launchMissingBrowser(allBrowsers: boolean) {
+/** Runs `launchBrowser(name)` in a child process whose Playwright browser directory is empty. */
+async function launchMissingBrowser(name: BrowserName, allBrowsers: boolean) {
     const emptyDirectory = await mkdtemp(join(tmpdir(), "bob-no-browsers-"));
     const script = `
         const { launchBrowser } = await import(process.argv[1]);
         const skips = [];
         const t = { skip: (reason) => skips.push(reason), after: () => {} };
         try {
-            const browser = await launchBrowser(t, "firefox");
+            const browser = await launchBrowser(t, process.argv[2]);
             console.log(JSON.stringify({ browser: browser === undefined ? "undefined" : "launched", skips }));
+            await browser?.close();
         } catch (error) {
             console.log(JSON.stringify({ error: String(error.message), skips }));
         }`;
@@ -95,7 +96,9 @@ async function launchMissingBrowser(allBrowsers: boolean) {
         } else {
             delete env.BOB_WEB_ALL_BROWSERS;
         }
-        const { stdout } = await run(process.execPath, ["--input-type=module", "-e", script, SUPPORT_MODULE], { env });
+        const { stdout } = await run(process.execPath, ["--input-type=module", "-e", script, SUPPORT_MODULE, name], {
+            env,
+        });
         return JSON.parse(stdout) as { browser?: string; error?: string; skips: string[] };
     } finally {
         await rm(emptyDirectory, { recursive: true, force: true });
@@ -103,17 +106,54 @@ async function launchMissingBrowser(allBrowsers: boolean) {
 }
 
 test("launchBrowser fails naming the install command when a browser is missing and all browsers are required", async (t) => {
-    const outcome = await launchMissingBrowser(true);
+    const outcome = await launchMissingBrowser("firefox", true);
     t.assert.match(outcome.error ?? "", /playwright-core install/);
     t.assert.deepEqual(outcome.skips, []);
 });
 
 test("launchBrowser skips the test with a diagnostic and answers undefined when a browser is missing", async (t) => {
-    const outcome = await launchMissingBrowser(false);
+    const outcome = await launchMissingBrowser("firefox", false);
     t.assert.equal(outcome.browser, "undefined");
     t.assert.equal(outcome.skips.length, 1);
     t.assert.match(outcome.skips[0] ?? "", /firefox/);
 });
+
+test("launchBrowser skips a missing msedge with a diagnostic when all browsers are required", async (t) => {
+    // Playwright finds Edge by channel at a system path, so an empty browser directory hides it only where it is absent.
+    const outcome = await launchMissingBrowser("msedge", true);
+    if (outcome.browser === "launched") {
+        t.skip("browser msedge is installed");
+        return;
+    }
+    t.assert.equal(outcome.browser, "undefined");
+    t.assert.equal(outcome.skips.length, 1);
+    t.assert.match(outcome.skips[0] ?? "", /msedge/);
+});
+
+const MISSING = "Executable doesn't exist at /somewhere";
+
+for (const name of ["chrome", "firefox"] as const) {
+    test(`launchFailureAction fails a missing ${name} when all browsers are required`, (t) => {
+        t.assert.equal(launchFailureAction(name, MISSING, true), "fail");
+    });
+
+    test(`launchFailureAction skips a missing ${name} when all browsers are not required`, (t) => {
+        t.assert.equal(launchFailureAction(name, MISSING, false), "skip");
+    });
+}
+
+for (const allBrowsers of [true, false]) {
+    test(`launchFailureAction skips a missing msedge when all browsers required is ${allBrowsers}`, (t) => {
+        t.assert.equal(launchFailureAction("msedge", MISSING, allBrowsers), "skip");
+    });
+}
+
+for (const name of BROWSERS) {
+    test(`launchFailureAction rethrows a ${name} launch error that is not a missing browser`, (t) => {
+        t.assert.equal(launchFailureAction(name, "Process crashed", true), "rethrow");
+        t.assert.equal(launchFailureAction(name, "Process crashed", false), "rethrow");
+    });
+}
 
 /**
  * Runs `launchBrowser(name)` in a child process whose `TMPDIR` is a new directory, loads a page over http when the
