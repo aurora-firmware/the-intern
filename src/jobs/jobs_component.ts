@@ -6,7 +6,7 @@ import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
 import { onInputSubmitted } from "../host/conversation_control.ts";
-import { onLeadStopped } from "../host/invocation.ts";
+import { onLeadStopMarked, onLeadStopped } from "../host/invocation.ts";
 import { setJobStatusCheck } from "../host/job_section.ts";
 import { waitForMarkedConversations } from "../host/repair_abort.ts";
 import { readConversationMeta } from "../host/seating.ts";
@@ -36,7 +36,8 @@ export type WritePoint =
     | "job-cancelled"
     | "conversations-closed"
     | "lead-input"
-    | "turn-ended";
+    | "turn-ended"
+    | "lead-stop-marked";
 
 export type JobsComponentOptions = {
     agents: AgentsComponent;
@@ -74,6 +75,7 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
     let stopInputListening: (() => void) | undefined;
     let stopTurnEndRule: (() => void) | undefined;
     let stopLeadListening: (() => void) | undefined;
+    let stopMarkListening: (() => void) | undefined;
     let stopJobStatusCheck: (() => void) | undefined;
     let markedByRepair: string[] = [];
     let firstInputsOwed: PendingFirstInput[] = [];
@@ -112,6 +114,13 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
                 stopInputListening = onInputSubmitted(ctx.host, (input) =>
                     resumeAfterLeadInput({ ctx, options }, input),
                 );
+                const { afterWrite } = options;
+                if (afterWrite !== undefined) {
+                    stopMarkListening = onLeadStopMarked(ctx.host, async (leadId) => {
+                        const jobId = (await readConversationMeta(ctx.host, leadId))?.jobId;
+                        if (jobId != null) await afterWrite("lead-stop-marked", jobId);
+                    });
+                }
                 if (options.turnEndRule !== false) {
                     const rule = startTurnEndRule({ ctx, options });
                     stopTurnEndRule = rule.stop;
@@ -149,6 +158,8 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
                 stopInputListening?.();
                 stopInputListening = undefined;
                 stopLeadListening?.();
+                stopMarkListening?.();
+                stopMarkListening = undefined;
                 stopLeadListening = undefined;
                 stopTurnEndRule?.();
                 stopTurnEndRule = undefined;

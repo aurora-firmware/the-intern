@@ -391,6 +391,24 @@ export function onLeadStopped(host: HarnessHost, listener: LeadStoppedListener):
     };
 }
 
+type LeadMarkedListener = (leadId: string) => void | Promise<void>;
+
+const leadMarkedListeners = new WeakMap<HarnessHost, LeadMarkedListener[]>();
+
+/**
+ * Test-only: registers a listener that is awaited once an abort has committed a stop mark on a lead and before
+ * pi-durable's abort starts, so a test can act in that window. Returns the function that removes it.
+ */
+export function onLeadStopMarked(host: HarnessHost, listener: LeadMarkedListener): () => void {
+    const listeners = leadMarkedListeners.get(host) ?? [];
+    listeners.push(listener);
+    leadMarkedListeners.set(host, listeners);
+    return () => {
+        const index = listeners.indexOf(listener);
+        if (index >= 0) listeners.splice(index, 1);
+    };
+}
+
 /**
  * Aborts the conversation, then every conversation it still awaits a report from, recursively, whether it is
  * steerable or parked. An invoked conversation that has reported has left `awaiting` and is not touched. No aborted
@@ -405,6 +423,7 @@ export async function abortWithAwaited(host: HarnessHost, conversationId: string
         clearRecursively(host, conversationId, cleared, true),
     );
     const aborted = [...cleared];
+    if (isMarked) for (const listener of [...(leadMarkedListeners.get(host) ?? [])]) await listener(conversationId);
     for (const id of aborted) await abortConversation(host, id);
     if (isMarked) for (const listener of [...(leadStoppedListeners.get(host) ?? [])]) listener(conversationId);
     return aborted;
