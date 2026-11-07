@@ -842,3 +842,4 @@ None affect the specified behaviour.
 | 2026-11-07 | v0.6. No behaviour changes. Assumptions: ADR-006 added dependencies for the web interface files, so "No dependency is added" holds only for the listeners; S-006 has delivered the files that the placeholder wording awaited. AC-008.1's Verification drops the same wording. No identifier added or retired. | Spec-truth reconciliation of S-006, finding F13: stale text. | None; spec text only |
 | 2026-11-07 | spec-truth reconciliation — FAIL | Export route and shared stream confirmed against v0.5; stale assumptions only | none |
 | 2026-11-07 | spec-truth reconciliation — PASS | v0.6 text corrections confirmed; no S-003 behaviour changed in 75c7c946..0604b54f; read limited to S-006's findings | none |
+| 2026-11-07 | spec-truth reconciliation — PASS | B-030 changes one test only; AC-016.6 passes as root in CI; a failing rm is untested, and ADR-001 decision 2 owns that behaviour; read limited to REQ-016 | none |
