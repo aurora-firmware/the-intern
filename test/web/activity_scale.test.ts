@@ -2,6 +2,7 @@ import { afterEach, describe, it, type TestContext } from "node:test";
 import type { Page } from "playwright-core";
 import { bestOf } from "../support/best_of.ts";
 import { type BrowserName, launchBrowser, pageUrl } from "../support/browser.ts";
+import { withColdContext } from "../support/cold_context.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { startWebProxy, type WebProxy } from "../support/web_proxy.ts";
@@ -167,38 +168,43 @@ for (const name of BROWSERS) {
             const job = await buildJob(daemon, "long", LONG_ENTRIES);
             const browser = await launchBrowser(t, name);
             if (browser === undefined) return;
-            let page = await browser.newPage();
-
-            const openPage = async () => {
-                page = await browser.newPage();
-                const started = Date.now();
-                await page.goto(jobUrl(port, job));
-                return msUntil(page, started, `!!document.querySelector("${LONG_ENTRY}")`);
-            };
-            const opened = await bestOf(ATTEMPTS, openPage, PAGE_OPEN_LIMIT_MS);
+            const opened = await bestOf(
+                ATTEMPTS,
+                () =>
+                    withColdContext(browser, async (context) => {
+                        const page = await context.newPage();
+                        const started = Date.now();
+                        await page.goto(jobUrl(port, job));
+                        return msUntil(page, started, `!!document.querySelector("${LONG_ENTRY}")`);
+                    }),
+                PAGE_OPEN_LIMIT_MS,
+            );
             expectAtMost(t, "Opening the page", opened, PAGE_OPEN_LIMIT_MS, "ms");
 
-            // Expanding is one-way, so each attempt starts on a freshly opened page.
+            // Expanding is one-way, so each attempt expands on a page it opened itself, in a context of its own.
             const expanded = await bestOf(
                 ATTEMPTS,
-                async () => {
-                    await openPage();
-                    return page.evaluate(
-                        ([selector, size]) =>
-                            new Promise<number>((resolve) => {
-                                const output = document.querySelector(`${selector} .output`) as HTMLElement;
-                                const clickedAt = performance.now();
-                                (document.querySelector(`${selector} button.output-more`) as HTMLElement).click();
-                                const check = () => {
-                                    if ((output.textContent ?? "").length >= size)
-                                        resolve(performance.now() - clickedAt);
-                                    else requestAnimationFrame(check);
-                                };
-                                check();
-                            }),
-                        [LONG_ENTRY, LONG_RESULT_BYTES] as [string, number],
-                    );
-                },
+                () =>
+                    withColdContext(browser, async (context) => {
+                        const page = await context.newPage();
+                        await page.goto(jobUrl(port, job));
+                        await page.waitForSelector(LONG_ENTRY, { timeout: WAIT_MS });
+                        return page.evaluate(
+                            ([selector, size]) =>
+                                new Promise<number>((resolve) => {
+                                    const output = document.querySelector(`${selector} .output`) as HTMLElement;
+                                    const clickedAt = performance.now();
+                                    (document.querySelector(`${selector} button.output-more`) as HTMLElement).click();
+                                    const check = () => {
+                                        if ((output.textContent ?? "").length >= size)
+                                            resolve(performance.now() - clickedAt);
+                                        else requestAnimationFrame(check);
+                                    };
+                                    check();
+                                }),
+                            [LONG_ENTRY, LONG_RESULT_BYTES] as [string, number],
+                        );
+                    }),
                 EXPAND_LIMIT_MS,
             );
             expectAtMost(t, "Expanding the output", expanded, EXPAND_LIMIT_MS, "ms");

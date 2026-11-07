@@ -2,6 +2,7 @@ import { afterEach, describe, it, type TestContext } from "node:test";
 import type { Page } from "playwright-core";
 import { bestOf } from "../support/best_of.ts";
 import { type BrowserName, launchBrowser, pageUrl } from "../support/browser.ts";
+import { withColdContext } from "../support/cold_context.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { type FeedWatch, watchFeed } from "../support/feed_watch.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
@@ -62,37 +63,45 @@ for (const name of BROWSERS) {
         it("shows a status change on the Board and the Job page within 2 seconds of the feed event", {
             timeout: TEST_TIMEOUT_MS,
         }, async (t) => {
-            const { daemon, port, jobs } = await startRig(2);
-            const job = jobs[0] as Job;
+            const { daemon, port, jobs } = await startRig(ATTEMPTS);
             const browser = await launchBrowser(t, name);
             if (browser === undefined) return;
             const context = await browser.newContext();
             const board = await context.newPage();
             await board.goto(pageUrl(port, "/ui/#/"));
-            await board.waitForSelector(`main .board-card a[href='#/jobs/${job.number}']`, { timeout: WAIT_MS });
-            const jobPage = await context.newPage();
-            await jobPage.goto(pageUrl(port, `/ui/#/jobs/${job.number}`));
-            await jobPage.waitForSelector(JOB_STATUS, { timeout: WAIT_MS });
+            await board.waitForSelector("main .board-card", { timeout: WAIT_MS });
             const feed = await watchFeed(port);
             watches.push(feed);
 
-            const event = feed.nextDelta((delta) => delta.type === "job_done" && delta.number === job.number);
-            await daemon.invoke("jobs.cancel", { job: job.id, justification: "not needed" });
-            const { readAt } = await event;
-
-            const onBoard = await msUntil(
-                board,
-                readAt,
-                `!!document.querySelector("${BOARD_STATUS} a[href='#/jobs/${job.number}']")`,
+            // The pages are open when a change comes, so each attempt changes another job.
+            let next = 0;
+            const changeShown = await bestOf(
+                ATTEMPTS,
+                async () => {
+                    const job = jobs[next++] as Job;
+                    const jobPage = await context.newPage();
+                    await jobPage.goto(pageUrl(port, `/ui/#/jobs/${job.number}`));
+                    await jobPage.waitForSelector(JOB_STATUS, { timeout: WAIT_MS });
+                    const event = feed.nextDelta((delta) => delta.type === "job_done" && delta.number === job.number);
+                    await daemon.invoke("jobs.cancel", { job: job.id, justification: "not needed" });
+                    const { readAt } = await event;
+                    const onBoard = await msUntil(
+                        board,
+                        readAt,
+                        `!!document.querySelector("${BOARD_STATUS} a[href='#/jobs/${job.number}']")`,
+                    );
+                    const onJobPage = await msUntil(
+                        jobPage,
+                        readAt,
+                        `document.querySelector("${JOB_STATUS}")?.textContent === "Done"`,
+                    );
+                    await jobPage.close();
+                    return Math.max(onBoard, onJobPage);
+                },
+                CHANGE_LIMIT_MS,
             );
-            const onJobPage = await msUntil(
-                jobPage,
-                readAt,
-                `document.querySelector("${JOB_STATUS}")?.textContent === "Done"`,
-            );
 
-            expectWithin(t, "The Board showing the change", onBoard, CHANGE_LIMIT_MS);
-            expectWithin(t, "The Job page showing the change", onJobPage, CHANGE_LIMIT_MS);
+            expectWithin(t, "The Board and the Job page showing the change", changeShown, CHANGE_LIMIT_MS);
         });
 
         it("opens a Board of 500 jobs within 3 seconds and a job from it, the click answering within 500 ms", {
@@ -102,30 +111,30 @@ for (const name of BROWSERS) {
             const job = jobs[JOB_COUNT - 1] as Job;
             const browser = await launchBrowser(t, name);
             if (browser === undefined) return;
-            const context = await browser.newContext();
-            let page = await context.newPage();
-
             const boardOpened = await bestOf(
                 ATTEMPTS,
-                async () => {
-                    page = await context.newPage();
-                    const openingStarted = Date.now();
-                    await page.goto(pageUrl(port, "/ui/#/"));
-                    return msUntil(page, openingStarted, cardCount(JOB_COUNT));
-                },
+                () =>
+                    withColdContext(browser, async (context) => {
+                        const page = await context.newPage();
+                        const openingStarted = Date.now();
+                        await page.goto(pageUrl(port, "/ui/#/"));
+                        return msUntil(page, openingStarted, cardCount(JOB_COUNT));
+                    }),
                 PAGE_OPEN_LIMIT_MS,
             );
             const jobShown = await bestOf(
                 ATTEMPTS,
-                async () => {
-                    await page.waitForFunction(cardCount(JOB_COUNT), undefined, { timeout: WAIT_MS });
-                    const clickStarted = Date.now();
-                    await page.locator(`main .board-card a[href='#/jobs/${job.number}']`).click();
-                    const elapsed = await msUntil(page, clickStarted, `!!document.querySelector("${JOB_STATUS}")`);
-                    t.assert.equal(await page.locator("main .job-number").textContent(), job.number);
-                    await page.goBack();
-                    return elapsed;
-                },
+                () =>
+                    withColdContext(browser, async (context) => {
+                        const page = await context.newPage();
+                        await page.goto(pageUrl(port, "/ui/#/"));
+                        await page.waitForFunction(cardCount(JOB_COUNT), undefined, { timeout: WAIT_MS });
+                        const clickStarted = Date.now();
+                        await page.locator(`main .board-card a[href='#/jobs/${job.number}']`).click();
+                        const elapsed = await msUntil(page, clickStarted, `!!document.querySelector("${JOB_STATUS}")`);
+                        t.assert.equal(await page.locator("main .job-number").textContent(), job.number);
+                        return elapsed;
+                    }),
                 INTERACTION_LIMIT_MS,
             );
 
