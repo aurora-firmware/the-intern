@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { type IncomingMessage, request } from "node:http";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -15,8 +15,6 @@ const WAIT_BOUND_MS = 20_000;
 const LOOPBACK = "127.0.0.1";
 const FAKE_PROVIDER = "faux";
 const FAKE_MODEL = "faux-1";
-const READ_AND_EXECUTE_ONLY = 0o500;
-const OWNER_ONLY = 0o700;
 
 const envs: HermeticEnv[] = [];
 const daemons: DaemonProcess[] = [];
@@ -142,19 +140,15 @@ describe("the export copy a killed daemon left", () => {
         assert.deepEqual(await entriesOf(env), []);
     });
 
-    it("is logged and does not stop the start when it cannot be removed", { timeout: TEST_TIMEOUT_MS }, async () => {
+    it("is logged and does not stop the start when the exports folder cannot be read", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
         const env = await newEnv();
-        const locked = join(env.stateDir, "exports", "download-locked", "inner");
-        await mkdir(locked, { recursive: true });
-        await writeFile(join(locked, "export.sqlite"), "x");
-        await chmod(locked, READ_AND_EXECUTE_ONLY);
+        await mkdir(env.stateDir, { recursive: true });
+        await writeFile(join(env.stateDir, "exports"), "a file where the folder should be");
 
-        try {
-            const daemon = await start(env, { networkListener: true });
+        const daemon = await start(env, { networkListener: true });
 
-            assert.match(daemon.stderr(), /export leftovers not removed/);
-        } finally {
-            await chmod(locked, OWNER_ONLY);
-        }
+        assert.match(daemon.stderr(), /export leftovers not removed/);
     });
 });
