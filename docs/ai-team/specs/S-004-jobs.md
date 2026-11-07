@@ -163,7 +163,7 @@ job accepts its job ID or its short number in any letter case (REQ-002).
 
 | Operation | Kind | Input | Result | Requirement |
 |---|---|---|---|---|
-| `jobs.create` | control | `text` (required), `title`, `statedBy`, `idempotencyKey` (S-002 REQ-013), the role, model, thinking level and registered workspace a team member or schedule entry may name (S-001 REQ-012), and `origin`: job sources only (a schedule's entry and fire time, and for a run on demand that fact and its way in); refused from any other caller (S-002 AC-012.5) | the new job | REQ-003, REQ-007 |
+| `jobs.create` | control | `text` (required), `title`, `statedBy`, `idempotencyKey` (S-002 REQ-013), the role, model, thinking level and registered workspace a team member or schedule entry may name (S-001 REQ-012), and `origin`: job sources only (a schedule's entry and fire time, and for a run on demand what REQ-003 lists); refused from any other caller (S-002 AC-012.5) | the new job | REQ-003, REQ-007 |
 | `jobs.get` | read | job | the job with its worklog and history, newest last | REQ-014 |
 | `jobs.list` | read | optional `status`, `letter`, `relatedTo`, `schedule` (a schedule entry's name, S-007 REQ-009), `limit`, `cursor` | jobs without worklog and history, newest first, and a cursor | REQ-014 |
 | `jobs.update` | control | job and any of `title`, `description`, `definitionOfDone` | the job | REQ-004 |
@@ -207,7 +207,7 @@ on (REQ-021; S-001 REQ-022):
 |---|---|
 | read job, update job, add to worklog, relate jobs | as in a job's conversation, on the job the call names |
 | create job | creates a job whose origin is the way in of the team member's input being answered, `C` or `W`, with the front desk in its origin details, keyed by its tool call id |
-| list jobs | lists jobs as `jobs.list` does, filtered by status, origin letter and schedule entry |
+| list jobs | lists jobs as `jobs.list` does, filtered by status and origin letter |
 
 Block job and complete job are never offered there.
 
@@ -334,7 +334,8 @@ reused or skipped. The origin letter follows the job's origin (REQ-003):
 | schedule fire or run on demand (S-007 REQ-008) | `S` |
 | follow-up job | `A` |
 
-A job the front desk creates takes the letter of the way in of the team member's input it answers, `C` or `W`
+A job the front desk creates with `create_job` takes the letter of the way in of the team member's input it answers, `C`
+or `W`
 (REQ-021). A request whose way in is `in-process`, the way in S-002 records when a caller names none (S-002
 AC-012.5), has no letter: `jobs.create` SHALL refuse it with `invalid_input`. Tests and the live checks name a real
 way in.
@@ -1225,4 +1226,4 @@ None.
 | 2026-11-07 | v0.14. REQ-008: an abort of a To do job's lead leaves the job To do with no block, no reminder and no history entry; input to its lead starts it, and `jobs.cancel` ends it. New AC-008.8. Workflow follows. Assumptions: S-006 exists, so "Until the … specs exist" covers only Email and schedules and triggers. No identifier retired. | Spec-truth reconciliation of S-006, findings F3 and F13. F3: the abort of a waiting lead was unspecified, and REQ-005 has no To do to Blocked move. The Architect's ruling, which the product owner accepted on 2026-11-07. | T-271 |
 | 2026-11-07 | spec-truth reconciliation — FAIL | REQ-006 not held after an abort of a Blocked lead, a To do lead's abort unspecified, stale assumption, AC-008.6's neighbouring crash window untested; REQ-008's stop otherwise confirmed against v0.13 | none |
 | 2026-11-07 | spec-truth reconciliation — PASS | v0.14 confirmed for REQ-008 and AC-008.8 against T-271, and the stop mark's crash window against T-275; read limited to S-006's findings and 75c7c946..0604b54f | none |
-| 2026-11-07 | v0.15. Triggers leave the job sources: the origin letter `T` and the trigger origin are gone (Definitions, Interfaces, REQ-002, REQ-003, REQ-015). `jobs.create` and REQ-003: a schedule's origin also records a run on demand and its way in. `jobs.list` gains a filter by schedule entry (S-007 REQ-009). Purpose, Users, Exclusions, Workflow and Assumptions: triggers leave the wording. REQ-013, new AC-013.2 and the job tools table: read job may name another job, read-only, and read schedule runs is added. REQ-014 and REQ-021: the schedule entry filter. REQ-002, REQ-007 and REQ-021: a run on demand has the letter `S`, and a schedule entry can name overrides. REQ-016: schedule entries aren't in the export. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
+| 2026-11-07 | v0.15. Triggers leave the job sources: the origin letter `T` and the trigger origin are gone (Definitions, Interfaces, REQ-002, REQ-003, REQ-015). `jobs.create` and REQ-003: a schedule's origin also records a run on demand and its way in. `jobs.list` gains a filter by schedule entry (S-007 REQ-009). Purpose, Users, Exclusions, Workflow and Assumptions: triggers leave the wording. REQ-013, new AC-013.2 and the job tools table: read job may name another job, read-only, and read schedule runs is added. REQ-014: the schedule entry filter. REQ-002, REQ-007 and REQ-021: a run on demand has the letter `S`, and a schedule entry can name overrides. REQ-016: schedule entries aren't in the export. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |

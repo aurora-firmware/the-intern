@@ -147,7 +147,7 @@ failed (REQ-013). **Contract** (operation names and kinds):
 | `conversations.seat` | control | Change a conversation's seat (S-001 REQ-004) |
 | `roles.create`, `roles.change`, `roles.restore`, `roles.remove` | control | Role settings (S-001 REQ-003; REQ-022) |
 | `schedules.list`, `schedules.get`, `schedules.runs` | read | Schedule entries and their run history (S-007 REQ-009) |
-| `schedules.add`, `schedules.change`, `schedules.remove` | control | Schedule settings (S-007 REQ-003; REQ-022) |
+| `schedules.create`, `schedules.change`, `schedules.remove` | control | Schedule settings (S-007 REQ-003; REQ-022) |
 | `schedules.run` | control | Run a schedule entry now (S-007 REQ-008) |
 | `workspaces.register`, `workspaces.unregister` | control | Workspace registration (S-001 REQ-018; REQ-022) |
 
@@ -936,7 +936,8 @@ usual places. No credential is copied into the instance's directories or the dat
     variable name).
   - **Constraints:** read-only for the daemon, apart from the login's token refresh (REQ-018). Tests always point it
     at an isolated folder.
-  - **Missing:** a missing login doesn't stop the daemon unless a configured model needs it (S-001). Model requests
+  - **Missing:** a missing login doesn't stop the daemon unless a model configured for a role needs it (S-001). Model
+    requests
     fail with an error the agent run shows.
 - **Fake model (test only).**
   - **What:** runs the daemon on the fake model with no network, for deterministic tests. A second test-only switch
@@ -1023,4 +1024,4 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-05 | spec-truth reconciliation — PASS | Work in 8e1eaa08..HEAD confirmed against v0.13; step 7, Workflow and REQ-008 corrected for input submitted after the resume, before listeners open; earlier task logs not read | none |
 | 2026-11-06 | v0.14. No behaviour changes. REQ-013: the gloss of `busy` reads "a reject-if-busy submit, or a resource in use for now". No identifier added or retired. | S-006 second architecture consistency review, finding F3, product owner decision of 2026-11-06: `jobs.export` (S-004 REQ-016) and the export route (S-003 REQ-016) refuse `busy` for a resource in use, which the old gloss didn't cover. Approved with S-006 at Gate 1. | None; spec text only |
 | 2026-11-07 | spec-truth reconciliation — PASS | v0.14 confirmed for the feed shape, the busy gloss and B-023's log line; spec read in part | none |
-| 2026-11-07 | v0.15. Triggers leave the job sources (Purpose, Definitions, Users, Exclusions, REQ-012, AC-012.5). REQ-021: the configuration file holds S-007's schedule entries. Interfaces and REQ-012: the `schedules.*` operations. Interfaces and REQ-014: the schedule fire skipped delta. REQ-002, Workflow and AC-002.2: the startup model check covers roles, and an entry's model is checked at a fire. REQ-022: unregistering a workspace an entry names is refused. REQ-012: a run on demand states its origin. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
+| 2026-11-07 | v0.15. Triggers leave the job sources (Purpose, Definitions, Users, Exclusions, REQ-012, AC-012.5). REQ-021: the configuration file holds S-007's schedule entries. Interfaces and REQ-012: the `schedules.*` operations. Interfaces and REQ-014: the schedule fire skipped delta. REQ-002, Workflow, AC-002.2 and Configuration: the startup model check covers roles, and an entry's model is checked at a fire. REQ-022: unregistering a workspace an entry names is refused. REQ-012: a run on demand states its origin. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |

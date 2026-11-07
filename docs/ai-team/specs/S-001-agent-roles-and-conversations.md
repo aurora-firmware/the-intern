@@ -48,7 +48,7 @@ members and turns their requests into jobs. Success Criteria lists the observabl
 | Transcript, context | The transcript is every stored entry of a conversation. The context is what the model receives on the next request, after resets and compactions. |
 | Workspace | A registered local folder that an agent works in. It supplies extra instructions and skills, and is where tools start. Agents work on the OS and filesystem with the account the-intern runs as; the workspace doesn't limit what they reach. |
 | Job source, origin | A job source starts a job and its lead conversation: a request from a team member (command line, web interface, email), a schedule fire, or a follow-up job created by an agent. The origin of a conversation records its job source, the invoking conversation for an agent invocation, or "front desk" for the front desk. |
-| Front desk | The one standing conversation of an instance that assists team members (REQ-021). It belongs to no job. Team members reach it from the command line and the web interface; it answers questions about the work, creates jobs that agents take, and passes answers and steering to a job's conversations. It never does the work itself. |
+| Front desk | The one standing conversation of an instance that assists team members (REQ-021). It belongs to no job. Team members reach it from the command line and the web interface; it answers questions about the work, creates jobs that agents take, sets up and runs schedules, and passes answers and steering to a job's conversations. It never does the work itself. |
 | Front-desk tools | The tools offered only in the front desk: job tools that name the job they act on, reads of conversations, status and usage, steering of a job's conversations, and schedule tools (REQ-022). S-004 offers one of these, read schedule runs, in a job's conversations too. |
 
 ### pi agent and pi-durable terms
@@ -80,7 +80,7 @@ models, login, settings, skills and context files. Where a term exists in both, 
 | Actor | Goal |
 |---|---|
 | Team member | Gives jobs, shapes the roles and workspaces agents are made from, follows which role works where, and steers, reseats or resets any conversation. Talks to the front desk to ask for work, set up schedules, ask what is going on, and answer or steer jobs. |
-| Front desk agent | Assists team members in the front desk: creates jobs, reports on jobs and conversations, and passes answers and steering on. It does no work itself. |
+| Front desk agent | Assists team members in the front desk: creates jobs, sets up and runs schedules, reports on jobs and conversations, and passes answers and steering on. It does no work itself. |
 | Lead agent | Carries its job from definition to verification, doing the work itself, handing the conversation to a better-suited role or invoking specialist agents. |
 | Specialist (invoked) agent | Does one part of a job in its own conversation and reports back. It never completes the job. |
 | Job sources (downstream systems) | The Jobs component and schedule fires start a job's lead conversation with a role and an origin. |
@@ -189,12 +189,14 @@ front-desk tools instead (REQ-022).
 The tools the-intern ships for a role's tool set are `read`, `write`, `edit` and `bash`; a tool set naming anything
 else is refused (REQ-003).
 
-The front-desk tools (REQ-022), offered only in the front desk:
+The front-desk tools (REQ-022), offered only in the front desk, except read schedule runs, which S-004 REQ-013 also
+offers in a job's conversations:
 
 | Group | Tools | Does |
 |---|---|---|
 | Jobs | `read_job`, `list_jobs`, `create_job`, `update_job`, `add_worklog`, `relate_jobs` | The job tools of S-004, each naming the job it acts on, and `list_jobs` with a status and origin-letter filter (S-004 REQ-021) |
 | State | read a conversation's status, entries and invocations; read the daemon status; read usage | The same answers as `conversations.get`, `conversations.entries`, `conversations.invocations`, `daemon.status` and `usage.get` |
+| Schedules | list, create, change, remove and run schedule entries; read schedule runs | The same paths as the `schedules.*` operations (S-007 REQ-013) |
 | Steering | send input to a job's conversation; stop a job's conversation | The same paths as `conversations.submit` and `conversations.abort`; the input is recorded as from the front desk (REQ-023) |
 
 The names of the state and steering tools and the parameter layouts of all of them are not contract; the tasks fix
@@ -1599,11 +1601,11 @@ A change to one of the settings above made while the daemon runs is checked as a
 the file stops the daemon at startup, an invalid runtime change is refused with the reason and nothing changes
 (S-002 REQ-022).
 
-- **Role in a schedule entry.**
-  - **What:** an optional role name per schedule entry.
+- **Seat values in a schedule entry.**
+  - **What:** an optional role, model, thinking level and workspace per schedule entry.
   - **Where:** the schedule entry in the configuration file (S-007 REQ-001, REQ-002).
-  - **Constraints:** an existing role.
-  - **Missing:** `bob` (REQ-012).
+  - **Constraints:** S-007 REQ-001; the role must exist.
+  - **Missing:** `bob` for the role (REQ-012), and that role's defaults for the others.
 - **Invocation depth cap.**
   - **What:** the maximum invocation depth (REQ-009). It bounds runaway invocation chains that no human is watching.
   - **Where:** a built-in constant of the daemon (S-002 REQ-009), not a setting.
@@ -1738,4 +1740,4 @@ behaviour. Deciding it is a scope amendment of this spec.
 | 2026-11-07 | v0.15. REQ-008: an abort leaves no aborted conversation parked for reports, in place of parked of any kind; an abort that names the lead of a Blocked job leaves it parked for an answer (REQ-014), and the job's abort clears that park as it closes the lead (REQ-026); the block after a team member's abort parks the lead for an answer once the abort and its cascade have ended. AC-008.7 says "parked for reports" and adds the case of a Blocked job's lead, with a test that restarts the daemon. Workflow follows. No identifier added or retired. | Spec-truth reconciliation of S-006, finding F2, confirming the B-021 ruling: REQ-008 and AC-008.7 read wider than REQ-014, S-004 REQ-006 and S-004 REQ-018 rule 2, which are authoritative. The Architect amends ADR-001 decision 4 with this. | T-270 |
 | 2026-11-07 | spec-truth reconciliation — FAIL | REQ-008 and AC-008.7 read wider than REQ-014; an abort clears a Blocked lead's park; text tightened and follow-up routed; spec read in part | none |
 | 2026-11-07 | spec-truth reconciliation — PASS | v0.15 confirmed for REQ-008 and AC-008.7 against T-270; read limited to S-006's findings and 75c7c946..0604b54f | none |
-| 2026-11-07 | v0.16. Triggers leave the job sources (Definitions, Exclusions, Workflow, REQ-003, AC-003.3, REQ-012, REQ-013, AC-013.1, Configuration, Dependencies, Implementation Order). REQ-013 and the closed Open Question: an entry can name a model, thinking level and workspace as well as a role (S-007 REQ-001). REQ-018: unregistering a workspace an entry names is refused. REQ-022: the front desk gains schedule tools. Users. REQ-012 and AC-012.3: a schedule entry can name those values. REQ-002, AC-002.1 and REQ-022: `desk` sets up and runs schedules, and edits no file itself. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
+| 2026-11-07 | v0.16. Triggers leave the job sources (Definitions, Exclusions, Workflow, REQ-003, AC-003.3, REQ-012, REQ-013, AC-013.1, Configuration, Dependencies, Implementation Order). REQ-013 and the closed Open Question: an entry can name a model, thinking level and workspace as well as a role (S-007 REQ-001). REQ-018: unregistering a workspace an entry names is refused. REQ-022 and the Interfaces table: the front desk gains schedule tools. Definitions and Users: the front desk sets up and runs schedules. Configuration: an entry's seat values. Users. REQ-012 and AC-012.3: a schedule entry can name those values. REQ-002, AC-002.1 and REQ-022: `desk` sets up and runs schedules, and edits no file itself. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
