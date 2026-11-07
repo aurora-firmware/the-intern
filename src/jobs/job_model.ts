@@ -3,7 +3,7 @@
 
 export type JobStatus = "to_do" | "in_progress" | "blocked" | "done";
 export type JobAction = "start" | "block" | "resume" | "complete" | "cancel";
-export type Letter = "C" | "W" | "E" | "S" | "T" | "A";
+export type Letter = "C" | "W" | "E" | "S" | "A";
 export type Resolution = { kind: "completed" | "cancelled"; justification: string };
 
 export type ObservedDetails = { remoteAddress?: string; remotePort?: number; messageId?: string; sender?: string };
@@ -19,7 +19,7 @@ export type JobOrigin =
     | { kind: "follow_up"; jobId: string; conversationId: string };
 
 const REQUEST_LETTERS: Readonly<Record<string, Letter>> = { "command line": "C", "web interface": "W", email: "E" };
-const LETTERS: readonly string[] = ["C", "W", "E", "S", "T", "A"];
+const LETTERS: readonly string[] = ["C", "W", "E", "S", "A"];
 const SHORT_NUMBER_PATTERN = /^([A-Za-z])-([1-9][0-9]*)$/;
 
 export const letterFor = (origin: JobOrigin): Letter | undefined => {

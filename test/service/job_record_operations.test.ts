@@ -157,6 +157,7 @@ describe("job record operations", () => {
         );
         assert.deepEqual(byId.history, []);
         assert.equal(await refusalCode(started.invoke("jobs.get", { job: "E-15" })), "not_found");
+        assert.equal(await refusalCode(started.invoke("jobs.get", { job: "T-1" })), "not_found");
     });
 
     it("jobs.update records old and new value with the author, and refuses fields that are not editable", async () => {
@@ -226,6 +227,7 @@ describe("job record operations", () => {
         assert.deepEqual(numbers, [...wanted].reverse());
         assert.equal(await refusalCode(started.invoke("jobs.list", { status: "paused" })), "invalid_input");
         assert.equal(await refusalCode(started.invoke("jobs.list", { letter: "Z" })), "invalid_input");
+        assert.equal(await refusalCode(started.invoke("jobs.list", { letter: "T" })), "invalid_input");
         assert.equal(await refusalCode(started.invoke("jobs.list", { limit: 0 })), "invalid_input");
         assert.equal(await refusalCode(started.invoke("jobs.list", { cursor: "garbage" })), "invalid_input");
     });
