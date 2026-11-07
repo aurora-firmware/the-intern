@@ -315,9 +315,9 @@ export async function continueWithHeld(host: HarnessHost, conversationId: string
 }
 
 // One commit per conversation (ADR-001 decision 4): an aborted conversation is left neither parked for reports nor
-// waiting for a report, and its held messages are withdrawn as an abort withdraws queued input. A park for an answer
-// stays: it is the lead of a Blocked job, which the job's abort closes (S-001 REQ-008, REQ-014). The same commit
-// marks a lone abort of an invoked conversation (`isReportOwed`), so its invoker is owed an "aborted" report.
+// waiting for a report, and its held messages are withdrawn as an abort withdraws queued input. A lead's park for an
+// answer stays: it is the lead of a Blocked job, which the job's abort closes (S-001 REQ-008, REQ-014). The same
+// commit marks a lone abort of an invoked conversation (`isReportOwed`), so its invoker is owed an "aborted" report.
 async function clearWaiting(
     host: HarnessHost,
     conversationId: string,
@@ -325,7 +325,7 @@ async function clearWaiting(
 ): Promise<void> {
     if ((await readConversationMeta(host, conversationId)) === undefined) return;
     await updateMeta(host, conversationId, (meta) => {
-        if (meta.parked?.waitingFor !== "answer") meta.parked = null;
+        if (!(meta.isLead && meta.parked?.waitingFor === "answer")) meta.parked = null;
         meta.awaiting = [];
         meta.held = [];
         if (marks.isReportOwed === true) meta.aborted = true;
