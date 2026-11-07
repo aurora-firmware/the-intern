@@ -111,6 +111,7 @@ describe("stopping and redirecting a conversation from the Job page in chrome", 
 
         await page.fill(`main ${REDIRECT_BOX}`, WORDS);
         await page.click(`main ${REDIRECT_SEND}`);
+        await waitFor(page, `document.querySelector('main .redirect textarea')?.value === ""`);
         rig.daemon.releaseRuns();
 
         await waitFor(
@@ -120,7 +121,6 @@ describe("stopping and redirecting a conversation from the Job page in chrome", 
         const steer = (await entriesOf(rig.daemon, rig.lead)).find((entry) => entry.kind === "intern.steer");
         t.assert.equal(steer?.data.content, WORDS);
         t.assert.deepEqual(steer?.data.actor, { kind: "team_member", wayIn: "web interface" });
-        t.assert.equal(await page.inputValue(`main ${REDIRECT_BOX}`), "");
     });
 
     it("keeps the lead running after a decline, stops it after a confirmation with no reminder, and an answer resumes it", {
@@ -272,6 +272,28 @@ describe("stopping and redirecting a conversation from the Job page in chrome", 
         await waitFor(page, `document.querySelectorAll("main details.activity").length === 3`);
         await new Promise((resolve) => setTimeout(resolve, 1500));
         t.assert.equal(await page.locator("main .conversation-controls").count(), 0);
+    });
+
+    it("draws no Stop or Redirect on the lead of a Blocked job that is parked for an answer", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const rig = await startRig("block-with-reason");
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        await until("the job to be blocked", async () => {
+            const detail = (await rig.daemon.invoke("jobs.get", { job: rig.job.id })) as { status: string };
+            return detail.status === "blocked";
+        });
+        t.assert.equal(await statusOf(rig.daemon, rig.lead), "parked");
+        const page = await browser.newPage();
+        await page.goto(pageUrl(rig.port, `/ui/#/jobs/${rig.job.number}`));
+
+        await waitForField(page, "status", "Blocked");
+        await page.waitForSelector(`main details.activity[data-conversation="${rig.lead}"]`, { timeout: WAIT_MS });
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        t.assert.equal(await page.locator("main .conversation-controls").count(), 0);
+        t.assert.equal(await page.locator(`main ${STOP_OPEN}`).count(), 0);
+        t.assert.equal(await page.locator(`main ${REDIRECT_SEND}`).count(), 0);
     });
 
     it("disables Stop and Redirect while the service can't be reached", { timeout: TEST_TIMEOUT_MS }, async (t) => {

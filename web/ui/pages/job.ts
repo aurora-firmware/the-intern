@@ -188,7 +188,14 @@ export const JobPage = ({ feed, number }: { feed: FeedConnection | null | undefi
                           h(
                               Fragment,
                               { key: conversationId },
-                              h(ConversationControls, { number, conversationId, state }),
+                              h(ConversationControls, {
+                                  number,
+                                  conversationId,
+                                  state,
+                                  isBlockedLead:
+                                      view.record?.status === "blocked" &&
+                                      conversationId === view.record.leadConversation,
+                              }),
                               h(ConversationSettings, { conversationId }),
                           ),
                   }),
