@@ -92,7 +92,7 @@ const listJobsParameters = Type.Object({
     ),
     letter: Type.Optional(
         Type.Union(
-            ["C", "W", "E", "S", "T", "A"].map((letter) => Type.Literal(letter)),
+            ["C", "W", "E", "S", "A"].map((letter) => Type.Literal(letter)),
             {
                 description: "The origin letter of the jobs to list.",
             },
