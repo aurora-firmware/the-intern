@@ -490,7 +490,7 @@ Chrome and Firefox are the required browsers; Edge is good to have (S-006 REQ-02
 | Runs in | Tests |
 |---|---|
 | Chrome | Every browser test |
-| Firefox as well | AC-021.1, and AC-005.4 and AC-001.2, which depend on the worker and the connection limit |
+| Firefox as well | 21 tests, in nine groups: the page shell (`shell.test.ts`, 5), the connection banner (`connection_banner.test.ts`, 5), moving between pages (`navigation.test.ts`, 2), the shared worker (`feed_worker.test.ts`, 2), long activity (`activity_scale.test.ts`, 2), timeliness and a full board (`board_scale.test.ts`, 2), the journey (`browsers.test.ts`, 1), many agents (`many_agents.test.ts`, 1) and the host probe (`browser_support.test.ts`, 1). They carry AC-021.1, AC-005.4 and AC-001.2, which depend on the worker and the connection limit. Long activity and the full board carry AC-018.1 and AC-019.1 to AC-019.3 |
 | Edge as well, where it is installed | The same tests as Firefox. Edge is good to have, not required: its tests are skipped where it isn't installed |
 
 ## Rejected approaches
