@@ -199,12 +199,12 @@ type ControlsProps = {
 export const ConversationControls = ({ number, conversationId, state, isBlockedLead, isToDoLead }: ControlsProps) => {
     const [isEngaged, setEngaged] = useState(false);
     const isRunOrReportsPark = useIsOffered(conversationId, state.busy);
-    const isOffered = isRunOrReportsPark && !isBlockedLead && !isToDoLead;
+    const isOffered = isRunOrReportsPark && !isBlockedLead;
     if (!isOffered && !isEngaged) return null;
     return h(
         "div",
         { class: "conversation-controls", "data-busy": String(state.busy) },
-        h(StopButton, { conversationId, state, isOffered, onEngaged: setEngaged }),
+        h(StopButton, { conversationId, state, isOffered: isOffered && !isToDoLead, onEngaged: setEngaged }),
         isOffered ? h(RedirectBox, { number, conversationId }) : null,
     );
 };

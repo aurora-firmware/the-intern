@@ -86,6 +86,10 @@ describe("the Stop on the lead of a To do job in chrome", () => {
         );
         await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
         t.assert.equal(await page.locator("main .stop-open").count(), 0);
+        t.assert.equal(
+            await page.locator(`main details.activity[data-conversation="${rig.lead}"] .redirect-send`).count(),
+            1,
+        );
         t.assert.equal(await page.locator("main .job-cancel:not([disabled])").count(), 1);
 
         await rig.daemon.invoke("conversations.abort", { conversationId: rig.heldLead });
