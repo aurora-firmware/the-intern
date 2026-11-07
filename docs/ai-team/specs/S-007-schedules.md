@@ -456,8 +456,8 @@ and the creation of the job SHALL happen as one step, so two starts of one entry
 
 Fires SHALL begin once the daemon is ready (S-002 REQ-003). A due time that passes while the daemon is stopped or
 starting or the machine is off SHALL create no job and no record, however short the gap. The entry's next fire SHALL be
-its next due time. A due time that passed more than one minute ago SHALL NOT fire. A sleep ending within a minute of a
-due time doesn't stop it: the fire comes on the daemon's next check, within REQ-015's minute.
+its next due time. A due time that passed more than one minute ago SHALL NOT fire. A sleep doesn't stop a due time that
+is less than a minute old at the daemon's next check: it fires then.
 
 #### AC-007.1 — No catching up
 
