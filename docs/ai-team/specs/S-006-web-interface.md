@@ -1,7 +1,7 @@
 ---
 id: S-006
 title: Web interface
-version: '0.2'
+version: '0.3'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-06'
 author: planner
@@ -74,7 +74,8 @@ What this specification explicitly does NOT cover:
 - **Phones and tablets.** The pages are designed for desktop screens only. Product owner decision on 2026-11-06.
 - **Browser notifications.** No pop-ups or sounds when a job blocks. A team member sees it on the board.
 - **Login, accounts and encryption.** Reaching the page follows from the network setup (S-000; S-003 Exclusions).
-- **Names on actions.** Nobody enters a name. The record shows the way in and the network address only (REQ-015).
+- **Names on actions.** Nobody enters a name. The record shows the way in, and the network address or the front desk
+  where the origin has them (REQ-015).
 - **Workspace file browsing and editing.** No operation offers it, and S-000 says this interface adds no capabilities.
   An agent's file changes appear only through its tool activity. The product owner expects browser editing of agents'
   system prompts held in files to come in a later revision.
@@ -167,8 +168,10 @@ owns the page that calls it (REQ-012).
 ### Attribution
 
 The network listener records each action with the way in `web interface` and the remote address and port of the
-browser's connection (S-003 REQ-007). A job created in the browser gets a `W-n` number (S-004). The pages send nothing
-that claims a name.
+browser's connection (S-003 REQ-007). A job created directly in the browser gets a `W-n` number (S-004), and its origin
+records them. A job the front desk creates for a team member in the browser also gets a `W-n` number. Its origin records
+the way in and the front desk, with no address, because the front desk's tool creates it, not the browser's connection
+(S-004 REQ-003, REQ-021). The pages send nothing that claims a name.
 
 ### What doesn't change
 
@@ -195,6 +198,7 @@ Live following
   Stop → one confirmation → conversation aborted; already finished → page says so   REQ-006
   Stop on the lead → no reminder → Blocked "stopped by a team member" → an answer resumes   REQ-006
   Stop on a lead parked for reports → one confirmation → it and its invoked agents end → Blocked   REQ-006
+  To do job's lead → no Stop; Cancel ends the job, and input to its lead starts it  REQ-006
   Reset → one confirmation → conversation starts over                               REQ-007
 
 Any action
@@ -281,8 +285,8 @@ change.
 ### REQ-003 — The job page
 
 The Job page SHALL show a job's short number, title, description, definition of done, status, Blocked reason while
-Blocked, origin (way in and network address), resolution and justification once Done, worklog and history, and SHALL
-keep them current without a reload.
+Blocked, origin (way in and network address where the origin has them, and the front desk for a job it created),
+resolution and justification once Done, worklog and history, and SHALL keep them current without a reload.
 
 #### AC-003.1 — A finished job
 
@@ -377,12 +381,13 @@ SHALL leave the browser's connections free for its actions (Assumptions and Depe
 
 ### REQ-006 — Stop and redirect
 
-The Job page SHALL offer Stop and Redirect for a running conversation of the job or one parked for reports. Stop SHALL
-ask for one confirmation, then abort the conversation (S-001's cascade). Stopping the job's lead SHALL leave the job as
-S-004 REQ-008 states: no reminder, Blocked with the reason "stopped by a team member", and an answer resumes it.
-Redirect SHALL deliver the team member's words to the running agent after its current tool round (S-002's busy mode
-`steer`; S-001 REQ-020). For a conversation parked for reports, the service holds the words, and the page SHALL say
-"held until it continues" (ADR-004 decision 4).
+The Job page SHALL offer Stop and Redirect for a running conversation of the job or one parked for reports. It SHALL
+offer no Stop on the lead of a To do job, because that abort would leave the job To do with nothing to resume it from
+the page (S-004 REQ-008). Stop SHALL ask for one confirmation, then abort the conversation (S-001's cascade). Stopping
+the lead of an In progress job SHALL leave the job as S-004 REQ-008 states: no reminder, Blocked with the reason
+"stopped by a team member", and an answer resumes it. Redirect SHALL deliver the team member's words to the running
+agent after its current tool round (S-002's busy mode `steer`; S-001 REQ-020). For a conversation parked for reports,
+the service holds the words, and the page SHALL say "held until it continues" (ADR-004 decision 4).
 
 #### AC-006.1 — Redirect
 
@@ -428,6 +433,15 @@ Redirect SHALL deliver the team member's words to the running agent after its cu
 - **Then:** the lead and the invoked agent both end, and the job goes Blocked with the reason "stopped by a team member"
 
 **Verification:** test — a browser test.
+
+#### AC-006.6 — No Stop on a To do job's lead
+
+- **Given:** a To do job whose lead waits for a worker thread on the fake model, with its page open
+- **When:** a worker thread comes free and the job goes In progress
+- **Then:** while the job is To do the page offers no Stop on its lead and offers Cancel; once it is In progress, with
+  no reload, the page offers Stop
+
+**Verification:** test — a browser test with every worker thread held.
 
 ### REQ-007 — Conversation controls
 
@@ -611,12 +625,14 @@ showed and show what it missed, once, before the new deltas.
 ### REQ-015 — Who did it
 
 The pages SHALL ask for no login and no name, and SHALL send nothing claiming who the team member is. Actions SHALL be
-recorded as S-003 REQ-007 states, and the Job page SHALL show that record for a job's origin.
+recorded as S-003 REQ-007 states, and the Job page SHALL show that record for a job's origin. A job a team member
+creates directly SHALL record the way in and the network address. A job the front desk creates SHALL record the way in
+and the front desk, with no address (S-004 REQ-003, REQ-021).
 
 #### AC-015.1 — Recorded by address
 
 - **Given:** a browser on a loopback address
-- **When:** it creates a job
+- **When:** it creates a job directly
 - **Then:** the job is `W-n`, its origin records the way in `web interface` with that address and port, and the Job page
   shows them
 
@@ -625,10 +641,19 @@ recorded as S-003 REQ-007 states, and the Job page SHALL show that record for a 
 #### AC-015.2 — From another computer
 
 - **Given:** a daemon with `[network]` on the team's network
-- **When:** a second computer opens `/ui/` and creates a job
+- **When:** a second computer opens `/ui/` and creates a job directly
 - **Then:** the pages load, and the job's origin records that computer's address
 
 **Verification:** demonstration — by hand, extending the LAN check in `docs/development/local_runs.md`.
+
+#### AC-015.3 — A front desk job
+
+- **Given:** a front desk on the fake model that creates a job when asked
+- **When:** a team member asks it for one in the browser
+- **Then:** the job is `W-n`, its origin records the way in `web interface` and the front desk, with no address, and the
+  Job page shows the way in and the front desk
+
+**Verification:** test — a browser test.
 
 ## Quality Requirements
 
@@ -803,12 +828,13 @@ None. The web interface adds no setting. The existing `[network]` section of `co
 - **S-001 to S-005** provide the operations and the feed named in Interfaces. Amendments on this spec's planning branch
   provide the rest, apart from the `order` input of `conversations.entries`, which this spec's Interfaces add. S-003
   v0.5 adds the export route (REQ-016) and one stream for several conversations (REQ-006). S-004 v0.13 adds the block
-  after a team member's stop (REQ-008) and the "related changed" delta (REQ-015).
+  after a team member's stop (REQ-008) and the "related changed" delta (REQ-015), and S-004 v0.14 states the abort of a
+  To do job's lead (REQ-008).
 - **Browser connections.** Plain HTTP allows a browser 6 connections per host across its tabs. A Job page reads the
   instance feed and the stream for its conversations, so 3 Job pages that each hold both would use all 6 and leave none
   for actions. ADR-007 decides how the pages stay within the limit, so that AC-005.4 holds.
-- **Delta size.** Today each delta of a conversation re-sends its whole active view, measured at 1.06 MB for a 32-byte
-  change. ADR-008 decides how AC-019.3 is met.
+- **Delta size.** Before this spec, each delta of a conversation re-sent its whole active view, measured at 1.06 MB for
+  a 32-byte change. ADR-008 decides how AC-019.3 is met.
 - **Brand assets.** The brand manual, logos and font choices come from The Round Table project
   (`~/projects/the_round_table/project/docs/corporate_image/` and `the_round_table/src/app/globals.css`). They are
   copied into this repository, so the two projects stay independent. The fonts are free and open source.
@@ -831,12 +857,13 @@ None. The web interface adds no setting. The existing `[network]` section of `co
 
 ## Implementation Order
 
-1. **The shell.** The served files, style, sidebar, addresses, connection banner and the browser test setup. Delivers
-   REQ-001, REQ-014, REQ-016, REQ-017. Depends on nothing else here.
+1. **The shell.** The served files, style, sidebar, addresses and the browser test setup. Delivers REQ-001, REQ-016,
+   REQ-017. Depends on nothing else here.
 2. **See the work.** Board and Job page, read-only, with live activity, the shared stream for the conversations pages
-   follow, the `order` input of `conversations.entries`, staying within the browser's connections, and delta size
-   bounded by what an entry adds (AC-019.3). Delivers REQ-002, REQ-003, REQ-005, REQ-018, REQ-019, S-003 REQ-006's
-   stream and S-004 REQ-015's "related changed" delta. Depends on phase 1.
+   follow, the `order` input of `conversations.entries`, staying within the browser's connections, delta size bounded by
+   what an entry adds (AC-019.3), and the connection banner and recovery on the tab's feed connection. Delivers REQ-002,
+   REQ-003, REQ-005, REQ-014, REQ-018, REQ-019, S-003 REQ-006's stream and S-004 REQ-015's "related changed" delta.
+   Depends on phase 1.
 3. **Steer the work.** Answering, editing, cancelling, Stop, Redirect, conversation controls, the Front desk and
    refusals. Delivers REQ-004, REQ-006, REQ-007, REQ-008, REQ-013, REQ-015 and S-004 REQ-008's block after a stop.
    Depends on phase 2.
@@ -860,3 +887,5 @@ Both were for the Architect, and Feature Architecture resolved them. Neither cha
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-11-06 | v0.2. Interfaces: the service calls table adds `daemon.status` for every page; the Front desk row names the shared `scope=conversations` stream; a Contract adds `conversations.entries`' optional `order` input, ascending by default, and pages use `"descending"`; the Job page row also names the shared stream. Assumptions and Dependencies names that Contract as the source of `order`. Implementation Order phase 2 delivers it and names the shared stream. Open Questions: both marked resolved. Assumptions and Dependencies: "Browser connections" points to ADR-007 and "Delta size" to ADR-008. No REQ or AC changed. S-002 isn't amended. | Spec findings from Feature Architecture. Driving ADRs: ADR-006 (technology preference), ADR-007 (decisions 4, 6 and 9, and the shared stream), ADR-008 (delta size). | None; S-006 isn't broken down yet |
+| 2026-11-07 | v0.3. REQ-003, REQ-015, Exclusions ("Names on actions") and Attribution: a job a team member creates directly records the way in and the network address; a job the front desk creates records the way in and the front desk, with no address, as S-004 REQ-003 and REQ-021 state; the origin shows what it has. AC-015.1 and AC-015.2 say "creates a job directly". New AC-015.3. REQ-006: no Stop on the lead of a To do job, and the block after Stop concerns an In progress job's lead. New AC-006.6. Workflow follows. Implementation Order: REQ-014 and the connection banner move from phase 1 to phase 2, where they were built. Assumptions: "Delta size" is past tense, and the S-004 v0.14 dependency is named. No identifier retired. REQ-016 stays authoritative for the banner colour. | Spec-truth reconciliation, findings F3, F4, F5 (wording), F7 and F12. Product owner accepted the rulings on 2026-11-07. Driving ADR: ADR-008 for the delta text. | T-271, T-272, T-274 |
+| 2026-11-07 | spec-truth reconciliation — FAIL | Work in e0e19728..788e9c45 against v0.2: REQ-021 and Success Criterion 1 unproven (no CI, no Edge), AC-016.1 review incomplete, front desk and follow-up origins, a To do lead's Stop, stale text; follow-ups routed | none |
