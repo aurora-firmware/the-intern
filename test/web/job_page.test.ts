@@ -167,4 +167,25 @@ describe("the Job page's record in chrome", () => {
         );
         t.assert.deepEqual(await worklogTexts(page), ["written while deaf"]);
     });
+
+    it("draws the fields of a Blocked job, with the Blocked reason, in one plain white card", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { daemon, port } = await startNetworkDaemon("block-with-reason");
+        const job = (await daemon.invoke("jobs.create", { text: "which colour" })) as Job;
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await page.goto(pageUrl(port, `/ui/#/jobs/${job.number}`));
+        await page.waitForSelector("main .job-field[data-field='blocked-reason']", { timeout: WAIT_MS });
+
+        const card = page.locator("main .job-record.card");
+        t.assert.equal(await card.count(), 1);
+        t.assert.equal(await card.locator(".job-number").textContent(), job.number);
+        for (const name of ["title", "description", "definition-of-done", "status", "blocked-reason", "origin"]) {
+            t.assert.equal(await card.locator(`.job-field[data-field="${name}"]`).count(), 1, name);
+        }
+        t.assert.equal(await card.evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(255, 255, 255)");
+        t.assert.equal(await card.evaluate((el) => el.classList.contains("card-blocked")), false);
+    });
 });

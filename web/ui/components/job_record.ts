@@ -108,7 +108,7 @@ export const JobFields = ({ record }: { record: JobRecord }) => {
     const sourceNumber = useJobNumber(origin.kind === "follow_up" ? origin.jobId : undefined);
     return h(
         "section",
-        { class: "job-record" },
+        { class: "card job-record" },
         h("h3", { class: "job-number" }, record.number),
         h(Field, { name: "title", label: "Title", value: record.title }),
         h(Field, { name: "description", label: "Description", value: record.description }),
