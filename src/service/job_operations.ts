@@ -21,7 +21,7 @@ import { type Caller, defineOperation, ServiceError } from "./operations.ts";
 import { seatActorFor } from "./seat_operations.ts";
 
 type LeadOrigin = Exclude<Origin, { kind: "invocation" | "front_desk" }>;
-type SourceOrigin = Extract<LeadOrigin, { kind: "schedule" | "trigger" }>;
+type SourceOrigin = Extract<LeadOrigin, { kind: "schedule" }>;
 type Overrides = { model?: string; thinkingLevel?: string; workspace?: string };
 type StartLeadResult = { conversationId: string; created: boolean };
 
@@ -31,7 +31,6 @@ const OVERRIDE_FIELDS = ["model", "thinkingLevel", "workspace"] as const;
 const ORIGIN_FIELDS: Record<LeadOrigin["kind"], readonly string[]> = {
     request: [],
     schedule: ["entry", "fireTime"],
-    trigger: ["trigger", "event"],
     follow_up: [],
 };
 
@@ -176,11 +175,11 @@ function parseCreateJob(raw: unknown): CreateJobRequest {
 }
 
 function sourceOrigin(raw: unknown, source: string): SourceOrigin {
-    const mustName = `Job source ${source} must name a schedule or trigger origin`;
+    const mustName = `Job source ${source} must name a schedule origin`;
     if (typeof raw !== "object" || raw === null || Array.isArray(raw))
         throw new ServiceError("invalid_input", mustName);
     const kind = (raw as { kind?: unknown }).kind;
-    if (kind !== "schedule" && kind !== "trigger") throw new ServiceError("invalid_input", mustName);
+    if (kind !== "schedule") throw new ServiceError("invalid_input", mustName);
     try {
         return parseOrigin(raw);
     } catch (error) {

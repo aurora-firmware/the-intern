@@ -16,7 +16,6 @@ export type JobAuthor =
 export type JobOrigin =
     | { kind: "request"; wayIn: string; observed?: ObservedDetails; frontDesk?: string }
     | { kind: "schedule"; entry: string; fireTime: string }
-    | { kind: "trigger"; trigger: string; event: string }
     | { kind: "follow_up"; jobId: string; conversationId: string };
 
 const REQUEST_LETTERS: Readonly<Record<string, Letter>> = { "command line": "C", "web interface": "W", email: "E" };
@@ -29,8 +28,6 @@ export const letterFor = (origin: JobOrigin): Letter | undefined => {
             return Object.hasOwn(REQUEST_LETTERS, origin.wayIn) ? REQUEST_LETTERS[origin.wayIn] : undefined;
         case "schedule":
             return "S";
-        case "trigger":
-            return "T";
         case "follow_up":
             return "A";
     }

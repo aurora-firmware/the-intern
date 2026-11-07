@@ -30,7 +30,6 @@ describe("letterFor", () => {
         assert.equal(letterFor(request("web interface")), "W");
         assert.equal(letterFor(request("email")), "E");
         assert.equal(letterFor({ kind: "schedule", entry: "daily", fireTime: "2026-11-02T08:00:00Z" }), "S");
-        assert.equal(letterFor({ kind: "trigger", trigger: "t", event: "e" }), "T");
         assert.equal(letterFor({ kind: "follow_up", jobId: "j", conversationId: "c" }), "A");
     });
 
