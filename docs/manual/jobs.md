@@ -126,6 +126,10 @@ job's definition of done holds, and it survives a restart of the service. Answer
 that reaches the lead resumes the job. Stopping an idle lead changes nothing. Stopping the lead of a Blocked job keeps
 the job's reason.
 
+When all worker threads are in use, the lead of a new job waits for one and the job stays To do. If you stop that lead,
+the job stays To do with an idle lead and no reminder. The Job page offers no Stop on the lead of a To do job, but it
+offers Cancel; a message to the lead starts it once a worker thread is free, and the job goes In progress.
+
 ## The resolution
 
 A Done job has a resolution. Its kind is `completed` or `cancelled`, and its justification says why: for a completed job
