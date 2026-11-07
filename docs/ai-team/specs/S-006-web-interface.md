@@ -1,7 +1,7 @@
 ---
 id: S-006
 title: Web interface
-version: '0.4'
+version: '0.5'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-06'
 author: planner
@@ -789,9 +789,11 @@ keyboard, with the focused control visible.
 
 ### REQ-021 — Browsers
 
-The pages SHALL work on current Chrome and Firefox on desktop. These two are the required browsers. Edge on desktop is
-good to have: the browser tests SHALL run on Edge where it is installed and skip where it isn't, and an Edge failure on
-a machine that has Edge SHALL still fail. Safari isn't a target and isn't blocked.
+The pages SHALL work on current Chrome and Firefox on desktop. These two are the required browsers, and Edge on desktop
+is good to have. In CI, every browser test SHALL run on Chrome, and AC-021.1's journey and the tests
+`docs/development/architecture.md` names SHALL also run on Firefox, and on Edge where it is installed. Edge's tests
+SHALL skip where Edge isn't installed. An Edge failure on a machine that has Edge SHALL still fail, and a missing Chrome
+or Firefox SHALL fail the CI run. Safari isn't a target and isn't blocked.
 
 #### AC-021.1 — The main journey in each engine
 
@@ -801,7 +803,8 @@ a machine that has Edge SHALL still fail. Safari isn't a target and isn't blocke
   installed, the journey passes in it, and an Edge failure fails the run. Where Edge isn't installed, its tests skip
   with a diagnostic
 
-**Verification:** test — the browser tests run on Chrome, on Firefox, and on Edge where it is installed, in CI.
+**Verification:** test — in CI, every browser test runs on Chrome, and the journey and the tests
+`docs/development/architecture.md` names also run on Firefox, and on Edge where it is installed.
 
 ### REQ-022 — Documentation and words
 
@@ -847,8 +850,10 @@ None. The web interface adds no setting. The existing `[network]` section of `co
 ## Success Criteria
 
 1. All browser tests of this spec pass in CI against a real daemon on the fake model, covering the journeys of Users and
-   Journeys, the restart (REQ-014) and a refused action (REQ-013). They run on Chrome and Firefox, and on Edge where it
-   is installed. Edge's tests may skip only for a missing Edge (REQ-021). Measured by the CI run.
+   Journeys, the restart (REQ-014) and a refused action (REQ-013). Every browser test runs on Chrome. AC-021.1's journey
+   and the tests `docs/development/architecture.md` names also run on Firefox, and on Edge where it is installed. Edge's
+   tests may skip only for a missing Edge, an Edge failure on a machine that has Edge fails the run, and a missing
+   Chrome or Firefox fails the CI run (REQ-021). Measured by the CI run.
 2. The service tests of S-003 REQ-016 pass: the copy, the log line, the owner-only temporary copy and its removal, one
    download at a time and the free-space refusal. So do those of S-003 AC-006.4 and S-004 AC-008.5. Measured by
    `npm test`.
@@ -896,3 +901,5 @@ Both were for the Architect, and Feature Architecture resolved them. Neither cha
 | 2026-11-07 | spec-truth reconciliation — FAIL | Work in e0e19728..788e9c45 against v0.2: REQ-021 and Success Criterion 1 unproven (no CI, no Edge), AC-016.1 review incomplete, front desk and follow-up origins, a To do lead's Stop, stale text; follow-ups routed | none |
 | 2026-11-07 | spec-truth reconciliation — FAIL | v0.3 confirmed for REQ-003, REQ-006, REQ-015, AC-006.6, AC-015.3 and AC-016.1 in Chrome; REQ-021, AC-021.1 and Success Criterion 1 unproven, T-273 blocked on the product owner's push decision; manual sentence on a job's origin untrue, follow-up routed; read limited to 75c7c946..0604b54f | none |
 | 2026-11-07 | v0.4. REQ-021: the required browsers are current Chrome and Firefox on desktop. Edge is good to have: its tests run where it is installed and skip where it isn't, and an Edge failure on a machine that has Edge still fails. Safari stays as it was. AC-021.1 and Success Criterion 1 follow; AC-021.1 limits the failure for a missing Chrome or Firefox to the CI run, because elsewhere a missing browser skips its tests (Architect's consistency review, finding F3). No identifier retired. S-000 names no browser and doesn't change. | Product owner decision: "About T-273, since we are not releasing for windows, I suggest the tests in Edge are just good to have and will skip if there is no Edge browser available." | T-273, T-278 |
+| 2026-11-07 | spec-truth reconciliation — FAIL | CI run 42367063537 at c0f21644 proves REQ-021's journey on Chrome, Firefox and Edge, with T-278, T-279, B-030, B-031 and the ADR-006 and ADR-007 amendments confirmed; "the browser tests" in REQ-021, AC-021.1 and Success Criterion 1 overstates the 21 that run beyond Chrome, amendment and lower-document follow-up routed; read limited to 33420c07..c0f21644 plus T-277 | none |
+| 2026-11-07 | v0.5. REQ-021, AC-021.1's Verification and Success Criterion 1: in CI, every browser test runs on Chrome, and AC-021.1's journey and the tests `docs/development/architecture.md` names also run on Firefox, and on Edge where it is installed. An Edge failure on a machine that has Edge still fails, and a missing Chrome or Firefox still fails the CI run. No identifier retired. | Architect's completion review of 2026-11-07, finding F1: "the browser tests" overstated what runs beyond Chrome. The main session, holding the product owner role for this ruling, decided the narrower wording. | T-280 |
