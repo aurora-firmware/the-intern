@@ -12,11 +12,11 @@ author: planner
 ## Purpose
 
 This spec covers S-000's **Schedules** component, named "Schedules and triggers" until this spec's amendment of S-000.
-Today a job starts only when a team member or an agent creates one, so recurring work such as a nightly check depends
-on someone remembering it. The job record (S-004), the lead conversation a job source starts (S-001 REQ-012, REQ-013)
-and the reserved `bob schedules` group (S-005) already wait for a spec that says when jobs start on their own. When it
-is done, a team member keeps schedule entries in one file and manages them from the command line, the web interface or
-the front desk; each due time starts a fresh job with nobody present; and every run and skipped fire can be read
+Today a job starts only when a team member or an agent creates one, so recurring work such as a nightly check depends on
+someone remembering it. The job record (S-004), the lead conversation a job source starts (S-001 REQ-012, REQ-013) and
+the reserved `bob schedules` group (S-005) already wait for a spec that says when jobs start on their own. When it is
+done, a team member keeps schedule entries in one file and manages them from the command line, the web interface or the
+front desk; each due time starts a fresh job with nobody present; and every scheduled run and skipped fire can be read
 afterwards. The product owner also ruled that no job starts on an event: agents create jobs while they run, Email is an
 input that an agent triages, and a Done job starts nothing. This spec therefore removes triggers from the product.
 
@@ -31,10 +31,11 @@ role, seat, workspace, front desk, service operation, observation feed, page, wa
 | Schedule entry | One recurring piece of work: a name, a cron expression, a request and optional seat values (REQ-001). |
 | Due time | A minute that an entry's cron expression matches, in the machine's local time (REQ-005). |
 | Fire | The moment the daemon acts on a due time. A fire creates a job or records a skip (REQ-004, REQ-006). |
-| Run | A job a schedule entry started, by a fire or by run now. Its short number has the origin letter `S`. |
-| Run now | A team member's request to start a run of an entry at once (REQ-008). |
+| Fire time | The time a scheduled run records in its origin: its due time, or for a run on demand the moment it started (REQ-004, REQ-008). |
+| Scheduled run | A job a schedule entry started, by a fire or by run now. Its short number has the origin letter `S`. This is not an agent run. |
+| Run now | A team member's request to start a scheduled run of an entry at once (REQ-008). A job started this way is a run on demand. |
 | Skipped fire | A fire that created no job, recorded with its due time and reason (REQ-006). |
-| Open run | A run whose status is To do or In progress. A Blocked or Done run is not open. |
+| Open scheduled run | A scheduled run whose status is To do or In progress. A Blocked or Done one is not open. |
 | Run history | An entry's runs and skipped fires, newest first (REQ-009). |
 
 ## Users and Journeys
@@ -42,7 +43,7 @@ role, seat, workspace, front desk, service operation, observation feed, page, wa
 | Actor | Goal |
 |---|---|
 | Team member | Sets up recurring work, runs it on demand, and checks what ran and what was skipped. |
-| Agent in a scheduled job | Knows it is working on a scheduled run and looks at earlier runs when that helps. |
+| Agent in a scheduled job | Knows it is working on a scheduled run and looks at earlier scheduled runs when that helps. |
 | Front desk | Sets up and runs schedule entries when a team member asks in chat. |
 | Later specs (downstream) | Email uses schedules or its own way in to bring mail to an agent; it reports no events to this spec. |
 | Developer | Tests every fire and skip against a controllable clock and the fake model. |
@@ -54,27 +55,27 @@ Journeys, in priority order:
    REQ-011, REQ-012, REQ-013.
 2. **It runs unattended.** At each due time the daemon starts a fresh job, which runs and ends like any other job. An
    agent that finds separate work creates a follow-up job. Delivered by REQ-004, REQ-005, REQ-016.
-3. **It looks back when it needs to.** The lead is told this is a scheduled run of a named entry and that earlier runs
-   can be read. It sees how each ended and opens any of them for detail. Delivered by REQ-009, REQ-010.
-4. **It doesn't pile up.** A fire is skipped while the entry has an open run or the workspace folder is gone. Missed
-   due times are not caught up. Delivered by REQ-006, REQ-007.
-5. **Run it now.** A team member starts a run on demand. Delivered by REQ-008.
-6. **Check on it.** A team member sees each entry's next due time, recent runs and skipped fires with the reason.
-   Delivered by REQ-009, REQ-011, REQ-012.
+3. **It looks back when it needs to.** The lead is told this is a scheduled run of a named entry and that earlier
+   scheduled runs can be read. It sees how each ended and opens any of them for detail. Delivered by REQ-009, REQ-010.
+4. **It doesn't pile up.** A fire is skipped while the entry has an open scheduled run or the workspace folder is gone.
+   Missed due times are not caught up. Delivered by REQ-006, REQ-007.
+5. **Run it now.** A team member starts a scheduled run on demand. Delivered by REQ-008.
+6. **Check on it.** A team member sees each entry's next due time, recent scheduled runs and skipped fires with the
+   reason. Delivered by REQ-009, REQ-011, REQ-012.
 
 ## Exclusions
 
 - **Triggers and any event-started job.** A job ending or mail arriving starts nothing by itself. Product owner ruling,
   2026-11-07: agents create the jobs they find need for, and REQ-014 removes triggers from the product.
-- **Catching up on missed runs.** S-000 excludes it.
-- **Records of fires missed while the daemon was down.** A missed due time shows no run and no skipped fire, to keep
-  startup free of that calculation (REQ-007).
-- **Automatic retries.** A run that ends cancelled isn't run again until the next due time. An agent or a team member
-  can create a job if more is needed.
-- **Notices about skipped fires or failed runs.** They show in the run history and on the page, and nobody is told.
-  Sending notices belongs to Email.
+- **Catching up on missed scheduled runs.** S-000 excludes it.
+- **Records of fires missed while the daemon was down.** A missed due time shows no scheduled run and no skipped fire,
+  to keep startup free of that calculation (REQ-007).
+- **Automatic retries.** A scheduled run that ends cancelled isn't run again until the next due time. An agent or a team
+  member can create a job if more is needed.
+- **Notices about skipped fires or failed runs.** They show in the scheduled run history and on the page, and nobody is
+  told. Sending notices belongs to Email.
 - **One-off runs at a future time.** Entries recur, and run now covers doing it at once.
-- **Chaining entries.** An agent in one run can create a job for the next piece of work.
+- **Chaining entries.** An agent in one scheduled run can create a job for the next piece of work.
 - **Pausing an entry.** A team member removes it and adds it again later, and its history continues (REQ-003).
 - **Renaming an entry.** The name ties the entry to its history (REQ-001).
 - **A time zone per entry.** Every entry uses the machine's local time (REQ-005).
@@ -85,8 +86,8 @@ Journeys, in priority order:
 
 ## Alternatives Considered
 
-- **Keep triggers with two kinds, job done and mail arriving.** Rejected by the product owner: agents create jobs
-  during their runs, Email is an input an agent triages, and a Done job is finished.
+- **Keep triggers with two kinds, job done and mail arriving.** Rejected by the product owner: agents create jobs during
+  their runs, Email is an input an agent triages, and a Done job is finished.
 - **Named events reported by a command, an agent tool or a script.** Rejected: an agent that finds a failed check
   creates a follow-up job, and outside tools can call `bob jobs create`.
 - **Schedules now, triggers in a later spec.** Rejected: no later need for triggers remains.
@@ -94,14 +95,14 @@ Journeys, in priority order:
   and copied, and it matches how roles are kept.
 - **A reload command for hand edits.** Rejected: S-002 already rules that a hand edit takes effect at the next restart,
   and entries follow the same rule as the rest of the file.
-- **A bad entry skipped at startup and flagged on the page.** Rejected: it would be an exception to S-002's rule for
-  the file. One rule for the whole file is simpler.
-- **A choice per entry between fresh runs and the history of the last N runs.** Rejected by the product owner: every run
-  starts fresh, and the agent reads earlier runs when it needs them.
-- **Pasting a summary or the worklogs of earlier runs into the new job's request.** Rejected by the product owner: it
-  fills the context on every run, and the agent can look up what it needs.
-- **A Blocked run holding back the next fire.** Rejected by the product owner: the check keeps running even when nobody
-  answers.
+- **A bad entry skipped at startup and flagged on the page.** Rejected: it would be an exception to S-002's rule for the
+  file. One rule for the whole file is simpler.
+- **A choice per entry between fresh scheduled runs and the history of the last N runs.** Rejected by the product owner:
+  every scheduled run starts fresh, and the agent reads earlier scheduled runs when it needs them.
+- **Pasting a summary or the worklogs of earlier scheduled runs into the new job's request.** Rejected by the product
+  owner: it fills the context on every scheduled run, and the agent can look up what it needs.
+- **A Blocked scheduled run holding back the next fire.** Rejected by the product owner: the check keeps running even
+  when nobody answers.
 - **Role only, or role and workspace only, per entry.** Rejected by the product owner: an entry can name the same seat
   values a team member can give `jobs.create`, which S-001 left open for this spec.
 - **Commands and page without front desk tools, or commands only.** Rejected by the product owner: handing work over
@@ -121,30 +122,31 @@ cron = "0 2 * * *"                  # required
 request = "Check that last night's backups ran and the services on the network answer."  # required
 role = "ops"                        # optional
 model = "provider/model"            # optional
-thinking = "low"                    # optional
-workspace = "infra"                 # optional
+thinking_level = "low"              # optional
+workspace = "/srv/infra"            # optional, an absolute path
 ```
 
 Unknown keys are refused, as for the rest of the file. REQ-001 gives each key's rules.
 
 ### Exposed: service operations
 
-All are reachable through both listeners at `POST /operations/<name>` (S-003 REQ-003), and the client library gains
-them with no listener change. Each returns S-002's errors. An entry is named by its `name`.
+All are reachable through both listeners at `POST /operations/<name>` (S-003 REQ-003), and the client library gains them
+with no listener change. Each returns S-002's errors. An entry is named by its `name`.
 
 | Operation | Kind | Input | Result | Requirement |
 |---|---|---|---|---|
-| `schedules.list` | read | none | every entry with its values, next due time and latest run | REQ-009 |
+| `schedules.list` | read | none | every entry with its values, next due time and latest scheduled run | REQ-009 |
 | `schedules.get` | read | `name` | the entry with its values and next due time; `not_found` | REQ-009 |
-| `schedules.runs` | read | `name`, `limit`, `cursor` | the run history, newest first; works for a removed entry that has history; `not_found` when it has none and no entry | REQ-009 |
-| `schedules.add` | control | `name`, `cron`, `request`, optional `role`, `model`, `thinking`, `workspace`, `idempotencyKey` | the new entry; `invalid_input`, `conflict` | REQ-001, REQ-003 |
+| `schedules.runs` | read | `name`, `limit`, `cursor` | the scheduled run history, newest first; works for a removed entry that has history; `not_found` when it has none and no entry | REQ-009 |
+| `schedules.add` | control | `name`, `cron`, `request`, optional `role`, `model`, `thinkingLevel`, `workspace`, `idempotencyKey` | the new entry; `invalid_input`, `conflict` | REQ-001, REQ-003 |
 | `schedules.change` | control | `name` and the values to change; an optional value can be cleared | the entry; `not_found`, `invalid_input`, `conflict` | REQ-001, REQ-003 |
 | `schedules.remove` | control | `name` | nothing; `not_found`, `conflict` | REQ-003 |
 | `schedules.run` | control | `name`, `idempotencyKey` | the new job; `not_found`, `busy`, `invalid_input` | REQ-008 |
 
-A run in `schedules.runs` carries its short number, due time, whether it was run on demand, status, and resolution
-with justification once Done. A skipped fire carries its due time, its reason and, for an open run, that job's short
-number. A team member's or an agent's `jobs.create` still can't name a schedule origin (S-002 AC-012.5).
+A scheduled run in `schedules.runs` carries its short number, fire time, whether it was run on demand, status, and
+resolution with justification once Done. A skipped fire carries its due time, its reason and, for an open scheduled run,
+that job's short number. A team member's or an agent's `jobs.create` still can't name a schedule origin (S-002
+AC-012.5).
 
 `jobs.list` gains a filter by schedule entry (REQ-009).
 
@@ -155,8 +157,8 @@ The instance scope of the observation feed (S-002 REQ-014) carries:
 | Delta | Carries |
 |---|---|
 | `settings_changed` (existing, S-002 REQ-022) | that schedule entries changed |
-| job created (existing, S-004 REQ-015) | a run, with its origin |
-| schedule fire skipped | the entry name, the due time, the reason and any open run's short number |
+| job created (existing, S-004 REQ-015) | a scheduled run, with its origin |
+| schedule fire skipped | the entry name, the due time, the reason and any open scheduled run's short number |
 
 ### Exposed: the `bob schedules` commands
 
@@ -180,7 +182,7 @@ A new page in S-006's sidebar with an address of its own (REQ-012).
 
 | Tool | Offered to | Does |
 |---|---|---|
-| read schedule runs | every agent of a job, and the front desk | returns an entry's run history as `schedules.runs` does (REQ-010) |
+| read schedule runs | every agent of a job, and the front desk | returns an entry's scheduled run history as `schedules.runs` does (REQ-010) |
 | list, add, change, remove and run schedules | the front desk only | act as the matching operations; a call repeated after a crash acts once, keyed by its tool call id (REQ-013) |
 
 Tool names and parameter layouts are not contract; the tasks fix them, as in S-004.
@@ -190,7 +192,7 @@ Tool names and parameter layouts are not contract; the tasks fix them, as in S-0
 - S-001: starting a lead conversation with a role, overrides and origin (REQ-012, REQ-013); the refusals for a role or
   workspace an entry names (REQ-003, REQ-018); the front-desk tools (REQ-022).
 - S-002: the configuration file and its settings operations (REQ-021, REQ-022); startup step 8, which starts the
-  scheduler (REQ-003); idempotency keys (REQ-013); the error outcomes (REQ-012).
+  scheduler (REQ-002); idempotency keys and the error outcomes (REQ-013).
 - S-003: the routes for every operation and the way in each listener stamps (REQ-003, REQ-007).
 - S-004: `jobs.create` with a schedule origin, the origin letter `S`, `jobs.list`, the job tools and job deltas.
 - S-005: the reserved `schedules` group and the conventions of every group.
@@ -206,14 +208,14 @@ Daemon ready → fires begin                                                    
 Due time arrives, in local time                                                          REQ-005
   (clocks repeat the time → once; time doesn't exist that day → no fire)                 REQ-005
   (daemon stopped or machine off or asleep → no fire, no record)                         REQ-007
-  (entry has an open run → skipped fire naming the run)                                  REQ-006
+  (entry has an open scheduled run → skipped fire naming the scheduled run)                                  REQ-006
   (workspace folder missing, or job refused → skipped fire with the reason)              REQ-006
 Job S-n created with a fresh lead conversation and the entry's seat values               REQ-004
   (crash and restart → no second job for that due time)                                  REQ-016
-Lead is told it is a scheduled run of the entry and that earlier runs can be read        REQ-010
+Lead is told it is a scheduled run of the entry and that earlier scheduled runs can be read        REQ-010
 Job runs and ends as any job; its end starts nothing                                     REQ-014
-Team member reads the run history; run now at any time                                   REQ-008, REQ-009
-  (run now with an open run → refused busy, nothing recorded)                            REQ-008
+Team member reads the scheduled run history; run now at any time                                   REQ-008, REQ-009
+  (run now with an open scheduled run → refused busy, nothing recorded)                            REQ-008
 ```
 
 ## Behavioral Requirements
@@ -223,24 +225,33 @@ Team member reads the run history; run now at any time                          
 A schedule entry SHALL have these values, and the daemon SHALL refuse an entry that breaks any rule, with a message
 naming the entry, the key and the reason:
 
-- `name`: required and unique in the instance, 1 to 64 characters of letters, digits and hyphens, starting with a
-  letter or digit. A name is compared case-sensitively and can't be changed.
+- `name`: required and unique in the instance, 1 to 64 characters of letters, digits and hyphens, starting with a letter
+  or digit. A name is compared case-sensitively and can't be changed.
 - `cron`: required, a valid cron expression of five fields (REQ-005).
 - `request`: required, non-empty text.
 - `role`: optional, an existing role. Missing means `bob` (S-001 REQ-012).
-- `model`, `thinking`: optional, as `jobs.create` accepts them (S-004). Missing means the role's default.
-- `workspace`: optional, a registered workspace. Missing means the role's default.
+- `model`, `thinking_level`: optional, as `jobs.create` accepts them (S-004). Missing means the role's default.
+- `workspace`: optional, the absolute path of a registered workspace. Missing means the role's default.
 
-`schedules.add` and `schedules.change` SHALL also refuse a `model` that isn't available at that moment. The check at
-startup leaves out model availability, because the list of models changes outside the file (REQ-006 covers a model
-that is gone at a fire).
+A taken name SHALL be refused `conflict`, and every other broken rule `invalid_input`. `schedules.add` and
+`schedules.change` SHALL also refuse a `model` that isn't available at that moment, or a `thinking_level` it doesn't
+support. The check at startup leaves out model availability, because the list of models changes outside the file, and
+checks only that the thinking level is a known one (REQ-006 covers a model that is gone at a fire).
 
 #### AC-001.1 — Refused values
 
 - **Given:** a running daemon with no entries
-- **When:** a team member calls `schedules.add` with, in turn, a name with a space, a taken name, `cron = "not cron"`,
-  an empty request, an unknown role, an unregistered workspace, an unknown model and an invalid thinking level
+- **When:** a team member calls `schedules.add` with, in turn, a name with a space, `cron = "not cron"`, an empty
+  request, an unknown role, an unregistered workspace, an unknown model and an invalid thinking level
 - **Then:** each call is refused `invalid_input` naming the key, the file is unchanged, and no entry exists
+
+**Verification:** test — `test/service/schedule_operations.test.ts`.
+
+#### AC-001.3 — A taken name
+
+- **Given:** an entry named `nightly-backups`
+- **When:** a team member calls `schedules.add` with that name
+- **Then:** the call is refused `conflict` naming the entry, and the file is unchanged
 
 **Verification:** test — `test/service/schedule_operations.test.ts`.
 
@@ -255,9 +266,9 @@ that is gone at a fire).
 ### REQ-002 — Entries live in the configuration file
 
 The configuration file SHALL hold schedule entries as `[[schedule]]` sections (Interfaces). It stays the single source
-of truth (S-002 REQ-022). A hand edit SHALL take effect at the next restart. An invalid entry SHALL stop startup with
-an error naming the file, the entry and the reason, as any invalid value does (S-002 REQ-021). An entry that names an
-unavailable model is not invalid at startup.
+of truth (S-002 REQ-022). A hand edit SHALL take effect at the next restart. An invalid entry SHALL stop startup with an
+error naming the file, the entry and the reason, as any invalid value does (S-002 REQ-021). An entry that names an
+unavailable model is not invalid at startup, and its thinking level only has to be a known one.
 
 #### AC-002.1 — A hand edit at the next restart
 
@@ -269,8 +280,8 @@ unavailable model is not invalid at startup.
 
 #### AC-002.2 — A bad hand edit stops startup
 
-- **Given:** a `[[schedule]]` section with each of a bad cron, an unknown role, an unregistered workspace and an
-  unknown key
+- **Given:** a `[[schedule]]` section with each of a bad cron, an unknown role, an unregistered workspace and an unknown
+  key
 - **When:** the daemon starts
 - **Then:** it exits with an error naming the entry and the reason, and creates no job
 
@@ -292,7 +303,7 @@ the daemon last read it, the call SHALL be refused `conflict`, naming the file, 
 
 A change SHALL affect only later fires and runs, and a running job keeps its seat. Removing an entry SHALL leave its
 jobs and history in place, stop its fires and leave any running job to carry on. Adding an entry with a name that has
-history SHALL continue that history, and the open-run rule of REQ-006 counts those earlier runs.
+history SHALL continue that history, and the open scheduled run rule of REQ-006 counts those earlier scheduled runs.
 
 Removing a role that an entry names SHALL be refused (S-001 REQ-003), and unregistering a workspace that an entry names
 SHALL be refused, each naming the entry.
@@ -315,17 +326,17 @@ SHALL be refused, each naming the entry.
 
 #### AC-003.3 — Removal keeps history and running work
 
-- **Given:** an entry with a Done run and an In progress run
+- **Given:** an entry with a Done scheduled run and an In progress scheduled run
 - **When:** a team member removes it, the running job ends, and later someone adds the same name again
-- **Then:** no fire happens while it is removed, the job ends normally, `schedules.runs` shows both runs throughout,
-  and the entry's new fires add to that history
+- **Then:** no fire happens while it is removed, the job ends normally, `schedules.runs` shows both runs throughout, and
+  the entry's new fires add to that history
 
 **Verification:** test — `test/service/schedule_fires.test.ts`.
 
 #### AC-003.4 — An entry holds what it names
 
-- **Given:** an entry naming the team role `ops` and the workspace `infra`
-- **When:** a team member removes `ops` and unregisters `infra`
+- **Given:** an entry naming the team role `ops` and the workspace `/srv/infra`
+- **When:** a team member removes `ops` and unregisters `/srv/infra`
 - **Then:** both are refused, each naming the entry, and nothing changes
 
 **Verification:** test — `test/service/schedule_operations.test.ts`.
@@ -337,16 +348,16 @@ When an entry comes due and no skip rule applies, the daemon SHALL create one ne
 
 - has the entry's request exactly as its Request text
 - has a short number with the origin letter `S`
-- records in its origin the entry name and the due time (S-004 REQ-003)
+- records in its origin the entry name and the fire time, here the due time (S-004 REQ-003)
 - seats the lead with the entry's role, model, thinking level and workspace, falling back as REQ-001 states
-- carries nothing from earlier runs in its request or conversation
+- carries nothing from earlier scheduled runs in its request or conversation
 
 #### AC-004.1 — A due entry starts a job
 
-- **Given:** an entry due at 02:00 with no earlier run, and a controllable clock
+- **Given:** an entry due at 02:00 with no earlier scheduled run, and a controllable clock
 - **When:** the clock reaches 02:00
 - **Then:** exactly one job `S-n` exists, its Request text is the entry's request, its origin names the entry and 02:00,
-  and its lead conversation holds no earlier run's content
+  and its lead conversation holds no earlier scheduled run's content
 
 **Verification:** test — `test/service/schedule_fires.test.ts`.
 
@@ -389,25 +400,27 @@ exist that day, that time SHALL NOT fire.
 
 A fire SHALL create no job and record a skipped fire when any of these holds:
 
-- the entry has an open run. The reason names the run's short number. A job waiting for a worker thread counts as open.
-  A Blocked or Done run doesn't stop a fire.
+- the entry has an open scheduled run. The reason names the scheduled run's short number. A job waiting for a worker
+  thread counts as open. A Blocked or Done scheduled run doesn't stop a fire.
 - the folder of the seat's workspace no longer exists. The reason names the folder.
 - the job is refused, for example because the entry's model is no longer available. The reason names the refusal.
 
-A skipped fire SHALL publish the schedule fire skipped delta. The check for an open run and the creation of the job
-SHALL happen as one step, so two starts of one entry can't both pass the check.
+A refusal after the job is written follows S-004 REQ-007: the job is cancelled and appears as a cancelled scheduled run,
+not a skipped fire. A skipped fire SHALL publish the schedule fire skipped delta. The check for an open scheduled run
+and the creation of the job SHALL happen as one step, so two starts of one entry can't both pass the check.
 
-#### AC-006.1 — An open run skips the fire
+#### AC-006.1 — An open scheduled run skips the fire
 
-- **Given:** an entry whose run `S-11` is In progress, and in a second case To do while it waits for a worker thread
+- **Given:** an entry whose scheduled run `S-11` is In progress, and in a second case To do while it waits for a worker
+  thread
 - **When:** the entry's next due time arrives
-- **Then:** no job is created, and the run history shows a skipped fire with that due time and `S-11`
+- **Then:** no job is created, and the scheduled run history shows a skipped fire with that due time and `S-11`
 
 **Verification:** test — `test/service/schedule_fires.test.ts`.
 
-#### AC-006.2 — A Blocked run doesn't stop a fire
+#### AC-006.2 — A Blocked scheduled run doesn't stop a fire
 
-- **Given:** an entry whose run `S-11` is Blocked, and no other open run
+- **Given:** an entry whose scheduled run `S-11` is Blocked, and no other open scheduled run
 - **When:** the entry's next due time arrives
 - **Then:** `S-12` is created, and `S-11` stays Blocked
 
@@ -417,7 +430,8 @@ SHALL happen as one step, so two starts of one entry can't both pass the check.
 
 - **Given:** an entry whose workspace folder was deleted
 - **When:** its due time arrives
-- **Then:** no job is created, no job number is used, and the run history shows a skipped fire naming the folder
+- **Then:** no job is created, no job number is used, and the scheduled run history shows a skipped fire naming the
+  folder
 
 **Verification:** test — `test/service/schedule_fires.test.ts`.
 
@@ -425,7 +439,8 @@ SHALL happen as one step, so two starts of one entry can't both pass the check.
 
 - **Given:** an entry whose model is no longer available
 - **When:** its due time arrives
-- **Then:** no job is created, no job number is used, and the run history shows a skipped fire naming the model
+- **Then:** no job is created, no job number is used, and the scheduled run history shows a skipped fire naming the
+  model
 
 **Verification:** test — `test/service/schedule_fires.test.ts`.
 
@@ -453,72 +468,86 @@ entry's next fire SHALL be its next due time. A due time that passed more than o
 
 ### REQ-008 — Run now
 
-`schedules.run` SHALL start a run of the entry at once, with the job REQ-004 describes. Its origin SHALL also record
-that it was run on demand and the way in used (S-003 REQ-007). It SHALL NOT change the entry's next due time.
+`schedules.run` SHALL start a scheduled run of the entry at once, with the job REQ-004 describes. Its fire time SHALL be
+the moment it started, and its origin SHALL also record that it was run on demand, the way in used and what that way in
+observes: the remote address and port on the network listener (S-003 REQ-007; S-004 REQ-003). It SHALL NOT change the
+entry's next due time.
 
 It SHALL be refused, creating nothing and recording no skipped fire, because the team member sees the answer at once:
 
-- `busy`, naming the open run, when the entry has one
+- `busy`, naming the open scheduled run, when the entry has one
 - `invalid_input`, naming the folder, when the seat's workspace folder doesn't exist
+- `invalid_input`, naming the model, when the entry's model isn't available
 - `not_found` when no entry has that name
 
 A repeated call with the same idempotency key SHALL return the original job (S-002 REQ-013).
 
-#### AC-008.1 — Run now starts a run
+#### AC-008.1 — Run now starts a scheduled run
 
-- **Given:** an entry with no open run
+- **Given:** an entry with no open scheduled run
 - **When:** a team member runs `bob schedules run <name>` and calls it again with the same key through the operation
 - **Then:** one job `S-n` exists, its origin records the entry, on demand and way in `command line`, and the next due
   time is unchanged
 
 **Verification:** test — `test/service/schedule_fires.test.ts`.
 
-#### AC-008.2 — Run now while a run is open
+#### AC-008.2 — Run now while a scheduled run is open
 
-- **Given:** an entry whose run `S-11` is In progress, and in a second case Blocked
+- **Given:** an entry whose scheduled run `S-11` is In progress, and in a second case Blocked
 - **When:** a team member calls `schedules.run`
 - **Then:** the first is refused `busy` naming `S-11`, creating nothing and adding nothing to the history; the second
   creates `S-12`
 
 **Verification:** test — `test/service/schedule_fires.test.ts`.
 
+#### AC-008.3 — Run now with a model that has gone
+
+- **Given:** an entry whose model is no longer available
+- **When:** a team member calls `schedules.run`
+- **Then:** it is refused `invalid_input` naming the model, no job number is used, and the history is unchanged
+
+**Verification:** test — `test/service/schedule_fires.test.ts`.
+
 ### REQ-009 — Reading schedules and their history
 
-`schedules.list` and `schedules.get` SHALL return each entry's values and next due time, and `schedules.list` its
-latest run. `schedules.runs` SHALL return the run history, newest first, with a limit and a cursor, and SHALL work for a
-removed entry that has history. `jobs.list` SHALL accept a filter by schedule entry, which returns the entry's jobs.
-Skipped fires SHALL survive a restart and travel with the database in `bob export` and `bob import`.
+`schedules.list` and `schedules.get` SHALL return each entry's values and next due time, and `schedules.list` its latest
+scheduled run. `schedules.runs` SHALL return the scheduled run history, newest first by fire time or due time, with a
+limit and a cursor, and SHALL work for a removed entry that has history. `jobs.list` SHALL accept a filter by schedule
+entry, which returns the entry's jobs. Skipped fires SHALL survive a restart and travel with the database in `bob
+export` and `bob import`. Schedule entries live in the configuration file and don't travel with an export (S-004
+REQ-016): after an import, the history is there and nothing fires until the entries are restored.
 
-#### AC-009.1 — The history shows runs and skips
+#### AC-009.1 — The history shows scheduled runs and skips
 
-- **Given:** an entry with a completed run, a cancelled run and a skipped fire
+- **Given:** an entry with a completed scheduled run, a cancelled scheduled run and a skipped fire
 - **When:** a team member reads `schedules.runs`, restarts the daemon, reads it again, and exports and imports
-- **Then:** each read shows the three in order, the runs with short number, due time, status, resolution and
+- **Then:** each read shows the three in order, the scheduled runs with short number, fire time, status, resolution and
   justification, and the skip with its due time and reason
 
 **Verification:** test — `test/service/schedule_operations.test.ts`.
 
 #### AC-009.2 — Jobs by entry
 
-- **Given:** two entries with runs, and a job from another source
+- **Given:** two entries with scheduled runs, and a job from another source
 - **When:** a team member calls `jobs.list` filtered by one entry
-- **Then:** only that entry's runs return
+- **Then:** only that entry's scheduled runs return
 
 **Verification:** test — `test/service/schedule_operations.test.ts`.
 
 ### REQ-010 — What the agent knows
 
-The lead of a run SHALL be told, apart from the Request text, that this is a scheduled run of the named entry and that
-it can read that entry's earlier runs. Every agent of a job SHALL be offered the read schedule runs tool, and an unknown
-entry name returns an error result while the run goes on. The existing job tools SHALL open a run's record and worklog.
+The lead of a scheduled run SHALL be told, apart from the Request text, that this is a scheduled run of the named entry
+and that it can read that entry's earlier scheduled runs. Every agent of a job SHALL be offered the read schedule runs
+tool, and an unknown entry name returns an error result while the agent's run goes on. Read job SHALL open a scheduled
+run's record and worklog by naming it (S-004 REQ-013).
 
 #### AC-010.1 — The lead is told and can look back
 
-- **Given:** an entry with a cancelled run `S-11`, and a fake model that calls the read schedule runs tool and then
-  reads `S-11`
+- **Given:** an entry with a cancelled scheduled run `S-11`, and a fake model that calls the read schedule runs tool and
+  then reads `S-11`
 - **When:** the entry fires
-- **Then:** the model's first input names the entry and earlier runs; the job's Request is exactly the entry's text;
-  and the tool results show `S-11`'s resolution, justification and worklog
+- **Then:** the model's first input names the entry and earlier scheduled runs; the job's Request is exactly the entry's
+  text; and the tool results show `S-11`'s resolution, justification and worklog
 
 **Verification:** test — `test/service/schedule_fires.test.ts`.
 
@@ -533,8 +562,9 @@ entry name returns an error result while the run goes on. The existing job tools
 ### REQ-011 — The `bob schedules` commands
 
 `bob` SHALL offer the commands of Interfaces, following S-005's conventions, and `schedules` SHALL no longer be a
-reserved group. `bob schedules list` SHALL print each entry's name, cron expression, next due time and latest run.
-`bob schedules show` SHALL print the entry and its recent run history. `bob jobs list --schedule` SHALL filter by entry.
+reserved group. `bob schedules list` SHALL print each entry's name, cron expression, next due time and latest scheduled
+run. `bob schedules show` SHALL print the entry and its recent scheduled run history. `bob jobs list --schedule` SHALL
+filter by entry.
 
 #### AC-011.1 — The commands work end to end
 
@@ -547,35 +577,36 @@ reserved group. `bob schedules list` SHALL print each entry's name, cron express
 
 ### REQ-012 — The Schedules page
 
-The web interface SHALL have a Schedules page, linked from the sidebar, that lists the entries with their next due
-time, recent runs linked to their Job pages, and skipped fires with the reason. A team member SHALL add, change, remove
-and run an entry there. The page SHALL update from the feed and follow S-006's rules: refusals and simultaneous actions
-(REQ-013), lost connections (REQ-014), everything from the service (REQ-017), timeliness (REQ-018), style (REQ-016),
-reading and keyboard use (REQ-020) and browsers (REQ-021).
+The web interface SHALL have a Schedules page, linked from the sidebar, that lists the entries with their next due time,
+recent scheduled runs linked to their Job pages, and skipped fires with the reason. A team member SHALL add, change,
+remove and run an entry there. The page SHALL update from the feed and follow S-006's rules: refusals and simultaneous
+actions (REQ-013), lost connections (REQ-014), everything from the service (REQ-017), timeliness (REQ-018), style
+(REQ-016), reading and keyboard use (REQ-020) and browsers (REQ-021).
 
 #### AC-012.1 — Manage entries on the page
 
 - **Given:** a daemon on the fake model and a browser open at the Schedules page
 - **When:** a team member adds an entry, runs it, changes it and removes it, while a second browser watches
-- **Then:** both pages show each change, the run links to its Job page, and a refused value shows the service's reason
+- **Then:** both pages show each change, the scheduled run links to its Job page, and a refused value shows the
+  service's reason
 
 **Verification:** test — `test/web/schedules.test.ts`.
 
 #### AC-012.2 — A skipped fire appears live
 
-- **Given:** a browser open at the Schedules page and an entry with an open run
+- **Given:** a browser open at the Schedules page and an entry with an open scheduled run
 - **When:** the entry's next due time arrives
-- **Then:** the page shows the skipped fire with its reason and the run's link, without a reload
+- **Then:** the page shows the skipped fire with its reason and the scheduled run's link, without a reload
 
 **Verification:** test — `test/web/schedules.test.ts`.
 
 ### REQ-013 — The front desk tools for schedules
 
 The front desk SHALL be offered tools to list, add, change, remove and run schedule entries and to read their run
-history. Each SHALL act as the matching service operation, a refusal SHALL return an error result and the run goes on,
-and a call repeated after a crash SHALL act once. These tools SHALL be offered in no other conversation, apart from
-read schedule runs (REQ-010). A run the front desk starts SHALL record the way in of the team member's input and the
-front desk in its origin.
+history. Each SHALL act as the matching service operation, a refusal SHALL return an error result and the agent's run
+goes on, and a call repeated after a crash SHALL act once. These tools SHALL be offered in no other conversation, apart
+from read schedule runs (REQ-010). A scheduled run the front desk starts SHALL have the letter `S` and record in its
+origin the way in of the team member's input and the front desk, with no address.
 
 #### AC-013.1 — Setting up a schedule in chat
 
@@ -593,6 +624,15 @@ front desk in its origin.
 
 **Verification:** test — a service test on the fake model.
 
+#### AC-013.3 — A scheduled run the front desk starts
+
+- **Given:** an entry with no open scheduled run, and the front desk
+- **When:** a team member writes over the local socket "run the backups check now", and the fake model calls the
+  scheduled run tool
+- **Then:** a job `S-n` exists, its origin records the entry, on demand, way in `command line` and the front desk
+
+**Verification:** test — a service test on the fake model.
+
 ### REQ-014 — No triggers
 
 No event SHALL start a job. A job ending, mail arriving or any other happening SHALL create no job unless an agent or a
@@ -603,7 +643,7 @@ interface don't mention triggers. The "job done" delta stays for clients that fo
 #### AC-014.1 — A job ending starts nothing
 
 - **Given:** a daemon with a schedule entry
-- **When:** a run completes, and another is cancelled
+- **When:** a scheduled run completes, and another is cancelled
 - **Then:** the job count grows only by what agents and team members created
 
 **Verification:** test — `test/service/schedule_fires.test.ts`.
@@ -621,7 +661,7 @@ interface don't mention triggers. The "job done" delta stays for clients that fo
 - **Given:** the merged work
 - **When:** a reviewer searches the specs, the manual, `src/` and `web/ui/` for triggers as a job source, and reads the
   system overview's vocabulary and spec map
-- **Then:** none remains, apart from Amendment Logs and rejected alternatives
+- **Then:** none remains, apart from Amendment Logs, rejected alternatives and statements that triggers don't exist
 
 **Verification:** inspection — `git grep -i trigger`, read by the reviewer.
 
@@ -629,8 +669,8 @@ interface don't mention triggers. The "job done" delta stays for clients that fo
 
 ### REQ-015 — Timeliness
 
-While the daemon is ready, a fire SHALL create its job or record its skip within one minute of the due time. The job
-may then wait for a worker thread (S-002 REQ-010).
+While the daemon is ready, a fire SHALL create its job or record its skip within one minute of the due time. The job may
+then wait for a worker thread (S-002 REQ-010).
 
 #### AC-015.1 — Within one minute
 
@@ -657,7 +697,8 @@ identify the fire (S-002 REQ-013). A crash before the job is written leaves that
 
 The manual SHALL have a page on schedules, covering the file, the commands, the page, the skip rules and how to read the
 run history, in place of `docs/manual/index.md`'s "This page comes with its feature". The command reference and the
-origin letter table SHALL match.
+origin letter table SHALL match. It SHALL also say that schedule entries aren't in an export, and that a To do scheduled
+run holds back fires until someone starts or cancels it (S-004 AC-008.8).
 
 #### AC-017.1 — The manual matches
 
@@ -684,8 +725,8 @@ This spec adds no other setting. One minute (REQ-015, REQ-007) is built in.
 - **Anyone who can reach the listeners can add a schedule**, and it runs with the service account's access (ADR-002).
   Confirmed by the product owner: no extra checks.
 - **No job with a `T` number exists,** because no job source has ever created one, so removing the letter needs no
-  migration. Confirmed by reading `src/`: only tests build a trigger origin. The Architect confirms it for exported data
-  during feature architecture.
+  migration. Confirmed in the Architect's consistency review: nothing in `src/` builds a job source caller, listeners
+  always build team member callers, and no tagged version holds the job operations.
 - **Skipped fires travel with the database,** because `bob export` copies the whole database (S-005).
 - **S-001 v0.16, S-002 v0.15, S-003 v0.7, S-004 v0.15, S-005 v0.6 and S-006 v0.6**, as amended on this planning branch,
   and S-000 v0.7. If any amendment is refused at Gate 1, this spec changes with it.
@@ -697,23 +738,23 @@ This spec adds no other setting. One minute (REQ-015, REQ-007) is built in.
 1. A team member adds `0 2 * * *` by each of the command, the page, the front desk and a hand edit plus restart, and
    each entry then starts one `S-n` job at its due time, seated with its values (REQ-001 to REQ-005, REQ-011 to
    REQ-013).
-2. With an open run, a missing folder or a gone model, a fire creates no job and the reason appears in `bob schedules
-   show`; a Blocked run stops nothing (REQ-006).
+2. With an open scheduled run, a missing folder or a gone model, a fire creates no job and the reason appears in `bob
+   schedules show`; a Blocked scheduled run stops nothing (REQ-006).
 3. A daemon killed around a due time creates at most one job for it, and a stopped daemon creates none later (REQ-007,
    REQ-016).
-4. A lead told by a fire reads an earlier run's resolution and worklog with its tools (REQ-009, REQ-010).
+4. A lead told by a fire reads an earlier scheduled run's resolution and worklog with its tools (REQ-009, REQ-010).
 5. **Live test 1, moved from S-001.** With a real low-cost model over the pi agent login, a scheduled job for the `bob`
    role asks for a simple file task in `gp`'s workspace. The lead hands off to `gp` or invokes a `gp` agent, the file
-   appears in `gp`'s workspace, and the transcript shows the seat change or the invocation
-   (`npm run test:live:schedules`).
-6. `git grep -i trigger` finds triggers as a job source nowhere but in Amendment Logs and rejected alternatives
-   (REQ-014).
+   appears in `gp`'s workspace, and the transcript shows the seat change or the invocation (`npm run
+   test:live:schedules`).
+6. `git grep -i trigger` finds triggers as a job source nowhere but in Amendment Logs, rejected alternatives and
+   statements that triggers don't exist (REQ-014).
 
 ## Implementation Order
 
 | Phase | Delivers | Depends on |
 |---|---|---|
-| 1 | Triggers leave the product: origin kind and letter, reserved group, prompt, page text, manual, system overview | Nothing |
+| 1 | Triggers leave the product: origin kind and letter, reserved group, prompt, page text, manual, system overview, `docs/development/coding_guidelines.md`, `test/live/live_agents.ts` | Nothing |
 | 2 | Entries in the file with validation; the add, change, remove and read operations; the holds on roles and workspaces | Phase 1 |
 | 3 | Firing, time, skip rules, run now, one job per due time, run history, what the agent knows, the feed delta, live test 1 | Phase 2 |
 | 4 | `bob schedules`, `bob jobs list --schedule` and the front desk tools | Phase 3 |

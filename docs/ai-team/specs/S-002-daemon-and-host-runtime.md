@@ -146,6 +146,9 @@ failed (REQ-013). **Contract** (operation names and kinds):
 | `conversations.abort`, `conversations.reset`, `conversations.compact` | control | Abort (with S-001's cascade), reset or compact a conversation |
 | `conversations.seat` | control | Change a conversation's seat (S-001 REQ-004) |
 | `roles.create`, `roles.change`, `roles.restore`, `roles.remove` | control | Role settings (S-001 REQ-003; REQ-022) |
+| `schedules.list`, `schedules.get`, `schedules.runs` | read | Schedule entries and their run history (S-007 REQ-009) |
+| `schedules.add`, `schedules.change`, `schedules.remove` | control | Schedule settings (S-007 REQ-003; REQ-022) |
+| `schedules.run` | control | Run a schedule entry now (S-007 REQ-008) |
 | `workspaces.register`, `workspaces.unregister` | control | Workspace registration (S-001 REQ-018; REQ-022) |
 
 The tests register `test.createConversation` and `test.failStorage` (`test/support/test_operations.ts`); they are not
@@ -157,7 +160,8 @@ A subscription names the scope `instance` or one conversation. Each delivers a s
 sequence numbers in commit order, and ends with a reason (`lagging`, `unsubscribed`, `stopped`) (REQ-014, REQ-015). The
 instance scope carries every conversation with its job, lead flag, seat, status and the worker threads, and the
 deltas `conversation_created`, `run_started`, `run_finished`, `seat_changed`, `status_changed`, `admission_changed` and
-`settings_changed`. It also carries the jobs that aren't Done and S-004's job deltas, each published after its job
+`settings_changed`. It also carries S-007's schedule fire skipped delta, the jobs that aren't Done and S-004's job
+deltas, each published after its job
 store commit and numbered in the same sequence (S-004 REQ-015). The conversation scope carries its live view and
 entries.
 
@@ -188,7 +192,7 @@ Take single ownership → another live owner? exit non-zero, naming state dir   
 Read job schema version → newer? exit non-zero, naming both versions            REQ-002
   ↓
 Open database, create or migrate job store, ready the tools → check             REQ-002
-  configured models and thinking levels → unresolvable? exit non-zero, naming
+  the models and thinking levels configured for roles → unresolvable? exit non-zero, naming
   the role and value
   ↓
 Ensure per-role default workspaces
@@ -251,7 +255,8 @@ cause:
 3. take single ownership (REQ-001)
 4. read the job schema version, open the database, create or migrate the job store's tables, and make the-intern's
    tools ready, before anything resumes
-5. check that every configured model and thinking level resolves (S-001 Configuration Requirements)
+5. check that every model and thinking level configured for a role resolves (S-001 Configuration Requirements); a
+   schedule entry's model is checked at a fire (S-007 REQ-002)
 6. ensure the per-role default workspaces (S-001 REQ-003) and the front desk (S-001 REQ-021)
 7. restore admission (REQ-010), apply the job repair rules (S-004 REQ-018), resume unfinished work, then submit the
    input those rules owe (S-004 REQ-018)
@@ -268,7 +273,8 @@ cause:
 #### AC-002.2 — Each step fails with its name
 
 - **Given:** an invalid configuration file, an unknown key, an unsafe directory, a relative directory flag, a live
-  owner, an unopenable database, a newer job schema, an unresolvable configured model, a failing workspace or a
+  owner, an unopenable database, a newer job schema, an unresolvable model configured for a role, a failing workspace or
+  a
   component that fails to start in step 8
 - **When:** the daemon starts
 - **Then:** it exits non-zero naming the failing step and its cause, creates no database file where the step precedes
@@ -499,6 +505,7 @@ names):
   one (S-001 REQ-018). The settings operations follow REQ-022.
 - Jobs: the `jobs.*` operations of S-004, read and control as Interfaces marks them. Starting a job's lead
   conversation (S-001 REQ-012) isn't a catalogue operation: `jobs.create` calls it in-process.
+- Schedules: the `schedules.*` operations of S-007, read and control as Interfaces marks them.
 
 A submit to a conversation parked for reports holds the message until the conversation continues (S-001 REQ-020),
 whatever its busy mode, and returns `{ held: true }` with no submission id. A submit to a job's lead conversation
@@ -521,7 +528,8 @@ Creating a job (`jobs.create`) SHALL record an origin built from the caller, nev
 agent: a team member's call records a request with the caller's way in, an agent's call in a job's conversation
 records a follow-up of the agent's own conversation, the front desk's call records a request with the way in of the
 team member's input it answers and the front desk in its origin details (S-004 REQ-021), and only a job source (a
-schedule fire) states its own origin details. A team member's request records the details its way in
+schedule fire, or a run on demand, S-007 REQ-008) states its own origin details. A team member's request records the
+details its way in
 observes, which the caller carries: the remote address and port for the network listener, the message ID and sender
 for Email. A call from a team member or an agent whose input names an origin is refused as `invalid_input` (S-004
 Interfaces, `jobs.create`).
@@ -637,7 +645,8 @@ operation test in `test/service/`.
 ### REQ-014 — Snapshot, then deltas
 
 A subscription SHALL name a scope: the instance (conversations with seat, status and admission state, plus started
-and finished events, and S-004's jobs and job deltas, each published after its job store commit and numbered in the
+and finished events, S-007's schedule fire skipped delta, and S-004's jobs and job deltas, each published after its job
+store commit and numbered in the
 same sequence), or one conversation (its live view, events and queued input). It first gets a snapshot, then deltas
 in commit order. A new subscription never replays earlier deltas. A subscriber that reconnects starts from a
 fresh snapshot.
@@ -765,7 +774,8 @@ The settings in the configuration file SHALL also be changeable through control 
   file stays the single source of truth, so the change survives a restart.
 - A change applies as S-001 states: a role change affects only agents seated after it, a newly
   registered workspace can be used at once, and unregistering follows S-001 REQ-018 (refused while a role's default
-  workspace is that workspace; seated agents keep it until their seat changes; new seats can't name it).
+  workspace is that workspace or a schedule entry names it; seated agents keep it until their seat changes; new seats
+  can't name it).
 - If the file was changed on disk since the daemon last read it, the change is refused as a conflict naming the
   file, so a hand edit is never overwritten. A restart picks up the hand edit.
 - If the file can't be written, the change is refused and nothing applies.
@@ -1013,4 +1023,4 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-05 | spec-truth reconciliation — PASS | Work in 8e1eaa08..HEAD confirmed against v0.13; step 7, Workflow and REQ-008 corrected for input submitted after the resume, before listeners open; earlier task logs not read | none |
 | 2026-11-06 | v0.14. No behaviour changes. REQ-013: the gloss of `busy` reads "a reject-if-busy submit, or a resource in use for now". No identifier added or retired. | S-006 second architecture consistency review, finding F3, product owner decision of 2026-11-06: `jobs.export` (S-004 REQ-016) and the export route (S-003 REQ-016) refuse `busy` for a resource in use, which the old gloss didn't cover. Approved with S-006 at Gate 1. | None; spec text only |
 | 2026-11-07 | spec-truth reconciliation — PASS | v0.14 confirmed for the feed shape, the busy gloss and B-023's log line; spec read in part | none |
-| 2026-11-07 | v0.15. Triggers leave the job sources (Purpose, Definitions, Users, Exclusions, REQ-012, AC-012.5). REQ-021: the configuration file holds S-007's schedule entries. No other behaviour changes. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
+| 2026-11-07 | v0.15. Triggers leave the job sources (Purpose, Definitions, Users, Exclusions, REQ-012, AC-012.5). REQ-021: the configuration file holds S-007's schedule entries. Interfaces and REQ-012: the `schedules.*` operations. Interfaces and REQ-014: the schedule fire skipped delta. REQ-002, Workflow and AC-002.2: the startup model check covers roles, and an entry's model is checked at a fire. REQ-022: unregistering a workspace an entry names is refused. REQ-012: a run on demand states its origin. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |

@@ -110,7 +110,7 @@ resolved by the service, S-004 REQ-002):
 | Command | Operations called | Requirement |
 |---|---|---|
 | `bob jobs create <text>` | `jobs.create`, with the title, role, model, thinking level, workspace and stated name the team member gives (S-004 REQ-007) | REQ-004 |
-| `bob jobs list` | `jobs.list`, filtered by status, origin letter and Related job, with a limit and a cursor (S-004 REQ-014) | REQ-004 |
+| `bob jobs list` | `jobs.list`, filtered by status, origin letter, Related job and, with `--schedule`, schedule entry (S-007 REQ-011), with a limit and a cursor (S-004 REQ-014) | REQ-004 |
 | `bob jobs show <job>` | `jobs.get`, then `jobs.worklog.list` and `jobs.history.list` (S-004 REQ-010, REQ-011, REQ-014) | REQ-004 |
 | `bob jobs update <job>` | `jobs.update`: title, description, definition of done (S-004 REQ-004) | REQ-004 |
 | `bob jobs relate <job> <job>`, `bob jobs unrelate <job> <job>` | `jobs.relate`, `jobs.unrelate` (S-004 REQ-009) | REQ-004 |

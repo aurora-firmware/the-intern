@@ -49,7 +49,7 @@ members and turns their requests into jobs. Success Criteria lists the observabl
 | Workspace | A registered local folder that an agent works in. It supplies extra instructions and skills, and is where tools start. Agents work on the OS and filesystem with the account the-intern runs as; the workspace doesn't limit what they reach. |
 | Job source, origin | A job source starts a job and its lead conversation: a request from a team member (command line, web interface, email), a schedule fire, or a follow-up job created by an agent. The origin of a conversation records its job source, the invoking conversation for an agent invocation, or "front desk" for the front desk. |
 | Front desk | The one standing conversation of an instance that assists team members (REQ-021). It belongs to no job. Team members reach it from the command line and the web interface; it answers questions about the work, creates jobs that agents take, and passes answers and steering to a job's conversations. It never does the work itself. |
-| Front-desk tools | The tools offered only in the front desk: job tools that name the job they act on, reads of conversations, status and usage, steering of a job's conversations, and schedule tools (REQ-022). |
+| Front-desk tools | The tools offered only in the front desk: job tools that name the job they act on, reads of conversations, status and usage, steering of a job's conversations, and schedule tools (REQ-022). S-004 offers one of these, read schedule runs, in a job's conversations too. |
 
 ### pi agent and pi-durable terms
 
@@ -79,7 +79,7 @@ models, login, settings, skills and context files. Where a term exists in both, 
 
 | Actor | Goal |
 |---|---|
-| Team member | Gives jobs, shapes the roles and workspaces agents are made from, follows which role works where, and steers, reseats or resets any conversation. Talks to the front desk to ask for work, ask what is going on, and answer or steer jobs. |
+| Team member | Gives jobs, shapes the roles and workspaces agents are made from, follows which role works where, and steers, reseats or resets any conversation. Talks to the front desk to ask for work, set up schedules, ask what is going on, and answer or steer jobs. |
 | Front desk agent | Assists team members in the front desk: creates jobs, reports on jobs and conversations, and passes answers and steering on. It does no work itself. |
 | Lead agent | Carries its job from definition to verification, doing the work itself, handing the conversation to a better-suited role or invoking specialist agents. |
 | Specialist (invoked) agent | Does one part of a job in its own conversation and reports back. It never completes the job. |
@@ -133,8 +133,9 @@ What this specification explicitly does NOT cover:
   An instance has one front desk (REQ-021), with no "new chat": a reset is how a team member starts clean (REQ-024).
   Team members also follow, answer and steer jobs directly through the command line, the web interface and email.
 - **Email to the front desk.** Mail doesn't reach the front desk; the Email spec sorts mail into jobs and answers.
-- **Work in the front desk.** The front desk invokes no agents, hands off to no role, changes no files and is offered
-  no workspace tools (REQ-022). Real work always becomes a job. A team member who reseats the front desk with a role
+- **Work in the front desk.** The front desk invokes no agents, hands off to no role, edits no files itself and is
+  offered no workspace tools (REQ-022); its schedule tools act as the operations do. Real work always becomes a job. A
+  team member who reseats the front desk with a role
   whose tool set names more tools makes that choice; the front desk can't make it itself.
 - **A job record for the front desk.** The front desk is never on the board, has no definition of done, and the Jobs
   spec's turn-end rule, actions and repair rules don't apply to it (REQ-025).
@@ -354,7 +355,8 @@ The shipped roles' instructions MUST satisfy these descriptions:
 - Both roles are offered the coordination capabilities (REQ-006 to REQ-008, REQ-019).
 - **`desk`** assists team members in the front desk. Its instructions direct the agent to answer questions about the
   work from jobs, conversations, status and usage, to turn every request for real work into a job instead of doing
-  it, to report the new job's short number, and to pass answers and steering to a job's conversations when a team
+  it, to report the new job's short number, to set up and run schedules when a team member asks, and to pass answers and
+  steering to a job's conversations when a team
   member asks. Its tool set names none of the tools the-intern ships, so in the front desk it is offered only the
   front-desk tools (REQ-022).
 
@@ -367,7 +369,7 @@ change in later versions without amending this spec.
 - **When:** a reviewer reads them against this requirement
 - **Then:** `bob`'s text covers defining, asking, doing, delegating and verifying; `gp`'s text and skill cover
   carrying out a part to completion and reporting back; and `desk`'s text covers answering about the work, turning
-  requests for work into jobs with their number, and passing answers and steering on
+  requests for work into jobs with their number, setting up and running schedules, and passing answers and steering on
 
 **Verification:** inspection — the shipped role files under `src/roles/shipped/`; `test/unit/shipped_roles.test.ts`
 checks
@@ -995,7 +997,7 @@ in the stored transcript, and the seat is kept unless the reset names a new one.
 When a job is created (Jobs spec), the daemon SHALL start its lead conversation:
 
 - with the role the job source names, or `bob` when it names none, with that role's defaults unless a team member's
-  request names a model, a thinking level or a registered workspace
+  request or the schedule entry names a model, a thinking level or a registered workspace
 - with the job's first input as its first input
 - with an origin that records the job source: the team member's request and its way in, the schedule entry and fire
   time, or the conversation that created the follow-up job
@@ -1023,7 +1025,8 @@ lead conversation.
 #### AC-012.3 — Refusals create nothing
 
 - **Given:** a start that names an unknown role, an unresolvable override, an override from a source other than a
-  request, a follow-up from an agent whose conversation doesn't exist, or an origin of another kind than the
+  request or a schedule entry, a follow-up from an agent whose conversation doesn't exist, or an origin of another kind
+  than the
   caller's (S-002 AC-012.5)
 - **When:** it is called
 - **Then:** it is refused and nothing is created
@@ -1050,7 +1053,8 @@ exists, and skipping a fire while the entry's previous job still works.
 
 - **Given:** a schedule fire naming a role
 - **When:** the lead conversation of its job starts
-- **Then:** it is seated as the named role, with its defaults, and its origin records the fire
+- **Then:** it is seated as the named role, with the values the entry names and otherwise the role's defaults, and its
+  origin records the fire
 
 **Verification:** test — `test/service/job_operations.test.ts` ("records the origin of each job source kind").
 
@@ -1220,7 +1224,7 @@ only fact the daemon adds for it is its conversation id.
 In the front desk, every model turn SHALL be offered exactly the tools of its seat's role and the front-desk tools. It
 SHALL NOT be offered the coordination tools (`handoff`, `invoke`, `steer`) or the job tools that act on a
 conversation's own job (S-004 REQ-013), `block_job` and `complete_job` included. The front-desk tools are offered in no
-other conversation. They are:
+other conversation, except read schedule runs, which S-004 REQ-013 also offers in a job's conversations. They are:
 
 - **Jobs:** `read_job`, `list_jobs`, `create_job`, `update_job`, `add_worklog` and `relate_jobs`, each naming the job
   it acts on, as S-004 REQ-021 defines.
@@ -1237,7 +1241,8 @@ other conversation. They are:
 The front desk itself takes input only from team members (REQ-020). A steering tool that names the front desk itself
 or a conversation that doesn't exist returns an error result, and the run goes on. Only a team member changes the
 front desk's seat (REQ-004); the agent in it can't hand off or reseat itself. The `desk` role's tool set names none
-of the tools the-intern ships (REQ-002), so an agent of it in the front desk changes no file and runs no command.
+of the tools the-intern ships (REQ-002), so an agent of it in the front desk edits no file itself and runs no command;
+its schedule tools act as the operations do.
 
 #### AC-022.1 — Exactly the front-desk tools
 
@@ -1733,4 +1738,4 @@ behaviour. Deciding it is a scope amendment of this spec.
 | 2026-11-07 | v0.15. REQ-008: an abort leaves no aborted conversation parked for reports, in place of parked of any kind; an abort that names the lead of a Blocked job leaves it parked for an answer (REQ-014), and the job's abort clears that park as it closes the lead (REQ-026); the block after a team member's abort parks the lead for an answer once the abort and its cascade have ended. AC-008.7 says "parked for reports" and adds the case of a Blocked job's lead, with a test that restarts the daemon. Workflow follows. No identifier added or retired. | Spec-truth reconciliation of S-006, finding F2, confirming the B-021 ruling: REQ-008 and AC-008.7 read wider than REQ-014, S-004 REQ-006 and S-004 REQ-018 rule 2, which are authoritative. The Architect amends ADR-001 decision 4 with this. | T-270 |
 | 2026-11-07 | spec-truth reconciliation — FAIL | REQ-008 and AC-008.7 read wider than REQ-014; an abort clears a Blocked lead's park; text tightened and follow-up routed; spec read in part | none |
 | 2026-11-07 | spec-truth reconciliation — PASS | v0.15 confirmed for REQ-008 and AC-008.7 against T-270; read limited to S-006's findings and 75c7c946..0604b54f | none |
-| 2026-11-07 | v0.16. Triggers leave the job sources (Definitions, Exclusions, Workflow, REQ-003, AC-003.3, REQ-012, REQ-013, AC-013.1, Configuration, Dependencies, Implementation Order). REQ-013 and the closed Open Question: an entry can name a model, thinking level and workspace as well as a role (S-007 REQ-001). REQ-018: unregistering a workspace an entry names is refused. REQ-022: the front desk gains schedule tools. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
+| 2026-11-07 | v0.16. Triggers leave the job sources (Definitions, Exclusions, Workflow, REQ-003, AC-003.3, REQ-012, REQ-013, AC-013.1, Configuration, Dependencies, Implementation Order). REQ-013 and the closed Open Question: an entry can name a model, thinking level and workspace as well as a role (S-007 REQ-001). REQ-018: unregistering a workspace an entry names is refused. REQ-022: the front desk gains schedule tools. Users. REQ-012 and AC-012.3: a schedule entry can name those values. REQ-002, AC-002.1 and REQ-022: `desk` sets up and runs schedules, and edits no file itself. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
