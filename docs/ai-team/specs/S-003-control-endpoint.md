@@ -1,7 +1,7 @@
 ---
 id: S-003
 title: Control endpoint
-version: '0.5'
+version: '0.6'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-01'
 author: planner
@@ -499,7 +499,7 @@ doesn't serve them. A missing file gets `404`.
 - **Then:** `/` redirects to `/ui/`, the files are returned with their content types, and the missing file gets `404`;
   the same paths on the local socket get `404`
 
-**Verification:** test — a service test using a placeholder file until the Web interface spec delivers the content.
+**Verification:** test — a service test.
 
 ### REQ-009 — The client library
 
@@ -789,11 +789,11 @@ export route's free-space margin (REQ-016).
 - **ADR-001** keeps pi-durable behind the host; **ADR-002** settles that no listener authenticates and that reach
   decides who is a team member. Both are accepted.
 - **Node 24's built-in HTTP support** serves HTTP on a Unix socket and on TCP, and supports Server-Sent Events by
-  streaming a response; browsers support `fetch` and event streams. No dependency is added.
+  streaming a response; browsers support `fetch` and event streams. The listeners add no dependency for this. ADR-006
+  adds the dependencies for serving and drawing the web interface files.
 - **Platform socket path limits** (about 104 bytes on macOS, 108 on Linux). The default runtime directories fit; long
   overridden paths may not (REQ-001).
-- **The Web interface spec** delivers the web interface files. Until then, `/ui/` serves what the package ships, which
-  may be a placeholder.
+- **S-006, the Web interface spec,** delivers the web interface files, and `/ui/` serves them from the package.
 - **Assumption, confirmed by the product owner on 2026-11-01:** the team limits who reaches the network listener with
   its network setup, and security of the listeners is a later decision.
 
@@ -839,3 +839,5 @@ None affect the specified behaviour.
 | 2026-11-05 | v0.4. No behaviour changes. Assumptions, S-002: T-094 closed the code's deviations from the S-002 v0.7 amendments, in place of the statement that a task would investigate them. | spec-truth reconciliation: a stale assumption (D4). | None; spec text only |
 | 2026-11-05 | spec-truth reconciliation — PASS | Work in 8e1eaa08..HEAD confirmed against v0.4; one stale assumption corrected; no requirement drift found; its task logs not read | none |
 | 2026-11-06 | v0.5. Added the route `GET /export` to the Routes contract, with REQ-016, AC-016.1 to AC-016.8 and its Workflow lines; the Exclusion on new service operations names it. It answers on the network listener only and sends the copy S-004 REQ-016 defines. Its temporary copy is owner-only, goes when the download ends, at shutdown within the stop bound, and at the next start after a kill; one download runs at a time, a second gets `409 busy`, and too little free space gets `409 conflict`; AC-016.1's test allows for `busy` from `jobs.export`. REQ-009: the browser's download of `GET /export` is the one call outside the client library. Added one stream for several conversations, `GET /feed?scope=conversations`, composed by the listener from several `feed.subscribe` subscriptions with events naming their conversation (Interfaces, Workflow, REQ-006, new AC-006.4 and AC-006.5, REQ-009, new AC-009.4, REQ-010, REQ-011). S-002's feed isn't amended. Success Criteria 1 runs to REQ-016, and Implementation Order gains phases 6 and 7. No identifier retired. | S-006's export download: the product owner chose a browser download, and no route could return a file. S-006 architecture consistency review, findings F4, F6 and F7, product owner decision of 2026-11-06: plain HTTP allows a browser 6 connections per host across its tabs, and a stream per invoked conversation would use them up. Approved with S-006 at Gate 1. | Created with S-006's breakdown |
+| 2026-11-07 | v0.6. No behaviour changes. Assumptions: ADR-006 added dependencies for the web interface files, so "No dependency is added" holds only for the listeners; S-006 has delivered the files that the placeholder wording awaited. AC-008.1's Verification drops the same wording. No identifier added or retired. | Spec-truth reconciliation of S-006, finding F13: stale text. | None; spec text only |
+| 2026-11-07 | spec-truth reconciliation — FAIL | Export route and shared stream confirmed against v0.5; stale assumptions only | none |

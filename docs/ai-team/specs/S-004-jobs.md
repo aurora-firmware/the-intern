@@ -1,7 +1,7 @@
 ---
 id: S-004
 title: Jobs
-version: '0.13'
+version: '0.14'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-02'
 author: planner
@@ -270,6 +270,8 @@ Team member's abort names the lead of an In progress job                        
   (lead running, input queued, parked for reports or awaiting a report)
   → abort and cascade end → no reminder → Blocked "stopped by a team member"
   (idle lead → nothing changes; job already Blocked → keeps its reason)
+Team member's abort names the lead of a To do job                                          REQ-008
+  → the job stays To do, no history entry → input to its lead starts it; cancel ends it
 Lead's turn ends with the job neither Blocked nor Done                                     REQ-008
   → reminder once → ends again → Blocked "the lead stopped without completing or blocking"
   → no definition of done → Blocked "no definition of done"
@@ -664,7 +666,9 @@ lead conversation of an In progress job, and the lead is running, has input queu
 report, the daemon SHALL block the job with the reason "stopped by a team member", with no reminder, whatever the
 definition of done holds, once the abort and its cascade have ended and nothing is left to wait for. This holds across a
 restart: the startup check blocks that job and sends no reminder. An abort of an idle lead ends nothing and changes
-nothing. An abort of a lead whose job is already Blocked leaves the job Blocked with its reason.
+nothing. An abort of a lead whose job is already Blocked leaves the job Blocked with its reason. An abort of a To do
+job's lead, which is still waiting to start, SHALL leave the job To do with no block, no reminder and no history entry;
+input to its lead then starts the job (REQ-005), and `jobs.cancel` ends it.
 
 Otherwise, when a lead's turn ends with its job In progress and nothing left to wait for (no input queued, no invoked
 conversation running or awaited), the daemon SHALL:
@@ -748,6 +752,17 @@ waits for nothing. This is the same rule applied to saved state, not a repair ru
   reason
 
 **Verification:** test — a service test on the fake model, with an injected hold on the turn-end check.
+
+#### AC-008.8 — An abort of a To do job's lead
+
+- **Given:** a To do job whose lead waits for a worker thread, and a second such job
+- **When:** a team member's abort names each lead, a team member then submits input to the first lead, and cancels the
+  second job with a justification
+- **Then:** after the abort both jobs are To do with an idle lead, no reminder and no history entry; once a worker
+  thread is free, the first job goes In progress with its lead running on that input; the second goes Done with the
+  resolution `cancelled`
+
+**Verification:** test — a service test on the fake model with every worker thread held.
 
 ### REQ-009 — Related jobs
 
@@ -1139,9 +1154,9 @@ setting changes the statuses, the actions or the letters.
 - **S-001 v0.8, the front desk.** S-001 REQ-021 to REQ-025 define the front desk, the one standing conversation of
   an instance that belongs to no job, its `desk` role and its tools; this spec's REQ-021 and REQ-022 define the job
   tools it carries and keep it out of the job rules. S-005 (`bob chat`) and the Web interface spec present it.
-- **Later specs.** Email passes the message ID and sender it observes; schedules and triggers state their entry, fire
-  time, trigger and event; S-005 names the import command (`bob import`); the Web interface spec presents the board.
-  Until the Email, schedules and triggers and Web interface specs exist, tests and the live checks call the operations.
+- **Other specs.** S-005 names the import command (`bob import`), and S-006 presents the board. Later specs: Email
+  passes the message ID and sender it observes, and schedules and triggers state their entry, fire time, trigger and
+  event. Until those specs exist, tests and the live checks stand in for those job sources.
 - **Node's SQLite.** The daemon's Node 24 SQLite support provides the online backup that REQ-016 uses.
 
 ## Success Criteria
@@ -1193,3 +1208,5 @@ None.
 | 2026-11-05 | v0.12. No behaviour changes. REQ-018: the rules' decisions, history entries and changes to the job and to conversation state take effect before work resumes, apart from rule 3's delivery of held messages, which releases the lead and is followed by the job's change to In progress; the input a rule owes a lead conversation, the end of rule 4's aborts and a reminder the turn-end check owes take effect once work has resumed, before any listener answers a call other than `daemon.status`; a rule a crash cuts short applies again and writes another entry. Workflow: startup repair comes before listeners open. Assumptions: the ADR-001 and ADR-004 amendments are accepted, S-005 names `bob chat` and `bob import`, and "Until they exist" covers only the specs still unwritten. | spec-truth reconciliation: the text was stale against the built behaviour, and the Architect found no behaviour change (D1, D4). | None; spec text only |
 | 2026-11-05 | spec-truth reconciliation — PASS | Work in 8e1eaa08..HEAD confirmed against v0.12; REQ-018 and Workflow corrected for owed input after the resume, before listeners open; stale assumptions corrected; earlier task logs not read in full | none |
 | 2026-11-06 | v0.13. REQ-008: when a team member's abort, directly or through the front desk's stop tool, names the lead of an In progress job that is running, has input queued, is parked for reports or awaits a report, the lead gets no reminder; once the abort and its cascade have ended, the job goes Blocked with the reason "stopped by a team member", the daemon as author, whatever the definition of done holds, and an answer resumes it. Whether the abort stopped the lead survives a restart. An abort of an idle lead changes nothing, and an abort of a Blocked job's lead keeps its reason. New AC-008.5, AC-008.6 and AC-008.7. REQ-016 states the `busy` refusal `jobs.export` already gives; no behaviour changes there. To agree with it: Definitions (Blocked reason), the author Contract, Workflow, the block row of REQ-005 (the daemon also blocks under the rule) and REQ-006 (a daemon block parks the lead too). Interfaces (feed events) and REQ-015: a new "related changed" delta with both short numbers. New AC-015.2. No identifier retired. | S-006 architecture consistency review, findings F1 and F3, product owner decision of 2026-11-06. F1: S-000 use case 7 has a team member stop an agent, and the reminder started the stopped lead again. F3: a Related change published no delta, so an open page couldn't see it. Second consistency review, findings F1 and F3, product owner decision of 2026-11-06: an abort of a parked lead ends no run, so the rule covers it too. ADR-001 decision 4, amended with this, adds the stop mark. Approved with S-006 at Gate 1. | A new task, created with S-006's breakdown. The change alters built behaviour and pinned tests: `src/jobs/turn_end_rule.ts`, `test/service/job_turn_end.test.ts:445` (it expects the reminder) and the case after it (empty definition of done, whose reason changes), and the reminder rule in `docs/manual/jobs.md` and `docs/manual/roles_and_agents.md`. The delta needs a task as well, in the same breakdown |
+| 2026-11-07 | v0.14. REQ-008: an abort of a To do job's lead leaves the job To do with no block, no reminder and no history entry; input to its lead starts it, and `jobs.cancel` ends it. New AC-008.8. Workflow follows. Assumptions: S-006 exists, so "Until the … specs exist" covers only Email and schedules and triggers. No identifier retired. | Spec-truth reconciliation of S-006, findings F3 and F13. F3: the abort of a waiting lead was unspecified, and REQ-005 has no To do to Blocked move. The Architect's ruling, which the product owner accepted on 2026-11-07. | T-271 |
+| 2026-11-07 | spec-truth reconciliation — FAIL | REQ-006 not held after an abort of a Blocked lead, a To do lead's abort unspecified, stale assumption, AC-008.6's neighbouring crash window untested; REQ-008's stop otherwise confirmed against v0.13 | none |
