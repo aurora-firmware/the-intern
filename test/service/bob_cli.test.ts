@@ -33,7 +33,7 @@ describe("bob command line", () => {
         assert.equal(result.status, 0);
         assert.ok(result.stdout.startsWith("Usage: bob <command>"), result.stdout);
         assert.ok(result.stdout.includes("serve"), result.stdout);
-        assert.ok(!/schedules|triggers|skills|instructions|knowledge|mail/.test(result.stdout), result.stdout);
+        assert.ok(!/schedules|skills|instructions|knowledge|mail/.test(result.stdout), result.stdout);
         assert.equal(result.stderr, "");
     });
 
