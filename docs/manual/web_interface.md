@@ -165,7 +165,7 @@ your kept text. You don't reload.
 - **No file browsing or editing.** You can't open a workspace's files. An agent's file changes appear only in its tool
   calls and results.
 - **No login and no encryption.** See the warning above.
-- **No pages for skills, instruction files, schedules, triggers or knowledge sources.** Each comes with its feature.
+- **No pages for skills, instruction files, schedules or knowledge sources.** Each comes with its feature.
 - **No import.** It stays on the command line.
 - **No export to a path on the service's machine.** The browser downloads the file; use
   [`bob export <file>`](commands.md#bob-export-file) for a file on the machine itself.

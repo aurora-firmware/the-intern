@@ -37,7 +37,7 @@ This page comes with its feature.
 
 This page comes with its feature.
 
-## Configuring schedules and triggers
+## Configuring schedules
 
 This page comes with its feature.
 

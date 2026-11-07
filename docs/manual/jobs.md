@@ -41,7 +41,6 @@ letter counts on its own, starting at 1. A number is never reused, even when the
 | `W`    | A request through the network listener (the web interface). |
 | `E`    | A request by email.                                       |
 | `S`    | A schedule.                                               |
-| `T`    | A trigger.                                                |
 | `A`    | A follow-up job, created by an agent while it worked on another job. |
 
 Wherever an operation asks for a job, give its short number in any letter case, so `c-14` and `C-14` name the same job.
@@ -212,7 +211,7 @@ Intern records it from the way in you used.
 ### Follow jobs
 
 List jobs, newest first. `jobs.list` takes the optional `status` (`to_do`, `in_progress`, `blocked` or `done`),
-`letter` (`C`, `W`, `E`, `S`, `T` or `A`), `relatedTo` (a job), `limit` (1 to 500, 50 when you give none) and `cursor`.
+`letter` (`C`, `W`, `E`, `S` or `A`), `relatedTo` (a job), `limit` (1 to 500, 50 when you give none) and `cursor`.
 It answers a page of jobs without worklog and history, and a `cursor` for the next page when there is one:
 
 ```
