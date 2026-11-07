@@ -87,7 +87,8 @@ actions:
 
 - **Stop** asks for one confirmation, then ends the agent's work and that of the agents it invoked. Stopping the lead
   agent does not remind it to go on. The job becomes Blocked with the reason "stopped by a team member", and an answer
-  resumes it. If the agent has already finished, the page says so.
+  resumes it. If the agent has already finished, the page says so. The lead of a To do job, which waits for a worker
+  thread, has no Stop; Stop appears once the job is In progress. Cancel stays offered.
 - **Redirect** sends your words to the running agent, which takes them into account after its current tool round. The
   activity shows them as coming from a team member by the web interface. If the agent is waiting for reports, the page
   says "held until it continues": the service keeps your words and delivers them when the agent goes on.
