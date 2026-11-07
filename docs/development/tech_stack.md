@@ -52,7 +52,8 @@ covers all of S-006 REQ-021's browsers: Chrome, and Edge where it is installed, 
 (`channel: "chrome"`, `channel: "msedge"`) and Firefox through Playwright's own build, and it records downloads,
 separate contexts and keyboard input. Its test runner, `@playwright/test`, isn't used, so the project keeps one runner.
 `axe-core` 4.14.0, a dev dependency, runs the contrast check of S-006 AC-020.1 in the page. Puppeteer's Firefox and Edge
-support is thinner, and Selenium needs a driver per browser. Playwright can't drive a stock Firefox, so a by-hand pass covers one before a release.
+support is thinner, and Selenium needs a driver per browser. Playwright can't drive a stock Firefox, so a by-hand pass
+covers one before a release.
 
 Chrome and Firefox are required; Edge is good to have (S-006 REQ-021). `npm run test:web:setup` runs
 `playwright-core install --with-deps chrome firefox` in CI, and `npm run test:web:setup:edge` runs the same for
