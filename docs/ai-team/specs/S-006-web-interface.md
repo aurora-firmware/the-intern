@@ -1,7 +1,7 @@
 ---
 id: S-006
 title: Web interface
-version: '0.3'
+version: '0.4'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-06'
 author: planner
@@ -789,15 +789,18 @@ keyboard, with the focused control visible.
 
 ### REQ-021 — Browsers
 
-The pages SHALL work on current Chrome, Firefox and Edge on desktop. Safari isn't a target and isn't blocked.
+The pages SHALL work on current Chrome and Firefox on desktop. These two are the required browsers. Edge on desktop is
+good to have: the browser tests SHALL run on Edge where it is installed and skip where it isn't, and an Edge failure on
+a machine that has Edge SHALL still fail. Safari isn't a target and isn't blocked.
 
 #### AC-021.1 — The main journey in each engine
 
 - **Given:** a daemon on the fake model
-- **When:** the journey of answering a Blocked job runs in each target browser
-- **Then:** it passes in each
+- **When:** the journey of answering a Blocked job runs in Chrome, in Firefox, and in Edge where it is installed
+- **Then:** it passes in Chrome and Firefox, and a missing Chrome or Firefox fails the run. Where Edge is installed, the
+  journey passes in it, and an Edge failure fails the run. Where Edge isn't installed, its tests skip with a diagnostic
 
-**Verification:** test — the browser tests run across the target browsers in CI.
+**Verification:** test — the browser tests run on Chrome, on Firefox, and on Edge where it is installed, in CI.
 
 ### REQ-022 — Documentation and words
 
@@ -843,7 +846,8 @@ None. The web interface adds no setting. The existing `[network]` section of `co
 ## Success Criteria
 
 1. All browser tests of this spec pass in CI against a real daemon on the fake model, covering the journeys of Users and
-   Journeys, the restart (REQ-014) and a refused action (REQ-013). Measured by the CI run.
+   Journeys, the restart (REQ-014) and a refused action (REQ-013). They run on Chrome and Firefox, and on Edge where it
+   is installed. Edge's tests may skip only for a missing Edge (REQ-021). Measured by the CI run.
 2. The service tests of S-003 REQ-016 pass: the copy, the log line, the owner-only temporary copy and its removal, one
    download at a time and the free-space refusal. So do those of S-003 AC-006.4 and S-004 AC-008.5. Measured by
    `npm test`.
@@ -890,3 +894,4 @@ Both were for the Architect, and Feature Architecture resolved them. Neither cha
 | 2026-11-07 | v0.3. REQ-006 names a conversation waiting for a worker thread, as built, and REQ-015 says "directly in the browser". REQ-003, REQ-015, Exclusions ("Names on actions") and Attribution: a job a team member creates directly records the way in and the network address; a job the front desk creates records the way in and the front desk, with no address, as S-004 REQ-003 and REQ-021 state; the origin shows what it has. AC-015.1 and AC-015.2 say "creates a job directly". New AC-015.3. REQ-006: no Stop on the lead of a To do job, and the block after Stop concerns an In progress job's lead. New AC-006.6. Workflow follows. Implementation Order: REQ-014 and the connection banner move from phase 1 to phase 2, where they were built. Assumptions: "Delta size" is past tense, and the S-004 v0.14 dependency is named. No identifier retired. REQ-016 stays authoritative for the banner colour. | Spec-truth reconciliation, findings F3, F4, F5 (wording), F7 and F12. Product owner accepted the rulings on 2026-11-07. Driving ADR: ADR-008 for the delta text. | T-271, T-272, T-274 |
 | 2026-11-07 | spec-truth reconciliation — FAIL | Work in e0e19728..788e9c45 against v0.2: REQ-021 and Success Criterion 1 unproven (no CI, no Edge), AC-016.1 review incomplete, front desk and follow-up origins, a To do lead's Stop, stale text; follow-ups routed | none |
 | 2026-11-07 | spec-truth reconciliation — FAIL | v0.3 confirmed for REQ-003, REQ-006, REQ-015, AC-006.6, AC-015.3 and AC-016.1 in Chrome; REQ-021, AC-021.1 and Success Criterion 1 unproven, T-273 blocked on the product owner's push decision; manual sentence on a job's origin untrue, follow-up routed; read limited to 75c7c946..0604b54f | none |
+| 2026-11-07 | v0.4. REQ-021: the required browsers are current Chrome and Firefox on desktop. Edge is good to have: its tests run where it is installed and skip where it isn't, and an Edge failure on a machine that has Edge still fails. Safari stays as it was. AC-021.1 and Success Criterion 1 follow. No identifier retired. S-000 names no browser and doesn't change. | Product owner decision: "About T-273, since we are not releasing for windows, I suggest the tests in Edge are just good to have and will skip if there is no Edge browser available." | T-273, T-278 |
