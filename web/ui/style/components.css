@@ -19,6 +19,7 @@ body {
 h1,
 h2.page-heading,
 .agent-name,
+details.activity > summary,
 .app-title {
     font-family: var(--font-display);
     font-weight: 400;
@@ -193,8 +194,9 @@ dialog {
     position: sticky;
     top: 0;
     z-index: 10;
+    margin-bottom: 1rem;
     padding: 0.75rem 1.5rem;
-    background: var(--color-orange);
+    background: var(--color-red);
     color: var(--color-dark-blue);
     font-weight: 600;
 }
