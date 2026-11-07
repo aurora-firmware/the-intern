@@ -214,7 +214,7 @@ Team member adds an entry: command, page, front desk or hand edit               
 Daemon ready → fires begin                                                                   REQ-007
 Due time arrives, in local time                                                              REQ-005
   (clocks repeat the time → once; time doesn't exist that day → no fire)                     REQ-005
-  (daemon stopped, machine off or a long sleep → no fire, no record)                          REQ-007
+  (daemon stopped, machine off, or due time more than a minute past → no fire, no record)    REQ-007
   (entry has an open scheduled run → skipped fire naming the scheduled run)                  REQ-006
   (workspace folder missing, or job refused → skipped fire with the reason)                  REQ-006
 Job S-n created with a fresh lead conversation and the entry's seat values                   REQ-004
@@ -250,8 +250,7 @@ checks only that the thinking level is a known one (REQ-006 covers a model that 
 
 - **Given:** a running daemon with no entries
 - **When:** a team member calls `schedules.create` with, in turn, a name with a space, `cron = "not cron"`, `cron = "0 0
-  31 2 *"`, an empty
-  request, an unknown role, an unregistered workspace, an unknown model and an invalid thinking level
+  31 2 *"`, an empty request, an unknown role, an unregistered workspace, an unknown model and an invalid thinking level
 - **Then:** each call is refused `invalid_input` naming the key, the file is unchanged, and no entry exists
 
 **Verification:** test — `test/service/schedule_operations.test.ts`.
@@ -315,9 +314,8 @@ leave its jobs and history in place, stop its fires and leave any running job to
 that has history SHALL continue that history, and the open scheduled run rule of REQ-006 counts those earlier scheduled
 runs.
 
-Removing a role that an entry names, or whose default workspace an entry names, SHALL be refused (S-001 REQ-003), and
-unregistering a workspace that an entry names
-SHALL be refused, each naming the entry.
+Removing a role that an entry names, or whose per-role default workspace (S-001 REQ-018) an entry names, SHALL be
+refused (S-001 REQ-003), and unregistering a workspace that an entry names SHALL be refused, each naming the entry.
 
 #### AC-003.1 — A change applies at once and survives a restart
 
@@ -346,8 +344,8 @@ SHALL be refused, each naming the entry.
 
 #### AC-003.4 — An entry holds what it names
 
-- **Given:** an entry naming the team role `ops` and the workspace `/srv/infra`, and an entry naming the default
-  workspace of the team role `docs`
+- **Given:** an entry naming the team role `ops` and the workspace `/srv/infra`, and an entry naming the per-role
+  default workspace of the team role `docs`
 - **When:** a team member removes `ops`, unregisters `/srv/infra` and removes `docs`
 - **Then:** all three are refused, each naming the entry, and nothing changes
 
@@ -458,8 +456,8 @@ and the creation of the job SHALL happen as one step, so two starts of one entry
 
 Fires SHALL begin once the daemon is ready (S-002 REQ-003). A due time that passes while the daemon is stopped or
 starting or the machine is off SHALL create no job and no record, however short the gap. The entry's next fire SHALL be
-its next due time. A due time that passed more than one minute ago SHALL NOT fire, which also covers a machine asleep
-for more than a minute; a due time passed in a shorter sleep fires when the machine wakes.
+its next due time. A due time that passed more than one minute ago SHALL NOT fire. A sleep ending within a minute of a
+due time doesn't stop it: the fire comes on the daemon's next check, within REQ-015's minute.
 
 #### AC-007.1 — No catching up
 
@@ -628,11 +626,10 @@ fire time and whether it was run on demand.
 
 The front desk SHALL be offered tools to list, create, change, remove and run schedule entries and to read their run
 history. Each SHALL act as the matching service operation, a refusal SHALL return an error result and the agent's run
-goes on, and a call with the same tool call id SHALL act once. An interrupted call settles as an error result, and a
-new call from the model is a new call under the operation's rules. These tools SHALL be offered in no other
-conversation, apart
-from read schedule runs (REQ-010). A scheduled run the front desk starts SHALL have the letter `S` and record in its
-origin the way in of the team member's input and the front desk, with no address.
+goes on, and a call with the same tool call id SHALL act once. An interrupted call settles as an error result, and a new
+call from the model is a new call under the operation's rules. These tools SHALL be offered in no other conversation,
+apart from read schedule runs (REQ-010). A scheduled run the front desk starts SHALL have the letter `S` and record in
+its origin the way in of the team member's input and the front desk, with no address.
 
 #### AC-013.1 — Setting up a schedule in chat
 
@@ -755,7 +752,7 @@ This spec adds no other setting. One minute (REQ-015, REQ-007) is built in.
   migration. Confirmed in the Architect's consistency review: nothing in `src/` builds a job source caller, listeners
   always build team member callers, and no tagged version holds the job operations.
 - **Skipped fires travel with the database,** because `bob export` copies the whole database (S-005).
-- **S-001 v0.16, S-002 v0.15, S-003 v0.7, S-004 v0.15, S-005 v0.6 and S-006 v0.6**, as amended on this planning branch,
+- **S-001 v0.17, S-002 v0.15, S-003 v0.7, S-004 v0.15, S-005 v0.6 and S-006 v0.6**, as amended on this planning branch,
   and S-000 v0.7. If any amendment is refused at Gate 1, this spec changes with it.
 - **The Email spec (not yet written)** treats mail as an input an agent triages, as S-000 v0.7 states. No event passes
   from Email to this spec.
@@ -795,4 +792,4 @@ None. Feature Architecture settled the scheduling library question (`docs/develo
 
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| 2026-11-07 | v0.2. REQ-007: a sleep shorter than a minute isn't detected, so a due time passed in one fires on waking. REQ-013 and Interfaces: an interrupted tool call settles as an error and isn't repeated, and a same-id call acts once. REQ-001, AC-001.1: a cron that can never be due is refused. REQ-003, AC-003.4: removing a role is refused when an entry names its default workspace, because the next start would otherwise stop. Open Questions closed. | Feature Architecture spec findings, 2026-11-07. No approved journey changes. | S-007's tasks |
+| 2026-11-07 | v0.2. REQ-007: the daemon can't see a sleep, so a due time within a minute of the daemon's next check still fires. REQ-013 and Interfaces: an interrupted tool call settles as an error and isn't repeated, and a same-id call acts once. REQ-001, AC-001.1: a cron that can never be due is refused. REQ-003, AC-003.4: removing a role is refused when an entry names its per-role default workspace, because the next start would otherwise stop. Open Questions closed. | Feature Architecture spec findings, 2026-11-07. No approved journey changes. | S-007's tasks |
