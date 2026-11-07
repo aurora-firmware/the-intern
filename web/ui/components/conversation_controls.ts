@@ -183,16 +183,23 @@ const useIsOffered = (conversationId: string, isBusy: boolean): boolean => {
     return isBusy || (status !== undefined && OFFERED_STATUSES.includes(status));
 };
 
-type ControlsProps = { number: string; conversationId: string; state: FeedState; isBlockedLead: boolean };
+type ControlsProps = {
+    number: string;
+    conversationId: string;
+    state: FeedState;
+    isBlockedLead: boolean;
+    isToDoLead: boolean;
+};
 
 /**
  * Stop and Redirect for a running conversation of a job or one parked for reports (S-006 REQ-006). The lead of a Blocked
- * job is parked for an answer, not for reports, so it is offered neither.
+ * job is parked for an answer, not for reports, so it is offered neither. The lead of a To do job waits for a worker
+ * thread with nothing to stop, so it is offered no Stop; the feed's change of the job to In progress offers it.
  */
-export const ConversationControls = ({ number, conversationId, state, isBlockedLead }: ControlsProps) => {
+export const ConversationControls = ({ number, conversationId, state, isBlockedLead, isToDoLead }: ControlsProps) => {
     const [isEngaged, setEngaged] = useState(false);
     const isRunOrReportsPark = useIsOffered(conversationId, state.busy);
-    const isOffered = isRunOrReportsPark && !isBlockedLead;
+    const isOffered = isRunOrReportsPark && !isBlockedLead && !isToDoLead;
     if (!isOffered && !isEngaged) return null;
     return h(
         "div",

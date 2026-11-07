@@ -195,6 +195,9 @@ export const JobPage = ({ feed, number }: { feed: FeedConnection | null | undefi
                                   isBlockedLead:
                                       view.record?.status === "blocked" &&
                                       conversationId === view.record.leadConversation,
+                                  isToDoLead:
+                                      view.record?.status === "to_do" &&
+                                      conversationId === view.record.leadConversation,
                               }),
                               h(ConversationSettings, { conversationId }),
                           ),
