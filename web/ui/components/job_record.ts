@@ -2,6 +2,8 @@
  * The Job page's record (S-006 REQ-003): its types and the drawing of the job's fields, worklog and history.
  */
 import { type ComponentChildren, h } from "preact";
+import { useEffect, useState } from "preact/hooks";
+import { pageClient } from "../feed_connection.ts";
 
 export type Observed = { remoteAddress?: string; remotePort?: number };
 export type Author =
@@ -9,7 +11,7 @@ export type Author =
     | { kind: "team_member"; wayIn: string; observed?: Observed }
     | { kind: "daemon" };
 export type Origin =
-    | { kind: "request"; wayIn: string; observed?: Observed }
+    | { kind: "request"; wayIn: string; observed?: Observed; frontDesk?: string }
     | { kind: "schedule"; entry: string }
     | { kind: "trigger"; trigger: string }
     | { kind: "follow_up"; jobId: string };
@@ -43,16 +45,37 @@ const addressOf = (observed?: Observed): string =>
         ? ""
         : ` from ${observed.remoteAddress}${observed.remotePort === undefined ? "" : `:${observed.remotePort}`}`;
 
-const originText = (origin: Origin): string => {
+/** The short number of the job a follow-up came from, or `undefined` until it is read and when the read fails. */
+const useJobNumber = (jobId: string | undefined): string | undefined => {
+    const [read, setRead] = useState<{ jobId: string; number: string }>();
+    useEffect(() => {
+        if (jobId === undefined) return;
+        let isCurrent = true;
+        pageClient()
+            .invoke("jobs.get", { job: jobId })
+            .then((job) => {
+                if (isCurrent) setRead({ jobId, number: (job as JobRecord).number });
+            })
+            .catch(() => undefined);
+        return () => {
+            isCurrent = false;
+        };
+    }, [jobId]);
+    return read?.jobId === jobId ? read?.number : undefined;
+};
+
+const originText = (origin: Origin, sourceNumber: string | undefined): string => {
     switch (origin.kind) {
         case "request":
-            return `Request by ${origin.wayIn}${addressOf(origin.observed)}`;
+            return origin.frontDesk === undefined
+                ? `Request by ${origin.wayIn}${addressOf(origin.observed)}`
+                : `Request by ${origin.wayIn} through the front desk`;
         case "schedule":
             return `Schedule ${origin.entry}`;
         case "trigger":
             return `Trigger ${origin.trigger}`;
         case "follow_up":
-            return `Follow-up of job ${origin.jobId}`;
+            return sourceNumber === undefined ? "Follow-up of another job" : `Follow-up of job ${sourceNumber}`;
     }
 };
 
@@ -81,6 +104,8 @@ export const Field = ({ name, label, value }: { name: string; label: string; val
 
 export const JobFields = ({ record }: { record: JobRecord }) => {
     const { resolution } = record;
+    const { origin } = record.request;
+    const sourceNumber = useJobNumber(origin.kind === "follow_up" ? origin.jobId : undefined);
     return h(
         "section",
         { class: "job-record" },
@@ -92,7 +117,7 @@ export const JobFields = ({ record }: { record: JobRecord }) => {
         record.status === "blocked"
             ? h(Field, { name: "blocked-reason", label: "Blocked reason", value: record.blockedReason ?? "" })
             : null,
-        h(Field, { name: "origin", label: "Origin", value: originText(record.request.origin) }),
+        h(Field, { name: "origin", label: "Origin", value: originText(origin, sourceNumber) }),
         record.status === "done" && resolution !== undefined
             ? [
                   h(Field, { name: "resolution", label: "Resolution", value: resolution.kind }),
