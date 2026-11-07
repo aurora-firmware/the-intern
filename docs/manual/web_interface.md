@@ -58,9 +58,10 @@ short number and title. Select a job to open its Job page.
 
 The Job page shows one job: its short number, title, description, definition of done, status, the Blocked reason while
 it is Blocked, where it came from, its related jobs with links, its worklog and history, and, once it is Done, its
-resolution and justification. A job you created shows the way in and the network address. A job the front desk created
-for you shows the way in and "through the front desk". A follow-up job shows the short number of the job it came from.
-The page stays current without a reload.
+resolution and justification. A job you created on these pages shows the way in and the network address, and one
+created from the command line shows the way in. A job the front desk created for you shows the way in and
+"through the front desk". A follow-up job shows the short number of the job it came from. The page stays current without
+a reload.
 
 ### Answer a Blocked job
 
