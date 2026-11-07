@@ -19,7 +19,8 @@ client has to open a new request, which starts from a fresh snapshot of each con
 Probes made for this decision, over plain HTTP with a non-loopback name, so the page isn't a secure context:
 
 - With 6 streams open from 3 tabs, the next call hangs in Chrome 156 and 157 and Edge 157 (`HANG` after 4 s). Firefox
-  159 (Playwright's build) answered a call with 7 streams open, so AC-005.4 tests the limit only on Chrome and Edge.
+  159 (Playwright's build) answered a call with 7 streams open, so AC-005.4 tests the limit only on Chrome, and on
+  Edge where it is installed (S-006 REQ-021).
 - A module `SharedWorker` starts, and 3 tabs share it with one stream at the server, in all four browsers. In Chrome 156
   and Firefox 159, each tab's calls were answered in 4 to 27 ms while the worker's stream ran, and a reloaded tab
   connected again to the same worker.
@@ -145,3 +146,4 @@ Exclusions).
 
 | Date | Change | Reason |
 |---|---|---|
+| 2026-11-07 | Context: AC-005.4 tests the limit on Chrome, and on Edge where it is installed. The decision and the dated probes stay. | S-006 v0.4 REQ-021 makes Edge good to have. Chrome is required, so the limit is still tested on every CI run with Edge missing. |
