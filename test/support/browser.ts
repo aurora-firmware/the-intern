@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { sep } from "node:path";
 import type { TestContext } from "node:test";
 import { type Browser, type BrowserType, chromium, firefox, type LaunchOptions } from "playwright-core";
 
@@ -63,6 +63,11 @@ async function launchInTemporaryDirectory(type: BrowserType, launch: LaunchOptio
  * The browser runs with its own temporary directory, which this function removes by name when the test ends or the test
  * is skipped, so a run leaves nothing of the browser in `TMPDIR`. Chrome leaves a `url_fetcher` directory there, and
  * Playwright leaves its artifacts and profile directories when a launch fails.
+ *
+ * The directory has no prefix, only the 6 characters `mkdtemp` adds, and that is deliberate. Chrome refuses a socket
+ * path of more than 107 characters, and its path is `<TMPDIR>/com.google.Chrome.XXXXXX/SingletonSocket`, 41 characters
+ * after the directory it runs in. This directory adds 7 characters (the separator and 6), so Chrome needs a `TMPDIR` of
+ * at most 59 characters, where without it 66 would do.
  */
 export async function launchBrowser(
     t: TestContext,
@@ -70,8 +75,7 @@ export async function launchBrowser(
     options: LaunchBrowserOptions = {},
 ): Promise<Browser | undefined> {
     const type = name === "firefox" ? firefox : chromium;
-    // The name is short on purpose: Chrome refuses a socket path of more than 107 characters, and it nests under this.
-    const temporary = await mkdtemp(join(tmpdir(), "bb-"));
+    const temporary = await mkdtemp(`${tmpdir()}${sep}`);
     let browser: Browser;
     try {
         browser = await launchInTemporaryDirectory(type, launchOptions(name, options, temporary), temporary);

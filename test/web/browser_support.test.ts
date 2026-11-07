@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
 import { type BrowserName, launchBrowser, pageUrl } from "../support/browser.ts";
@@ -120,8 +120,8 @@ test("launchBrowser skips the test with a diagnostic and answers undefined when 
  * browser starts, ends the test, and answers what the browser left in that `TMPDIR`.
  */
 async function leftInTemporaryDirectory(name: BrowserName) {
-    // The name is short on purpose: Chrome refuses a socket path of more than 107 characters, and it nests under this.
-    const temporary = await mkdtemp(join(tmpdir(), "bl-"));
+    // The name has no prefix on purpose: Chrome refuses a socket path of more than 107 characters, and it nests under this.
+    const temporary = await mkdtemp(`${tmpdir()}${sep}`);
     const script = `
         const http = await import("node:http");
         const { readdirSync } = await import("node:fs");
