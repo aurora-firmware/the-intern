@@ -485,10 +485,13 @@ in `test/unit/`. `test/support/browser.ts` launches a browser. It opens pages at
 name mapped to the daemon's loopback address, so the pages run outside a secure context as on a team's network. ADR-007
 decision 10 covers the proxy for what a worker does. Tool choices are in [tech_stack.md](tech_stack.md).
 
+Chrome and Firefox are the required browsers; Edge is good to have (S-006 REQ-021).
+
 | Runs in | Tests |
 |---|---|
 | Chrome | Every browser test |
-| Firefox and Edge as well | AC-021.1, and AC-005.4 and AC-001.2, which depend on the worker and the connection limit |
+| Firefox as well | AC-021.1, and AC-005.4 and AC-001.2, which depend on the worker and the connection limit |
+| Edge as well, where it is installed | The same tests as Firefox. Edge is good to have, not required: its tests are skipped where it isn't installed |
 
 ## Rejected approaches
 

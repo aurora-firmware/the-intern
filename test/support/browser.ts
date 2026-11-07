@@ -18,6 +18,21 @@ const LOOPBACK = "127.0.0.1";
 /** Playwright's messages for a browser that is not installed. */
 const MISSING_BROWSER = /Executable doesn't exist|is not found at/;
 
+/** What `launchBrowser` does with a launch error: throw it, fail the test with the install command, or skip the test. */
+export type LaunchFailureAction = "rethrow" | "fail" | "skip";
+
+/**
+ * Decides what a failed launch means. An error that is not a missing browser is rethrown, for any browser, so an
+ * installed browser that fails still fails. A missing Chrome or Firefox fails the test when `allBrowsers` is true, and
+ * is skipped otherwise. A missing Edge is always skipped: Edge is good to have, not required.
+ */
+export function launchFailureAction(name: BrowserName, message: string, allBrowsers: boolean): LaunchFailureAction {
+    if (!MISSING_BROWSER.test(message)) {
+        return "rethrow";
+    }
+    return allBrowsers && name !== "msedge" ? "fail" : "skip";
+}
+
 /** The address of a path on the daemon's listener, as the browser tests open it. */
 export function pageUrl(port: number, path: string): string {
     return `http://${PAGE_HOST}:${port}${path}`;
@@ -56,9 +71,9 @@ async function launchInTemporaryDirectory(type: BrowserType, launch: LaunchOptio
 }
 
 /**
- * Launches a browser that maps `intern.test` to the loopback address, and closes it when the test ends. A browser
- * that is not installed fails the test when `BOB_WEB_ALL_BROWSERS=1`; otherwise the test is skipped and the answer is
- * `undefined`, so the caller returns at once.
+ * Launches a browser that maps `intern.test` to the loopback address, and closes it when the test ends. A missing
+ * Chrome or Firefox fails the test when `BOB_WEB_ALL_BROWSERS=1`. Any other missing browser, and a missing Edge always,
+ * skips the test with a diagnostic and answers `undefined`, so the caller returns at once.
  *
  * The browser runs with its own temporary directory, which this function removes by name when the test ends or the test
  * is skipped, so a run leaves nothing of the browser in `TMPDIR`. Chrome leaves a `url_fetcher` directory there, and
@@ -82,12 +97,13 @@ export async function launchBrowser(
     } catch (error) {
         await rm(temporary, { recursive: true, force: true });
         const message = error instanceof Error ? error.message : String(error);
-        if (!MISSING_BROWSER.test(message)) {
+        const action = launchFailureAction(name, message, process.env.BOB_WEB_ALL_BROWSERS === "1");
+        if (action === "rethrow") {
             throw error;
         }
-        if (process.env.BOB_WEB_ALL_BROWSERS === "1") {
+        if (action === "fail") {
             throw new Error(
-                `Browser ${name} is not installed, and BOB_WEB_ALL_BROWSERS=1 requires every browser. ` +
+                `Browser ${name} is not installed, and BOB_WEB_ALL_BROWSERS=1 requires Chrome and Firefox. ` +
                     `Install it with "playwright-core install ${name}". ${message}`,
             );
         }

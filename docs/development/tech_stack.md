@@ -48,16 +48,20 @@ all, `test/web` last and on its own, because its time checks suffer under the ot
 `test:service` and `test:web` run one folder each. `test:web` runs at most 2 files at a time (`--test-concurrency=2`).
 
 **Which tool drives the browser in `test/web`?** `playwright-core` 1.65.0, a dev dependency, driven from `node:test`. It
-covers all of S-006 REQ-021's browsers: Chrome and Edge through their real builds (`channel: "chrome"`, `channel:
-"msedge"`) and Firefox through Playwright's own build, and it records downloads, separate contexts and keyboard input.
-Its test runner, `@playwright/test`, isn't used, so the project keeps one runner. `axe-core` 4.14.0, a dev dependency,
-runs the contrast check of S-006 AC-020.1 in the page. Puppeteer's Firefox and Edge support is thinner, and Selenium
-needs a driver per browser. Playwright can't drive a stock Firefox, so a by-hand pass covers one before a release.
+covers all of S-006 REQ-021's browsers: Chrome, and Edge where it is installed, through their real builds
+(`channel: "chrome"`, `channel: "msedge"`) and Firefox through Playwright's own build, and it records downloads,
+separate contexts and keyboard input. Its test runner, `@playwright/test`, isn't used, so the project keeps one runner.
+`axe-core` 4.14.0, a dev dependency, runs the contrast check of S-006 AC-020.1 in the page. Puppeteer's Firefox and Edge
+support is thinner, and Selenium needs a driver per browser. Playwright can't drive a stock Firefox, so a by-hand pass
+covers one before a release.
 
-`npm run test:web:setup` runs `playwright-core install --with-deps chrome msedge firefox` in CI. On a developer's
-machine, `playwright-core install firefox` is enough next to an installed Chrome. A missing browser fails with a message
-naming that command when `BOB_WEB_ALL_BROWSERS=1`, as CI sets, and otherwise skips that browser's tests with a
-diagnostic, so a machine with no Edge can still run the rest.
+Chrome and Firefox are required; Edge is good to have (S-006 REQ-021). `npm run test:web:setup` runs
+`playwright-core install --with-deps chrome firefox` in CI, and `npm run test:web:setup:edge` runs the same for
+`msedge`. On a developer's machine, `playwright-core install firefox` is enough next to an installed Chrome. A missing
+Chrome or Firefox fails with a message naming the install command when `BOB_WEB_ALL_BROWSERS=1`, as CI sets, and
+otherwise skips that browser's tests with a diagnostic. Edge's tests run where Edge is installed and are skipped, with
+that diagnostic, where it isn't, whatever `BOB_WEB_ALL_BROWSERS` says. An Edge that is installed and fails to launch
+still fails its tests. `PLAYWRIGHT_BROWSERS_PATH` doesn't affect Edge: Playwright finds it by channel at a system path.
 
 **How does a deterministic fake model stand in for a real one?**
 The fake model's reply is a pure function of the transcript.
@@ -88,7 +92,10 @@ macOS (Apple silicon) is checked by hand before a release. No API documentation 
 Every check listed under Quality checks: format, lint, typecheck, tests and the user documentation build.
 
 **How do the browser tests get real browsers in CI?** The `Tests` job keeps its name and image, so the required checks
-stay as they are. It adds one step before `npm test`, `npm run test:web:setup`, and sets `BOB_WEB_ALL_BROWSERS=1`. In
+stay as they are. It adds two steps before `npm test`, and sets `BOB_WEB_ALL_BROWSERS=1`. `Install Chrome and Firefox
+for web tests` runs `npm run test:web:setup` and fails the job when it fails. `Install Edge for web tests` runs
+`npm run test:web:setup:edge` with `continue-on-error: true` and `timeout-minutes: 15`, so a failed or hung Edge
+install doesn't fail the job, and Edge's tests are then skipped. In
 `node:24.22.0-bookworm` as root, that step installed and then ran Chrome 157, Edge 157 and Firefox 159, measured on
 2026-11-06. It adds about 1.4 GB per run, downloaded again each time because the container is new. A prepared image is
 the way to cut that if the time matters; nothing depends on it.
