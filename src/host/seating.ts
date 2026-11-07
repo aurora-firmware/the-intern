@@ -33,7 +33,6 @@ export type SeatActor =
 export type Origin =
     | { kind: "request"; wayIn: string }
     | { kind: "schedule"; entry: string; fireTime: string }
-    | { kind: "trigger"; trigger: string; event: string }
     | { kind: "follow_up"; conversationId: string }
     | { kind: "invocation"; conversationId: string }
     | { kind: "front_desk" };

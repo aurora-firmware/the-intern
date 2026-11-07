@@ -257,10 +257,7 @@ describe("startLeadConversation", () => {
     it("records the origin of each job source kind, seats the role it names with its defaults, and the job source as the seat actor", async () => {
         const started = await start();
         const gpDefaults = await readConversationMeta(started.ctx.host, await started.seatConversation());
-        const origins = [
-            { kind: "schedule", entry: "nightly", fireTime: "2026-10-31T02:00:00Z" },
-            { kind: "trigger", trigger: "ci", event: "build-failed" },
-        ];
+        const origins = [{ kind: "schedule", entry: "nightly", fireTime: "2026-10-31T02:00:00Z" }];
         const actor = { kind: "job_source", source: "schedule" } as const;
 
         for (const [index, origin] of origins.entries()) {
@@ -427,8 +424,14 @@ describe("jobs.create", () => {
     it("refuses a job source naming no origin, a request or a follow-up, using no number", async () => {
         const started = await start();
         const source: Caller = { actor: { kind: "job_source", source: "t" } };
-        const origins = [undefined, { kind: "request", wayIn: "cli" }, { kind: "follow_up", conversationId: "1" }];
         const trigger = { kind: "trigger", trigger: "ci", event: "build-failed" };
+        const schedule = { kind: "schedule", entry: "nightly", fireTime: "2026-10-31T02:00:00Z" };
+        const origins = [
+            undefined,
+            { kind: "request", wayIn: "cli" },
+            { kind: "follow_up", conversationId: "1" },
+            trigger,
+        ];
 
         for (const origin of origins) {
             const code = await refusalCode(started.create({ text, ...(origin && { origin }) }, source));
@@ -436,7 +439,7 @@ describe("jobs.create", () => {
         }
 
         assert.equal(await started.conversationCount(), 0);
-        assert.equal((await started.create({ text, origin: trigger }, source)).number, "T-1");
+        assert.equal((await started.create({ text, origin: schedule }, source)).number, "S-1");
     });
 
     it("refuses an agent caller whose conversation doesn't exist, creating nothing", async () => {
@@ -454,16 +457,11 @@ describe("jobs.create", () => {
         const parent = await started.create({ text }, cliCaller);
         const agent: Caller = { actor: { kind: "agent", conversationId: parent.leadConversation as string } };
         const schedule = { kind: "schedule", entry: "nightly", fireTime: "2026-10-31T02:00:00Z" };
-        const trigger = { kind: "trigger", trigger: "ci", event: "build-failed" };
 
         const followUp = await started.create({ text }, agent);
         const scheduled = await started.create(
             { text, origin: schedule },
             { actor: { kind: "job_source", source: "s" } },
-        );
-        const triggered = await started.create(
-            { text, origin: trigger },
-            { actor: { kind: "job_source", source: "t" } },
         );
 
         assert.equal(followUp.number, "A-1");
@@ -474,8 +472,6 @@ describe("jobs.create", () => {
         });
         assert.equal(scheduled.number, "S-1");
         assert.deepEqual(scheduled.request.origin, schedule);
-        assert.equal(triggered.number, "T-1");
-        assert.deepEqual(triggered.request.origin, trigger);
     });
 
     it("records statedBy apart from the origin", async () => {
