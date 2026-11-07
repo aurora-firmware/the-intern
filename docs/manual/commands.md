@@ -24,8 +24,8 @@ commands are `serve`, `status`, `usage`, `export`, `import`, `follow` and `chat`
 In the usage lines below, `<name>` is a required argument. Options come after the arguments and take a value unless the
 table says they are switches. Give an option once, except `--tool` and `--skill`, which you repeat for several values.
 
-The groups `schedules`, `triggers`, `skills`, `instructions`, `knowledge` and `mail` are reserved for later features.
-They have no command yet: `bob schedules list` prints that the group isn't available yet and exits with status 2.
+The groups `schedules`, `skills`, `instructions`, `knowledge` and `mail` are reserved for later features.
+They have no command yet: `bob skills list` prints that the group isn't available yet and exits with status 2.
 
 ## Options every command shares
 
