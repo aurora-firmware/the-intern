@@ -1,7 +1,7 @@
 ---
 id: S-000
 title: System Overview
-version: '0.6'
+version: '0.7'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-27'
 author: planner
@@ -21,7 +21,7 @@ anyone driving it step by step.
 
 - **Team members.** Anyone who can reach one of The Intern's ways in: the command line, the web interface or its email
   address. They hand it jobs, answer its questions, follow its work and stop or redirect it, and, from the command
-  line or the web interface, configure it: its schedules, triggers, roles, skills, instructions and knowledge sources.
+  line or the web interface, configure it: its schedules, roles, skills, instructions and knowledge sources.
   Whoever installs it on the machine and gives it its accounts is a team member like any other. They need
   it to finish what it is given, to ask only when it lacks something, and to show what it did. All team members are
   equal; The Intern makes no difference between them.
@@ -53,8 +53,8 @@ anyone driving it step by step.
 3. **Schedule recurring housekeeping.** A team member sets up "every night, check that the backups ran and the
    services on the network answer". It runs without anyone, reports what it found, and can also be run on demand.
    Removes: 3, 5.
-4. **React to an event.** Something happens, such as a check failing or a message arriving, and The Intern opens a job
-   for it without being asked. Removes: 3, 5.
+4. **React to what happens.** Something happens, such as a check failing or a message arriving. An agent notices it
+   during a scheduled run or while triaging mail, and creates a job for it without being asked. Removes: 3, 5.
 5. **Keep documentation current.** The Intern updates the team's documents, whether in the team wiki, in repositories
    or in other folders the team points it to, as part of its jobs or on a schedule, and writes down what it learns
    about the team's systems in the wiki, where people can read and correct it. Removes: 4.
@@ -64,13 +64,13 @@ anyone driving it step by step.
 7. **Watch and steer.** In the web interface a team member sees every job with its definition, status, open questions
    and evidence, follows an agent working live, and stops or redirects it. Removes: 1.
 8. **Fit The Intern to the team.** A team member adds instructions, skills and specialist roles, points The Intern at
-   the team's knowledge sources, and manages schedules and triggers from the web interface or the command line, without
+   the team's knowledge sources, and manages schedules from the web interface or the command line, without
    changing The Intern itself. Removes: 4, 5.
 
 ## Solution overview
 
 The Intern is one service that starts with a machine the team keeps running. All of its work is organised as jobs,
-kept in its own job record. A job can come from a team member, from a schedule, from an event, or from The Intern
+kept in its own job record. A job can come from a team member, from a schedule, or from The Intern
 itself when it finds follow-up work. Every job goes through the same steps: define it (goal, needs, plan and
 definition of done), get what is missing, act, and verify. A job that lacks something is marked blocked with its
 question, and The Intern turns to other jobs until the answer arrives. Many jobs run at the same time, up to a limit on
@@ -85,7 +85,7 @@ roles the team needs.
 
 People reach The Intern through the command line, a web interface and email. None of these needs a login: whoever can
 reach a way in is a team member, and who that is follows from where The Intern can be reached. The web interface shows
-every job, its questions and its evidence, follows agents live, and configures The Intern: schedules, triggers, roles,
+every job, its questions and its evidence, follows agents live, and configures The Intern: schedules, roles,
 skills, instructions and knowledge sources. When a job is blocked, the question waits in the web interface and the
 command line, and is also sent by email when sending is set up.
 
@@ -117,8 +117,8 @@ person's access.
   configuration in a defined order.
 - **Boundary:** It does not define what a job is or its steps (Jobs), which roles exist (Agents and roles), what the
   command line and the web interface present to people (Command line, Web interface), the mailbox (Email), or when
-  scheduled work runs (Schedules and triggers).
-- **Works with:** Jobs, Agents and roles, Command line, Web interface, Email, Schedules and triggers, Installation and
+  scheduled work runs (Schedules).
+- **Works with:** Jobs, Agents and roles, Command line, Web interface, Email, Schedules, Installation and
   service setup.
 
 #### Jobs
@@ -130,9 +130,9 @@ person's access.
   as blocked and how an answer resumes it, keeps the history of every job (what its agents did) in the job record,
   and exports and imports the whole saved state, job record included, for backups, moving to another computer and
   upgrades.
-- **Boundary:** It does not do the work of a job (Agents and roles) or decide when recurring jobs start (Schedules and
-  triggers). It does not sync with outside ticket trackers.
-- **Works with:** Intern service, Agents and roles, Schedules and triggers, Command line, Web interface, Email.
+- **Boundary:** It does not do the work of a job (Agents and roles) or decide when recurring jobs start (Schedules). It
+  does not sync with outside ticket trackers.
+- **Works with:** Intern service, Agents and roles, Schedules, Command line, Web interface, Email.
 
 #### Agents and roles
 
@@ -152,12 +152,12 @@ person's access.
 - **Name:** Command line.
 - **Responsibility:** Commands for using and running The Intern: starting the service, chatting with the front desk,
   creating jobs, listing them and reading their history, answering blocked jobs, following and stopping work,
-  managing schedules, triggers, roles, skills, instructions and knowledge sources, and exporting and importing the job
+  managing schedules, roles, skills, instructions and knowledge sources, and exporting and importing the job
   record.
 - **Boundary:** It holds no state and implements no behaviour of its own; each command calls an operation of the
   Intern service, reached on the machine, except starting the service and S-004's import step, which run while no
   daemon serves the instance.
-- **Works with:** Intern service, Jobs, Schedules and triggers, Agents and roles, Skills and instructions, Team
+- **Works with:** Intern service, Jobs, Schedules, Agents and roles, Skills and instructions, Team
   knowledge.
 
 #### Web interface
@@ -165,34 +165,33 @@ person's access.
 - **Name:** Web interface.
 - **Responsibility:** The team's browser view of The Intern: a board of all jobs with their definitions, status, open
   questions and evidence; chatting with the front desk; creating jobs and answering questions; following an agent
-  live and stopping or redirecting it; and managing schedules, triggers, roles, skills, instructions and knowledge
+  live and stopping or redirecting it; and managing schedules, roles, skills, instructions and knowledge
   sources.
 - **Boundary:** It holds no work and no state of its own and adds no capabilities: every action calls an operation of
   the Intern service. It has no login of its own; who can reach it follows from the network setup of the machine.
-- **Works with:** Intern service, Jobs, Schedules and triggers, Agents and roles, Skills and instructions, Team
+- **Works with:** Intern service, Jobs, Schedules, Agents and roles, Skills and instructions, Team
   knowledge.
 
 #### Email
 
 - **Name:** Email.
 - **Responsibility:** The Intern's own mailbox as a way in and out: it sorts incoming mail, turns requests into jobs,
-  attaches replies to the jobs waiting for them, reports incoming mail as an event that triggers can start jobs from,
-  and, when sending is set up, sends questions and reports to the people a job needs.
+  attaches replies to the jobs waiting for them, and, when sending is set up, sends questions and reports to the people
+  a job needs.
 - **Boundary:** It does not read or triage team members' own mailboxes, and it does not decide what a job is or when
   one is blocked (Jobs). Both parts are optional and set up separately: The Intern works without a mailbox, and a
   mailbox can receive without sending being set up.
-- **Works with:** Intern service, Jobs, Agents and roles, Schedules and triggers.
+- **Works with:** Intern service, Jobs, Agents and roles, Schedules.
 
-#### Schedules and triggers
+#### Schedules
 
-- **Name:** Schedules and triggers.
-- **Responsibility:** Starts jobs at set times and when events happen; defines which events exist, such as a job
-  ending with a given outcome or mail arriving; lets team members add, remove, list and run them on demand; lets a
-  schedule choose whether each run starts fresh or sees the history of its last few runs; and skips a run while the
-  previous one is still working.
-- **Boundary:** It does not do the work of a job (Agents and roles) or keep the job record (Jobs). It does not watch
-  the mailbox itself; Email reports incoming mail.
-- **Works with:** Intern service, Jobs, Email, Command line, Web interface.
+- **Name:** Schedules.
+- **Responsibility:** Starts jobs at set times; lets team members add, change, remove, list and run schedules on
+  demand; starts each run fresh, tells its agent it is a scheduled run and lets the agent read the schedule's earlier
+  runs; and skips a run while the previous one is still working.
+- **Boundary:** It does not do the work of a job (Agents and roles) or keep the job record (Jobs). No event starts a
+  job: agents create jobs as they work, and Email is an input that an agent triages.
+- **Works with:** Intern service, Jobs, Agents and roles, Command line, Web interface.
 
 #### Skills and instructions
 
@@ -290,7 +289,7 @@ person's access.
 
 - **Name:** User manual.
 - **Responsibility:** The documentation for team members: installing and upgrading The Intern, giving it access,
-  accounts and email, configuring roles, skills, instructions, knowledge sources, schedules and triggers, and giving
+  accounts and email, configuring roles, skills, instructions, knowledge sources and schedules, and giving
   and following jobs and answering questions. The shipped skill that explains The Intern draws its content from it.
 - **Boundary:** It contains no internal specs, decisions or bug reports.
 - **Works with:** Command line, Web interface, Skills and instructions, Continuous integration, Installation and
@@ -349,8 +348,9 @@ person's access.
 
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| 2026-10-30 | The machine is one the team keeps running, not an always-on one; The Intern starts at boot without a login and is restarted after a failure; it runs as one OS account, the installing person's in v1, and acts with that account's credentials; schedules choose fresh runs or the history of their last runs; missed runs are skipped (Purpose, Users, Solution overview, Intern service, Schedules and triggers, Installation and service setup, Project exclusions). Consistency review: the Intern service makes its operations reachable for the command line on the machine and for the web interface over the network (it owns the listeners); Installation is account-neutral; version 0.4. | Decided with the product owner while aligning S-001 and S-002 with S-000. | None; S-000's bootstrap plan isn't broken down yet |
+| 2026-10-30 | The machine is one the team keeps running, not an always-on one; The Intern starts at boot without a login and is restarted after a failure; it runs as one OS account, the installing person's in v1, and acts with that account's credentials; schedules choose fresh runs or the history of their last runs; missed runs are skipped (Purpose, Users, Solution overview, Intern service, Schedules, Installation and service setup, Project exclusions). Consistency review: the Intern service makes its operations reachable for the command line on the machine and for the web interface over the network (it owns the listeners); Installation is account-neutral; version 0.4. | Decided with the product owner while aligning S-001 and S-002 with S-000. | None; S-000's bootstrap plan isn't broken down yet |
 | 2026-11-02 | The job record, history included, is kept in tables of its own that don't depend on the agent runtime's stored format; export and import copy the whole saved state, job record included, for backups, moving to another computer and upgrades, and a version opens a copy only if it can read it (Solution overview, Jobs). The last project exclusion became converting saved state between versions: the job record keeps its own format, which each version migrates forward, and export and import copy, they don't convert. Installation and service setup: the upgrade question asks how an upgrade keeps a copy of the saved state from before the new version opens it and how it goes back. Version 0.5. | S-004 architecture consistency review; product owner decisions 2026-11-02. Driving ADR: ADR-001, amended 2026-11-02 for the job store. | None; S-000's bootstrap plan isn't broken down yet, and the S-004 breakdown updates `docs/system_overview.html` |
 | 2026-11-03 | Agents and roles also owns the front desk, the one standing conversation that assists team members, belongs to no job, turns their requests into jobs, tells them what is being worked on and passes their answers and steering on without doing the work; team members chat with it from the Command line and the Web interface. Version 0.6. | Product owner decisions of the front desk brainstorm, 2026-11-03, which partly reverse the 2026-10-30 removal of interactive chat; S-001 v0.8, S-002 v0.10 and S-004 v0.6 specify it. | None; S-000's bootstrap plan has no work for it, and `docs/system_overview.html` is updated with this amendment |
 | 2026-11-03 | Command line, Boundary: every command calls an operation of the Intern service, except starting the service and S-004's import step, which run while no daemon serves the instance. Still version 0.6. | Architecture consistency review of the S-005 draft, finding F1: `bob serve` and `bob import` call no operation. | None; S-005 isn't broken down yet |
 | 2026-11-03 | Wording only, no change of scope: the lead completes a job rather than closes it (Purpose, use case 1, Jobs), because a closed conversation is now the conversation of a Done job (S-001 REQ-026). Version stays 0.6. | Architecture consistency review of the closed-conversation amendment, finding F5. | None |
+| 2026-11-07 | v0.7. Triggers leave the product: use case 4 rephrased so that an agent notices what happens and creates the job; the component becomes Schedules; every run starts fresh and its agent can read earlier runs, in place of a choice per schedule; Email reports no events. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |

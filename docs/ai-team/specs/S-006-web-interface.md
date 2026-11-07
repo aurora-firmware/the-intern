@@ -1,7 +1,7 @@
 ---
 id: S-006
 title: Web interface
-version: '0.5'
+version: '0.6'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-06'
 author: planner
@@ -19,7 +19,7 @@ a browser needs. With the daemon, jobs and command line built, this is the next 
 every job on a board, answer blocked jobs, follow an agent live, stop or redirect it, talk to the front desk, shape
 roles and workspaces, and download a backup, from a desktop browser and in the Aurora Firmware style.
 
-S-000 lists more for this component than this spec delivers. Pages for schedules, triggers and knowledge sources come
+S-000 lists more for this component than this spec delivers. Pages for schedules and knowledge sources come
 with those components' own specs, and skills and instruction files with the Skills and instructions spec.
 
 ## Definitions
@@ -48,7 +48,7 @@ and the shared vocabulary of `docs/system_overview.html`. It adds these terms:
 | Team member at a desktop browser | Watches and steers work from any computer that reaches the service, with no terminal and no account. |
 | Second team member | Opens a link to a job from a colleague and sees the same job, or acts on it at the same time. |
 | Developer | Tests the main journeys in a real browser against a real daemon on the fake model. |
-| Later specs (downstream) | Schedules and triggers, Skills and instructions, and Team knowledge add their pages to the sidebar. |
+| Later specs (downstream) | S-007, Skills and instructions, and Team knowledge add their pages to the sidebar. |
 
 Journeys, in priority order:
 
@@ -84,7 +84,7 @@ What this specification explicitly does NOT cover:
 - **Import.** It stays on the command line, because it refuses to run while a daemon owns the instance (S-005 REQ-013).
 - **Exporting to a path on the service's machine from the browser.** The browser offers only the export download;
   `bob export` stays as it is.
-- **Pages for schedules, triggers and knowledge sources.** Each of those specs adds its own.
+- **Pages for schedules and knowledge sources.** Each of those specs adds its own.
 - **Any setting of its own.** The web interface adds no configuration.
 
 ## Alternatives Considered
@@ -904,3 +904,4 @@ Both were for the Architect, and Feature Architecture resolved them. Neither cha
 | 2026-11-07 | spec-truth reconciliation — FAIL | CI run 42367063537 at c0f21644 proves REQ-021's journey on Chrome, Firefox and Edge, with T-278, T-279, B-030, B-031 and the ADR-006 and ADR-007 amendments confirmed; "the browser tests" in REQ-021, AC-021.1 and Success Criterion 1 overstates the 21 that run beyond Chrome, amendment and lower-document follow-up routed; read limited to 33420c07..c0f21644 plus T-277 | none |
 | 2026-11-07 | v0.5. REQ-021, AC-021.1's Verification and Success Criterion 1: in CI, every browser test runs on Chrome, and AC-021.1's journey and the tests `docs/development/architecture.md` names also run on Firefox, and on Edge where it is installed. An Edge failure on a machine that has Edge still fails, and a missing Chrome or Firefox still fails the CI run. No identifier retired. | Architect's completion review of 2026-11-07, finding F1: "the browser tests" overstated what runs beyond Chrome. The main session, holding the product owner role for this ruling, decided the narrower wording. | T-280 |
 | 2026-11-07 | spec-truth reconciliation — FAIL | v0.5 confirmed for REQ-021, AC-021.1 and Success Criterion 1 against run 42367063537; F1, F2, F4, G1, G2 and the export comment closed; tech_stack.md states the 2026-11-06 probe as a test run, follow-up routed; read limited to c0f21644..31b11221, with no CI run at 31b11221 | none |
+| 2026-11-07 | v0.6. Purpose, Users and Exclusions: triggers get no page, and S-007 adds the Schedules page. No behaviour change in this spec. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
