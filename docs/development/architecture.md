@@ -633,9 +633,10 @@ the check reads jobs and not entries (REQ-003).
 
 **`schedules.run`.** It reads for its key first, so a repeat returns the original job even if the entry has since gone
 or its folder is missing. It then answers `not_found` for an unknown entry, and calls `startScheduledRun`. Its key is
-stored as `schedules.run:<key>`, so it can't meet a `jobs.create` key. The limit of 200 characters applies to the
-caller's key, before the prefix. A team member or the front desk can call it; any other actor is refused
-`invalid_input`.
+stored as `schedules.run:<key>`, so it can't meet a `jobs.create` key. The key is optional, as on `jobs.create` and
+`roles.create`. The limit of 200 characters applies to the caller's key, before the prefix: `schedules.run` checks it,
+and `checkBeforeWrite` keeps the check for every caller other than a job source, which only in-process code can be. A
+team member or the front desk can call it; any other actor is refused `invalid_input`.
 
 ### The origin
 
@@ -714,9 +715,14 @@ queue. Today's callers compute `next` before they queue it, so two creates at on
 existing entry, so a repeat after a crash between the file write and the key's record doesn't answer `conflict`.
 
 **Holds.** The component registers `catalog.addReferenceSource` at step 5. Its `referrersOf(role)` names each entry
-whose `role` is that role, and each entry whose `workspace` is that role's default path, because removing the role would
-unregister the path and the next start would stop. `WorkspaceRegistry` gains the same `addReferenceSource`, and
-`unregister` refuses with each entry named (REQ-003).
+whose `role` is that role, and each entry whose `workspace` is that role's per-role default workspace (S-001 REQ-018),
+listed by `workspaces.list()` with `kind: "role_default"`, because removing the role would unregister the path and the
+next start would stop. A role whose default workspace is one a team member set isn't held by that. `WorkspaceRegistry`
+gains the same `addReferenceSource`, and `unregister` refuses with each entry named (REQ-003).
+
+`roles.change` isn't held: S-001 REQ-003 lets a team member change any role's default workspace. Setting a workspace on
+a role whose per-role default an entry names stops that path being registered at the next start, and startup then stops
+with an error naming the file, the entry and the reason (REQ-002).
 
 ### What the lead is told
 
@@ -765,7 +771,8 @@ The trigger origin and the letter `T` leave these places. The letter lists don't
 - `LETTERS` in `src/service/job_record_operations.ts`, and the letter union in `src/desk/desk_tools_extension.ts`
 - `SourceOrigin`, `ORIGIN_FIELDS` and `sourceOrigin` in `src/service/job_operations.ts`
 - `Origin` in `src/host/seating.ts`
-- the reserved groups in `src/cli/command_line.ts`, where `schedules` leaves as well
+- the reserved groups in `src/cli/command_line.ts`; `schedules` leaves that list later, in the change that adds
+  `bob schedules` (`docs/development/coding_guidelines.md`, Command line)
 - `src/roles/shipped/bob.md` and `web/ui/components/job_record.ts`
 
 `sourceOrigin` then refuses anything but a schedule origin, so a trigger origin is `invalid_input` and uses no number
