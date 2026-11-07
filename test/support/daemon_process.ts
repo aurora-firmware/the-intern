@@ -61,17 +61,30 @@ export const RESUME_MARKER = "<host resumed>";
 /** The child's test operation that tells whether its network listener started and the port it is in use on. */
 export const NETWORK_STATE_OPERATION = "test.networkListener";
 
-/** A port nothing listens on at the moment, to pass as `fixedPort`. */
-export function freeLoopbackPort(): Promise<number> {
-    return new Promise((resolve, reject) => {
+const PORT_PICK_ATTEMPTS = 50;
+// Below Linux's default ephemeral range (32768-60999), so a socket the system numbers itself cannot take the port
+// between the pick and the daemon child's bind.
+const FIXED_PORT_LOW = 20_000;
+const FIXED_PORT_SPAN = 12_000;
+
+function canListenOn(port: number): Promise<boolean> {
+    return new Promise((resolve) => {
         const server = createServer();
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-            const address = server.address();
-            const port = typeof address === "object" && address !== null ? address.port : 0;
-            server.close((error) => (error ? reject(error) : resolve(port)));
-        });
+        server.once("error", () => resolve(false));
+        server.listen(port, "127.0.0.1", () => server.close(() => resolve(true)));
     });
+}
+
+/**
+ * A port nothing listens on at the moment, to pass as `fixedPort`. It is picked at random below the range the system
+ * hands out to other sockets, so no unrelated process takes it before the daemon child binds it.
+ */
+export async function freeLoopbackPort(): Promise<number> {
+    for (let attempt = 0; attempt < PORT_PICK_ATTEMPTS; attempt++) {
+        const port = FIXED_PORT_LOW + Math.floor(Math.random() * FIXED_PORT_SPAN);
+        if (await canListenOn(port)) return port;
+    }
+    throw new Error(`No free loopback port found in ${PORT_PICK_ATTEMPTS} attempts`);
 }
 
 export type StartDaemonOptions = {
@@ -182,8 +195,13 @@ export function startDaemon(options: StartDaemonOptions): DaemonProcess {
             const failure = new Error(`The daemon child exited (code ${code}, signal ${signal}) before answering`);
             for (const request of pending.values()) request.reject(failure);
             pending.clear();
-            readyMessage.reject(failure);
             resolve({ code, signal });
+        });
+        // `close` follows `exit` once stderr has been read to its end, so the rejection can carry the child's error.
+        child.on("close", (code, signal) => {
+            const detail = stderrText.trim();
+            const reason = `The daemon child exited (code ${code}, signal ${signal}) before answering`;
+            readyMessage.reject(new Error(detail ? `${reason}: ${detail}` : reason));
         });
     });
 
