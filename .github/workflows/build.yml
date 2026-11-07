@@ -78,8 +78,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install browsers for web tests
+      - name: Install Chrome and Firefox for web tests
         run: npm run test:web:setup
+
+      - name: Install Edge for web tests
+        continue-on-error: true
+        timeout-minutes: 15
+        run: npm run test:web:setup:edge
 
       - name: Run tests
         env:
