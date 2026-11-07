@@ -19,6 +19,7 @@ body {
 h1,
 h2.page-heading,
 .agent-name,
+details.activity > summary,
 .app-title {
     font-family: var(--font-display);
     font-weight: 400;

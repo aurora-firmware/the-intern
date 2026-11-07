@@ -8,6 +8,8 @@ import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts"
 const WAIT_MS = 30_000;
 const TEST_TIMEOUT_MS = 120_000;
 const MOST_TABS = 60;
+const BANNER = ".connection-banner";
+const REFUSAL = "main .job-actions .refusal";
 const AXE_FILE = createRequire(import.meta.url).resolve("axe-core/axe.min.js");
 
 type Job = { id: string; number: string };
@@ -106,6 +108,55 @@ describe("contrast and keyboard use in chrome", () => {
         }
 
         t.assert.deepEqual(found, []);
+    });
+
+    it("reaches 4.5:1 on the connection banner", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { daemon, port } = await startBlockedJob();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await page.goto(pageUrl(port, "/ui/#/"));
+        await page.waitForSelector("main .board-column .card", { timeout: WAIT_MS });
+
+        daemon.kill9();
+        await page.waitForSelector(BANNER, { timeout: WAIT_MS });
+        await page.evaluate(() => document.fonts.ready);
+
+        t.assert.deepEqual(await contrastViolations(page), []);
+    });
+
+    it("reaches 4.5:1 on the error box of a refused cancel", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { port, job } = await startBlockedJob();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await page.goto(pageUrl(port, `/ui/#/jobs/${job.number}`));
+        await page.waitForSelector("main .job-actions .job-cancel", { timeout: WAIT_MS });
+
+        await page.click("main .job-actions .job-cancel");
+        await page.waitForSelector(REFUSAL, { timeout: WAIT_MS });
+        await page.evaluate(() => document.fonts.ready);
+
+        t.assert.deepEqual(await contrastViolations(page), []);
+    });
+
+    it("draws the agent names of the activity sections in Bruno Ace", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { port, job } = await startBlockedJob();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await page.goto(pageUrl(port, `/ui/#/jobs/${job.number}`));
+        await page.waitForSelector("main details.activity > summary", { timeout: WAIT_MS });
+
+        const families = await page
+            .locator("main details.activity > summary")
+            .evaluateAll((names) => names.map((name) => getComputedStyle(name).fontFamily));
+
+        t.assert.ok(families.length > 0);
+        t.assert.deepEqual(
+            families.filter((family) => !family.startsWith('"Bruno Ace"')),
+            [],
+        );
     });
 
     it("opens a Blocked job, answers it and goes back with the keyboard alone, the focus visible throughout", {
