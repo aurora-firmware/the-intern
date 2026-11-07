@@ -381,13 +381,13 @@ SHALL leave the browser's connections free for its actions (Assumptions and Depe
 
 ### REQ-006 — Stop and redirect
 
-The Job page SHALL offer Stop and Redirect for a running conversation of the job or one parked for reports. It SHALL
-offer no Stop on the lead of a To do job, because that abort would leave the job To do with nothing to resume it from
-the page (S-004 REQ-008). Stop SHALL ask for one confirmation, then abort the conversation (S-001's cascade). Stopping
-the lead of an In progress job SHALL leave the job as S-004 REQ-008 states: no reminder, Blocked with the reason
-"stopped by a team member", and an answer resumes it. Redirect SHALL deliver the team member's words to the running
-agent after its current tool round (S-002's busy mode `steer`; S-001 REQ-020). For a conversation parked for reports,
-the service holds the words, and the page SHALL say "held until it continues" (ADR-004 decision 4).
+The Job page SHALL offer Stop and Redirect for a conversation of the job that is running, waiting for a worker thread or
+parked for reports. It SHALL offer no Stop on the lead of a To do job, because that abort would leave the job To do with
+nothing to resume it from the page (S-004 REQ-008). Stop SHALL ask for one confirmation, then abort the conversation
+(S-001's cascade). Stopping the lead of an In progress job SHALL leave the job as S-004 REQ-008 states: no reminder,
+Blocked with the reason "stopped by a team member", and an answer resumes it. Redirect SHALL deliver the team member's
+words to the running agent after its current tool round (S-002's busy mode `steer`; S-001 REQ-020). For a conversation
+parked for reports, the service holds the words, and the page SHALL say "held until it continues" (ADR-004 decision 4).
 
 #### AC-006.1 — Redirect
 
@@ -626,8 +626,8 @@ showed and show what it missed, once, before the new deltas.
 
 The pages SHALL ask for no login and no name, and SHALL send nothing claiming who the team member is. Actions SHALL be
 recorded as S-003 REQ-007 states, and the Job page SHALL show that record for a job's origin. A job a team member
-creates directly SHALL record the way in and the network address. A job the front desk creates SHALL record the way in
-and the front desk, with no address (S-004 REQ-003, REQ-021).
+creates directly in the browser SHALL record the way in and the network address. A job the front desk creates SHALL
+record the way in and the front desk, with no address (S-004 REQ-003, REQ-021).
 
 #### AC-015.1 — Recorded by address
 
@@ -887,5 +887,5 @@ Both were for the Architect, and Feature Architecture resolved them. Neither cha
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-11-06 | v0.2. Interfaces: the service calls table adds `daemon.status` for every page; the Front desk row names the shared `scope=conversations` stream; a Contract adds `conversations.entries`' optional `order` input, ascending by default, and pages use `"descending"`; the Job page row also names the shared stream. Assumptions and Dependencies names that Contract as the source of `order`. Implementation Order phase 2 delivers it and names the shared stream. Open Questions: both marked resolved. Assumptions and Dependencies: "Browser connections" points to ADR-007 and "Delta size" to ADR-008. No REQ or AC changed. S-002 isn't amended. | Spec findings from Feature Architecture. Driving ADRs: ADR-006 (technology preference), ADR-007 (decisions 4, 6 and 9, and the shared stream), ADR-008 (delta size). | None; S-006 isn't broken down yet |
-| 2026-11-07 | v0.3. REQ-003, REQ-015, Exclusions ("Names on actions") and Attribution: a job a team member creates directly records the way in and the network address; a job the front desk creates records the way in and the front desk, with no address, as S-004 REQ-003 and REQ-021 state; the origin shows what it has. AC-015.1 and AC-015.2 say "creates a job directly". New AC-015.3. REQ-006: no Stop on the lead of a To do job, and the block after Stop concerns an In progress job's lead. New AC-006.6. Workflow follows. Implementation Order: REQ-014 and the connection banner move from phase 1 to phase 2, where they were built. Assumptions: "Delta size" is past tense, and the S-004 v0.14 dependency is named. No identifier retired. REQ-016 stays authoritative for the banner colour. | Spec-truth reconciliation, findings F3, F4, F5 (wording), F7 and F12. Product owner accepted the rulings on 2026-11-07. Driving ADR: ADR-008 for the delta text. | T-271, T-272, T-274 |
+| 2026-11-07 | v0.3. REQ-006 names a conversation waiting for a worker thread, as built, and REQ-015 says "directly in the browser". REQ-003, REQ-015, Exclusions ("Names on actions") and Attribution: a job a team member creates directly records the way in and the network address; a job the front desk creates records the way in and the front desk, with no address, as S-004 REQ-003 and REQ-021 state; the origin shows what it has. AC-015.1 and AC-015.2 say "creates a job directly". New AC-015.3. REQ-006: no Stop on the lead of a To do job, and the block after Stop concerns an In progress job's lead. New AC-006.6. Workflow follows. Implementation Order: REQ-014 and the connection banner move from phase 1 to phase 2, where they were built. Assumptions: "Delta size" is past tense, and the S-004 v0.14 dependency is named. No identifier retired. REQ-016 stays authoritative for the banner colour. | Spec-truth reconciliation, findings F3, F4, F5 (wording), F7 and F12. Product owner accepted the rulings on 2026-11-07. Driving ADR: ADR-008 for the delta text. | T-271, T-272, T-274 |
 | 2026-11-07 | spec-truth reconciliation — FAIL | Work in e0e19728..788e9c45 against v0.2: REQ-021 and Success Criterion 1 unproven (no CI, no Edge), AC-016.1 review incomplete, front desk and follow-up origins, a To do lead's Stop, stale text; follow-ups routed | none |
