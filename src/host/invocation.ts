@@ -314,9 +314,10 @@ export async function continueWithHeld(host: HarnessHost, conversationId: string
     await clearHeld(host, conversationId);
 }
 
-// One commit per conversation (ADR-001 decision 4): an aborted conversation is left neither parked nor waiting for
-// a report, and its held messages are withdrawn as an abort withdraws queued input. The same commit marks a lone
-// abort of an invoked conversation (`isReportOwed`), so its invoker is owed an "aborted" report.
+// One commit per conversation (ADR-001 decision 4): an aborted conversation is left neither parked for reports nor
+// waiting for a report, and its held messages are withdrawn as an abort withdraws queued input. A lead's park for an
+// answer stays: it is the lead of a Blocked job, which the job's abort closes (S-001 REQ-008, REQ-014). The same
+// commit marks a lone abort of an invoked conversation (`isReportOwed`), so its invoker is owed an "aborted" report.
 async function clearWaiting(
     host: HarnessHost,
     conversationId: string,
@@ -324,7 +325,7 @@ async function clearWaiting(
 ): Promise<void> {
     if ((await readConversationMeta(host, conversationId)) === undefined) return;
     await updateMeta(host, conversationId, (meta) => {
-        meta.parked = null;
+        if (!(meta.isLead && meta.parked?.waitingFor === "answer")) meta.parked = null;
         meta.awaiting = [];
         meta.held = [];
         if (marks.isReportOwed === true) meta.aborted = true;
@@ -393,7 +394,8 @@ export function onLeadStopped(host: HarnessHost, listener: LeadStoppedListener):
 /**
  * Aborts the conversation, then every conversation it still awaits a report from, recursively, whether it is
  * steerable or parked. An invoked conversation that has reported has left `awaiting` and is not touched. No aborted
- * conversation stays parked, waits for a report or keeps held messages. A closed conversation is refused with
+ * conversation stays parked for reports, waits for a report or keeps held messages; the lead of a Blocked job stays
+ * parked for an answer. A closed conversation is refused with
  * `ConversationClosedError`. The check and the clearing commits run in the job's section; the aborts wait for the
  * runs to end, so they run after the section is released.
  */
