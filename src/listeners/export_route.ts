@@ -146,8 +146,8 @@ function removeWhenClosed(res: ServerResponse, folder: string, logger: Logger): 
 }
 
 /**
- * Removes what the `exports` folder holds, which only a daemon that died mid-download leaves. A failure is logged and
- * never raised, so the start goes on (S-003 REQ-016).
+ * Removes what the `exports` folder holds, which only a daemon that died mid-download leaves, at the next start
+ * (S-003 REQ-016). A failed removal is logged and stops nothing (ADR-001 decision 2), so the start goes on.
  */
 export async function removeExportLeftovers(stateDir: string, logger: Logger): Promise<void> {
     const exportsFolder = join(stateDir, EXPORTS_FOLDER);
