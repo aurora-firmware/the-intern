@@ -1,6 +1,6 @@
 /**
  * Live acceptance tests 2 and 3 of S-001: seat changes and invocations over the pi agent login of the account running
- * this script, with one real model. Live test 1 (a scheduled job) waits for the schedules and triggers spec. They make
+ * this script, with one real model. Live test 1 moved to S-007, Success Criterion 5. They make
  * real model requests, so `npm test` never runs them; run `npm run test:live:agents -- --model <provider/id>` by
  * hand. Live test 2 runs through the service operations, since the command line does not exist yet (product owner
  * ruling, 2026-10-31). The pi agent folder is the account's own: nothing here writes to it.
