@@ -1,7 +1,7 @@
 ---
 id: S-003
 title: Control endpoint
-version: '0.6'
+version: '0.7'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-01'
 author: planner
@@ -41,7 +41,7 @@ the shared vocabulary of `docs/system_overview.html`. It adds these terms:
 | Team member on the machine | Runs `bob` commands that call the daemon over the local socket. |
 | Team member on the team's network | Opens the web interface in a browser, follows work live and calls control operations. |
 | Other programs (downstream systems) | Scripts and tools on the machine or on the team's network call the same routes, with the same contract as The Intern's own clients. |
-| Later specs (downstream systems) | The Command line and Web interface specs build on the client library; Jobs, schedules and triggers and other specs add operations that become reachable with no listener change. |
+| Later specs (downstream systems) | The Command line and Web interface specs build on the client library; Jobs, schedules and other specs add operations that become reachable with no listener change. |
 | Developer | Runs both listeners in tests on the fake model, with a temporary socket and a free loopback port, and no outside network. |
 
 Journeys, in priority order:
@@ -843,3 +843,4 @@ None affect the specified behaviour.
 | 2026-11-07 | spec-truth reconciliation — FAIL | Export route and shared stream confirmed against v0.5; stale assumptions only | none |
 | 2026-11-07 | spec-truth reconciliation — PASS | v0.6 text corrections confirmed; no S-003 behaviour changed in 75c7c946..0604b54f; read limited to S-006's findings | none |
 | 2026-11-07 | spec-truth reconciliation — PASS | B-030 changes one test only; AC-016.6 passes as root in CI; a failing rm is untested, and ADR-001 decision 2 owns that behaviour; read limited to REQ-016 | none |
+| 2026-11-07 | v0.7. Users: triggers leave the wording. No behaviour change. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |

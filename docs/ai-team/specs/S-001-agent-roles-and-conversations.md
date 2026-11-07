@@ -1,6 +1,6 @@
 ---
 title: Agent roles and conversations
-version: '0.15'
+version: '0.17'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-15'
 author: planner
@@ -47,9 +47,9 @@ members and turns their requests into jobs. Success Criteria lists the observabl
 | Reset | Clears what the model sees of a conversation. The conversation, its id and its stored entries stay. |
 | Transcript, context | The transcript is every stored entry of a conversation. The context is what the model receives on the next request, after resets and compactions. |
 | Workspace | A registered local folder that an agent works in. It supplies extra instructions and skills, and is where tools start. Agents work on the OS and filesystem with the account the-intern runs as; the workspace doesn't limit what they reach. |
-| Job source, origin | A job source starts a job and its lead conversation: a request from a team member (command line, web interface, email), a schedule fire, a trigger, or a follow-up job created by an agent. The origin of a conversation records its job source, the invoking conversation for an agent invocation, or "front desk" for the front desk. |
-| Front desk | The one standing conversation of an instance that assists team members (REQ-021). It belongs to no job. Team members reach it from the command line and the web interface; it answers questions about the work, creates jobs that agents take, and passes answers and steering to a job's conversations. It never does the work itself. |
-| Front-desk tools | The tools offered only in the front desk: job tools that name the job they act on, reads of conversations, status and usage, and steering of a job's conversations (REQ-022). |
+| Job source, origin | A job source starts a job and its lead conversation: a request from a team member (command line, web interface, email), a schedule fire, or a follow-up job created by an agent. The origin of a conversation records its job source, the invoking conversation for an agent invocation, or "front desk" for the front desk. |
+| Front desk | The one standing conversation of an instance that assists team members (REQ-021). It belongs to no job. Team members reach it from the command line and the web interface; it answers questions about the work, creates jobs that agents take, sets up and runs schedules, and passes answers and steering to a job's conversations. It never does the work itself. |
+| Front-desk tools | The tools offered only in the front desk: job tools that name the job they act on, reads of conversations, status and usage, steering of a job's conversations, and schedule tools (REQ-022). S-004 offers one of these, read schedule runs, in a job's conversations too. |
 
 ### pi agent and pi-durable terms
 
@@ -79,11 +79,11 @@ models, login, settings, skills and context files. Where a term exists in both, 
 
 | Actor | Goal |
 |---|---|
-| Team member | Gives jobs, shapes the roles and workspaces agents are made from, follows which role works where, and steers, reseats or resets any conversation. Talks to the front desk to ask for work, ask what is going on, and answer or steer jobs. |
-| Front desk agent | Assists team members in the front desk: creates jobs, reports on jobs and conversations, and passes answers and steering on. It does no work itself. |
+| Team member | Gives jobs, shapes the roles and workspaces agents are made from, follows which role works where, and steers, reseats or resets any conversation. Talks to the front desk to ask for work, set up schedules, ask what is going on, and answer or steer jobs. |
+| Front desk agent | Assists team members in the front desk: creates jobs, sets up and runs schedules, reports on jobs and conversations, and passes answers and steering on. It does no work itself. |
 | Lead agent | Carries its job from definition to verification, doing the work itself, handing the conversation to a better-suited role or invoking specialist agents. |
 | Specialist (invoked) agent | Does one part of a job in its own conversation and reports back. It never completes the job. |
-| Job sources (downstream systems) | The Jobs component, schedule fires and triggers start a job's lead conversation with a role and an origin. |
+| Job sources (downstream systems) | The Jobs component and schedule fires start a job's lead conversation with a role and an origin. |
 | Client specs (downstream systems) | The command line and the web interface build their views on the monitoring read operations. |
 
 Journeys, in priority order:
@@ -123,10 +123,9 @@ What this specification explicitly does NOT cover:
   work is a new job, which a team member or an agent creates and may relate to the first (S-004 REQ-009).
 - **Approval rules for actions.** S-000 excludes per-action rules: what an agent can do is bounded by the account
   the-intern runs as and the tools its role is offered.
-- **The mailbox, schedules and triggers themselves.** Reading the-intern's own mailbox belongs to the Email spec.
-  When schedules and triggers fire, what their store accepts, the run history an entry passes on and when a fire is
-  skipped belong to the schedules and triggers spec. This spec defines only the lead conversation each of them starts
-  (REQ-013).
+- **The mailbox and schedules themselves.** Reading the-intern's own mailbox belongs to the Email spec. When schedules
+  fire, what an entry holds, its run history and when a fire is skipped belong to S-007. This spec defines only the
+  lead conversation a fire starts (REQ-013).
 - **Command-line views and the job abort operation.** This spec delivers the read operations that monitoring needs
   (REQ-016). The command-line views built on them belong to the command-line spec. It delivers the capability that
   aborts every conversation of a job (REQ-008); the operation that aborts a job belongs to the Jobs spec.
@@ -134,8 +133,9 @@ What this specification explicitly does NOT cover:
   An instance has one front desk (REQ-021), with no "new chat": a reset is how a team member starts clean (REQ-024).
   Team members also follow, answer and steer jobs directly through the command line, the web interface and email.
 - **Email to the front desk.** Mail doesn't reach the front desk; the Email spec sorts mail into jobs and answers.
-- **Work in the front desk.** The front desk invokes no agents, hands off to no role, changes no files and is offered
-  no workspace tools (REQ-022). Real work always becomes a job. A team member who reseats the front desk with a role
+- **Work in the front desk.** The front desk invokes no agents, hands off to no role, edits no files itself and is
+  offered no workspace tools (REQ-022); its schedule tools act as the operations do. Real work always becomes a job. A
+  team member who reseats the front desk with a role
   whose tool set names more tools makes that choice; the front desk can't make it itself.
 - **A job record for the front desk.** The front desk is never on the board, has no definition of done, and the Jobs
   spec's turn-end rule, actions and repair rules don't apply to it (REQ-025).
@@ -144,8 +144,6 @@ What this specification explicitly does NOT cover:
   operations.
 - **Telling team members apart in the front desk.** There are no logins, so the front desk doesn't know who wrote a
   message; each input records only its way in (REQ-023).
-- **Model, thinking level or workspace per schedule entry.** Whether a schedule entry can name values other than its
-  role's defaults is deferred (Open Questions). In v1 a fire runs with the named role's defaults.
 - **Process and concurrency model.** Whether worker threads are operating-system threads, share one event loop or are
   spread over several processes is decided outside this spec (S-002 REQ-009, ADR-001 decision 3). This spec uses worker
   threads only as a logical unit of capacity and states the observable caps (REQ-009, REQ-010).
@@ -191,12 +189,14 @@ front-desk tools instead (REQ-022).
 The tools the-intern ships for a role's tool set are `read`, `write`, `edit` and `bash`; a tool set naming anything
 else is refused (REQ-003).
 
-The front-desk tools (REQ-022), offered only in the front desk:
+The front-desk tools (REQ-022), offered only in the front desk, except read schedule runs, which S-004 REQ-013 also
+offers in a job's conversations:
 
 | Group | Tools | Does |
 |---|---|---|
 | Jobs | `read_job`, `list_jobs`, `create_job`, `update_job`, `add_worklog`, `relate_jobs` | The job tools of S-004, each naming the job it acts on, and `list_jobs` with a status and origin-letter filter (S-004 REQ-021) |
 | State | read a conversation's status, entries and invocations; read the daemon status; read usage | The same answers as `conversations.get`, `conversations.entries`, `conversations.invocations`, `daemon.status` and `usage.get` |
+| Schedules | list, create, change, remove and run schedule entries; read schedule runs | The same paths as the `schedules.*` operations (S-007 REQ-013) |
 | Steering | send input to a job's conversation; stop a job's conversation | The same paths as `conversations.submit` and `conversations.abort`; the input is recorded as from the front desk (REQ-023) |
 
 The names of the state and steering tools and the parameter layouts of all of them are not contract; the tasks fix
@@ -250,9 +250,9 @@ Each assistant entry is returned with the seat that produced it (REQ-007).
 A job, from its source to delegated work:
 
 ```
-Job source: request, schedule fire, trigger or follow-up (role named, default bob)          REQ-012, REQ-013
+Job source: request, schedule fire or follow-up (role named, default bob)          REQ-012, REQ-013
   ↓
-Schedule fire skipped or refused? → the schedules and triggers spec; stop
+Schedule fire skipped or refused? → S-007; stop
   ↓
 Unknown role or unresolvable override? → refused, nothing created                           REQ-012
   ↓
@@ -357,7 +357,8 @@ The shipped roles' instructions MUST satisfy these descriptions:
 - Both roles are offered the coordination capabilities (REQ-006 to REQ-008, REQ-019).
 - **`desk`** assists team members in the front desk. Its instructions direct the agent to answer questions about the
   work from jobs, conversations, status and usage, to turn every request for real work into a job instead of doing
-  it, to report the new job's short number, and to pass answers and steering to a job's conversations when a team
+  it, to report the new job's short number, to set up and run schedules when a team member asks, and to pass answers and
+  steering to a job's conversations when a team
   member asks. Its tool set names none of the tools the-intern ships, so in the front desk it is offered only the
   front-desk tools (REQ-022).
 
@@ -370,9 +371,10 @@ change in later versions without amending this spec.
 - **When:** a reviewer reads them against this requirement
 - **Then:** `bob`'s text covers defining, asking, doing, delegating and verifying; `gp`'s text and skill cover
   carrying out a part to completion and reporting back; and `desk`'s text covers answering about the work, turning
-  requests for work into jobs with their number, and passing answers and steering on
+  requests for work into jobs with their number, setting up and running schedules, and passing answers and steering on
 
-**Verification:** inspection — the shipped role files under `src/roles/shipped/`; `test/unit/shipped_roles.test.ts` checks
+**Verification:** inspection — the shipped role files under `src/roles/shipped/`; `test/unit/shipped_roles.test.ts`
+checks
 that `gp` has its skill folder, `bob` none and `desk` none, and that `desk`'s tool set is empty.
 
 ### REQ-003 — Role settings
@@ -385,7 +387,8 @@ The-intern SHALL let a team member, in its configuration or while the daemon run
   shipped roles'. A change to a shipped role is kept in the-intern's settings and never edits the installed copy, and
   it can be undone to restore the shipped role.
 - **remove** a role the team created. Removing a shipped role, `desk` included, is refused. Removing a role that a
-  schedule entry or trigger names is refused, with an error naming them.
+  schedule entry names, or whose per-role default workspace (REQ-018) an entry names, is refused, with an error naming
+  them.
 - **register and unregister** workspaces (REQ-018)
 
 Defaults and changes MUST follow these rules:
@@ -420,7 +423,7 @@ Defaults and changes MUST follow these rules:
 
 #### AC-003.3 — Removals that are refused
 
-- **Given:** a shipped role, and a team role that a schedule entry or trigger names
+- **Given:** a shipped role, and a team role that a schedule entry names
 - **When:** a team member removes either
 - **Then:** the removal is refused, the file is unchanged, and the refusal of the referenced role names the referrers
 
@@ -473,8 +476,9 @@ files an agent works on, extra instructions (`AGENTS.md`), workspace skills and 
 - A registration that fails the check is refused with an error naming the path and the reason. If the failure
   comes from configuration loaded at startup, the daemon doesn't start.
 - A role's default workspace must be a registered workspace.
-- **Unregistering** a workspace is refused while a role's default workspace is that workspace, with an error
-  naming the role. The per-role default workspaces the-intern creates can't be unregistered.
+- **Unregistering** a workspace is refused while a role's default workspace is that workspace, or a schedule entry
+  names it (S-007 REQ-003), with an error naming the role or the entry. The per-role default workspaces the-intern
+  creates can't be unregistered.
 - After unregistering, agents already seated in the workspace keep working there until their seat changes. New
   seats, whether set by a team member, a handoff or an agent invocation, can't name it, and a seat change that
   names it is refused, leaving the seat unchanged.
@@ -996,10 +1000,10 @@ in the stored transcript, and the seat is kept unless the reset names a new one.
 When a job is created (Jobs spec), the daemon SHALL start its lead conversation:
 
 - with the role the job source names, or `bob` when it names none, with that role's defaults unless a team member's
-  request names a model, a thinking level or a registered workspace
+  request or the schedule entry names a model, a thinking level or a registered workspace
 - with the job's first input as its first input
 - with an origin that records the job source: the team member's request and its way in, the schedule entry and fire
-  time, the trigger and its event, or the conversation that created the follow-up job
+  time, or the conversation that created the follow-up job
 
 Every conversation except the front desk (REQ-021) MUST record the job it belongs to and whether it is the job's
 lead conversation.
@@ -1024,7 +1028,8 @@ lead conversation.
 #### AC-012.3 — Refusals create nothing
 
 - **Given:** a start that names an unknown role, an unresolvable override, an override from a source other than a
-  request, a follow-up from an agent whose conversation doesn't exist, or an origin of another kind than the
+  request or a schedule entry, a follow-up from an agent whose conversation doesn't exist, or an origin of another kind
+  than the
   caller's (S-002 AC-012.5)
 - **When:** it is called
 - **Then:** it is refused and nothing is created
@@ -1039,19 +1044,20 @@ lead conversation.
 
 **Verification:** test — `test/service/job_operations.test.ts`, `test/service/agents_crash.test.ts`.
 
-### REQ-013 — Schedule fires and triggers
+### REQ-013 — Schedule fires
 
-Each fire of a schedule entry or of a trigger SHALL create a new job and so a new lead conversation (REQ-012). The
-schedule entry or trigger may name a role, and the lead conversation starts with it. The schedules and triggers spec
-defines the rest of a fire's behaviour (product owner ruling, 2026-10-31): refusing an entry that names an unknown
-role when it is loaded or created, the history of its last runs an entry passes to its next run, skipping a fire whose
-seat workspace folder no longer exists, and skipping a fire while the entry's previous job still works.
+Each fire of a schedule entry SHALL create a new job and so a new lead conversation (REQ-012). The schedule entry may
+name a role, model, thinking level and workspace, and the lead conversation starts with them. S-007 defines the rest
+of a fire's behaviour (product owner ruling, 2026-10-31): refusing an entry that names an unknown role when it is
+loaded or created, how an agent reads its entry's earlier runs, skipping a fire whose seat workspace folder no longer
+exists, and skipping a fire while the entry's previous job still works.
 
 #### AC-013.1 — A fire starts a lead conversation with its role
 
-- **Given:** a schedule fire or a trigger origin naming a role
+- **Given:** a schedule fire naming a role
 - **When:** the lead conversation of its job starts
-- **Then:** it is seated as the named role, with its defaults, and its origin records the fire or the trigger
+- **Then:** it is seated as the named role, with the values the entry names and otherwise the role's defaults, and its
+  origin records the fire
 
 **Verification:** test — `test/service/job_operations.test.ts` ("records the origin of each job source kind").
 
@@ -1221,12 +1227,14 @@ only fact the daemon adds for it is its conversation id.
 In the front desk, every model turn SHALL be offered exactly the tools of its seat's role and the front-desk tools. It
 SHALL NOT be offered the coordination tools (`handoff`, `invoke`, `steer`) or the job tools that act on a
 conversation's own job (S-004 REQ-013), `block_job` and `complete_job` included. The front-desk tools are offered in no
-other conversation. They are:
+other conversation, except read schedule runs, which S-004 REQ-013 also offers in a job's conversations. They are:
 
 - **Jobs:** `read_job`, `list_jobs`, `create_job`, `update_job`, `add_worklog` and `relate_jobs`, each naming the job
   it acts on, as S-004 REQ-021 defines.
 - **State:** read a conversation's status, entries and invocations; read the daemon status; read usage. Each returns
   what the matching read operation returns (REQ-016; S-002 REQ-012).
+- **Schedules:** list, create, change, remove and run schedule entries and read their run history, each acting as the
+  matching operation (S-007 REQ-013).
 - **Steering:** send input to a conversation of a job, which acts as `conversations.submit` does: a steer or a
   follow-up for a running conversation, a held message for one parked for reports, and the input that continues a lead
   parked because its job is Blocked (REQ-020; S-004 REQ-006). A call repeated after a crash delivers the
@@ -1236,7 +1244,8 @@ other conversation. They are:
 The front desk itself takes input only from team members (REQ-020). A steering tool that names the front desk itself
 or a conversation that doesn't exist returns an error result, and the run goes on. Only a team member changes the
 front desk's seat (REQ-004); the agent in it can't hand off or reseat itself. The `desk` role's tool set names none
-of the tools the-intern ships (REQ-002), so an agent of it in the front desk changes no file and runs no command.
+of the tools the-intern ships (REQ-002), so an agent of it in the front desk edits no file itself and runs no command;
+its schedule tools act as the operations do.
 
 #### AC-022.1 — Exactly the front-desk tools
 
@@ -1593,12 +1602,11 @@ A change to one of the settings above made while the daemon runs is checked as a
 the file stops the daemon at startup, an invalid runtime change is refused with the reason and nothing changes
 (S-002 REQ-022).
 
-- **Role in a schedule entry or trigger.**
-  - **What:** an optional role name per schedule entry or trigger.
-  - **Where:** the schedule and trigger store, which the schedules and triggers spec defines, together with each
-    entry's run history (REQ-013).
-  - **Constraints:** an existing role.
-  - **Missing:** `bob` (REQ-012).
+- **Seat values in a schedule entry.**
+  - **What:** an optional role, model, thinking level and workspace per schedule entry.
+  - **Where:** the schedule entry in the configuration file (S-007 REQ-001, REQ-002).
+  - **Constraints:** S-007 REQ-001; the role must exist.
+  - **Missing:** `bob` for the role (REQ-012), and that role's defaults for the others.
 - **Invocation depth cap.**
   - **What:** the maximum invocation depth (REQ-009). It bounds runaway invocation chains that no human is watching.
   - **Where:** a built-in constant of the daemon (S-002 REQ-009), not a setting.
@@ -1626,9 +1634,9 @@ the file stops the daemon at startup, an invalid runtime change is refused with 
 - **S-004 (Jobs).** Creates jobs and starts their lead conversations, in-process only, from `jobs.create` (REQ-012);
   decides when a job is blocked and delivers its answer (REQ-014); completes and cancels jobs, and its complete and
   cancel actions call this spec's abort capability (REQ-008); adds the job tools to every role (REQ-003, REQ-005).
-- **The schedules and triggers spec and the Email spec (not yet written), and S-005.** They own the fire
-  behaviour (REQ-013), the monitoring views (REQ-016) and the mailbox. This spec's live acceptance test 1 moved to the
-  schedules and triggers spec (product owner ruling, 2026-10-31).
+- **S-007, the Email spec (not yet written), and S-005.** They own the fire
+  behaviour (REQ-013), the monitoring views (REQ-016) and the mailbox. This spec's live acceptance test 1 moved to S-007
+  (product owner ruling, 2026-10-31).
 - **pi-durable** (the pinned version in `README.md`). Provides the durable conversations, inbox, reset, compaction,
   fork and task-owned abort that seating, handoff, invocation and steering use. The-intern's own facts about a
   conversation live in its own document, with redelivery as the only recovery (ADR-001 decision 4); host writes during
@@ -1690,20 +1698,18 @@ Jobs spec for creating jobs. Its phases can be developed against a minimal host 
 | 2 | Handoff by agents in all three context modes | Phase 1 |
 | 3 | Agent invocation (context modes, steerable and parked), report-back step, abort of awaited invoked agents, steering by agents, depth cap | Phase 1 |
 | 4 | Worker threads, and parked conversations freeing them | Phase 3, S-002 REQ-009 |
-| 5 | Job sources: the operation that starts a job's lead conversation for requests, schedule fires, triggers and follow-ups; the parking and continuing that blocked jobs use; the capability that aborts every conversation of a job. Monitoring read operations: list, job links, statuses, invocations, live transcript. The schedule behaviour, the command-line views and the job abort operation come with their own specs | Phases 1–3, S-002 phase 3 |
+| 5 | Job sources: the operation that starts a job's lead conversation for requests, schedule fires and follow-ups; the parking and continuing that blocked jobs use; the capability that aborts every conversation of a job. Monitoring read operations: list, job links, statuses, invocations, live transcript. The schedule behaviour, the command-line views and the job abort operation come with their own specs | Phases 1–3, S-002 phase 3 |
 | 6 | The front desk: the shipped `desk` role, its creation and recovery at startup, `desk.get` and the front-desk mark in `conversations.list`, the front-desk tools, its attribution, and the refusals of REQ-025; live acceptance test 4 | Phases 1–5, S-004's job tools and `list_jobs` (S-004 REQ-021) |
 | 7 | Closed conversations: the closed mark written with a job's abort, `closed` in the status, the `conflict` refusals of input and control, the error results of the steering tools, and the closed mark in repair rule 4 (S-004 REQ-018) | Phases 1–6, S-004's complete, cancel and repair rules |
 
 ## Open Questions
 
-Both questions are deferred decisions with a specified interim behaviour, so neither blocks the implemented
-behaviour. Deciding either one is a scope amendment of this spec.
+This question is a deferred decision with a specified interim behaviour, so it doesn't block the implemented
+behaviour. Deciding it is a scope amendment of this spec.
 
 - **How a parked agent's continue rule is chosen.** Owner: product owner. Interim: continue on each report (REQ-019);
   the "after every report" behaviour exists in the host and is tested. Resolved when the choice and who makes it are
   decided.
-- **Model, thinking level or workspace per schedule entry.** Owner: product owner, with the schedules and triggers
-  spec. Interim: a fire runs with the named role's defaults (REQ-013). Resolved when that spec is written.
 
 ## Amendment Log
 
@@ -1735,3 +1741,5 @@ behaviour. Deciding either one is a scope amendment of this spec.
 | 2026-11-07 | v0.15. REQ-008: an abort leaves no aborted conversation parked for reports, in place of parked of any kind; an abort that names the lead of a Blocked job leaves it parked for an answer (REQ-014), and the job's abort clears that park as it closes the lead (REQ-026); the block after a team member's abort parks the lead for an answer once the abort and its cascade have ended. AC-008.7 says "parked for reports" and adds the case of a Blocked job's lead, with a test that restarts the daemon. Workflow follows. No identifier added or retired. | Spec-truth reconciliation of S-006, finding F2, confirming the B-021 ruling: REQ-008 and AC-008.7 read wider than REQ-014, S-004 REQ-006 and S-004 REQ-018 rule 2, which are authoritative. The Architect amends ADR-001 decision 4 with this. | T-270 |
 | 2026-11-07 | spec-truth reconciliation — FAIL | REQ-008 and AC-008.7 read wider than REQ-014; an abort clears a Blocked lead's park; text tightened and follow-up routed; spec read in part | none |
 | 2026-11-07 | spec-truth reconciliation — PASS | v0.15 confirmed for REQ-008 and AC-008.7 against T-270; read limited to S-006's findings and 75c7c946..0604b54f | none |
+| 2026-11-07 | v0.16. Triggers leave the job sources (Definitions, Exclusions, Workflow, REQ-003, AC-003.3, REQ-012, REQ-013, AC-013.1, Configuration, Dependencies, Implementation Order). REQ-013 and the closed Open Question: an entry can name a model, thinking level and workspace as well as a role (S-007 REQ-001). REQ-018: unregistering a workspace an entry names is refused. REQ-022 and the Interfaces table: the front desk gains schedule tools. Definitions and Users: the front desk sets up and runs schedules. Configuration: an entry's seat values. Users. REQ-012 and AC-012.3: a schedule entry can name those values. REQ-002, AC-002.1 and REQ-022: `desk` sets up and runs schedules, and edits no file itself. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
+| 2026-11-07 | v0.17. REQ-003: removing a role is refused when a schedule entry names its per-role default workspace, because that path stops being registered and the next start would stop on the entry. | S-007 Feature Architecture finding. | S-007's tasks |

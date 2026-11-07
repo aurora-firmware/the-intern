@@ -1,7 +1,7 @@
 ---
 id: S-004
 title: Jobs
-version: '0.14'
+version: '0.15'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-02'
 author: planner
@@ -18,7 +18,7 @@ record in the-intern's own tables in the instance's database, the four statuses 
 them, the worklog agents keep for each other, the history of every change, the job operations and the job tools every
 role carries, and the export and import of the whole database. When it is done, a team member creates a job from any
 way in, its lead agent writes the definition of done or blocks the job with a reason, an answer resumes it, and it
-ends Done with a resolution and justification that triggers and team members can see (Success Criteria).
+ends Done with a resolution and justification that team members can see (Success Criteria).
 
 ## Definitions
 
@@ -32,7 +32,7 @@ source, origin, front desk, way in, caller, service operation, observation feed)
 | Job store | The-intern's own tables in the instance's database that hold the job record (REQ-001). |
 | Job ID | The internal unique identifier of a job. Opaque; never shown as the job's name. |
 | Short number | The name people use for a job: its origin letter, a hyphen and a counter per letter, such as `E-14` (REQ-002). |
-| Origin letter | One letter naming where a job came from: `C` command line, `W` web interface, `E` email, `S` schedule, `T` trigger, `A` agent. |
+| Origin letter | One letter naming where a job came from: `C` command line, `W` web interface, `E` email, `S` schedule, `A` agent. |
 | Request | The text a job was created with, exactly as received, and everything known about where it came from (REQ-003). |
 | Definition of done | A clear deliverable, action or end state that decides whether the job is done. Goal, needs, plan and analysis belong in the description. |
 | Blocked reason | Why no agent works on the job: it lacks missing information, a decision, or access the service account doesn't have, or a team member stopped its lead (REQ-008). Set when the job blocks, cleared when it resumes. |
@@ -52,8 +52,8 @@ source, origin, front desk, way in, caller, service operation, observation feed)
 | Front desk agent | Creates jobs for team members, lists and reads jobs, edits them, adds to their worklog and relates them, naming each job (REQ-021). |
 | Lead agent | Writes the definition of done, keeps the description and the worklog, blocks the job when it lacks something and completes it. |
 | Specialist agent | Reads the job it works on, adds to its worklog and creates new jobs it finds. |
-| Job sources and Email (downstream systems) | Schedules and triggers create jobs in-process with their own origin details; Email, a way in, passes a team member's request with the message ID and sender it observes. |
-| Later specs (downstream systems) | The Command line and Web interface specs present jobs; the Schedules and triggers spec listens for jobs ending; all call this spec's operations and follow its feed events. |
+| Job sources and Email (downstream systems) | Schedules create jobs in-process with their own origin details; Email, a way in, passes a team member's request with the message ID and sender it observes. |
+| Later specs (downstream systems) | The Command line and Web interface specs present jobs; all call this spec's operations and follow its feed events. |
 | Developer | Tests the job lifecycle on the fake model, including crashes in the middle of a job change. |
 
 Journeys, in priority order:
@@ -98,8 +98,8 @@ What this specification explicitly does NOT cover:
   Converting pi-durable's stored format is not part of this spec.
 - **How jobs are presented.** The `bob` commands, the web board and the import command's name belong to the Command
   line and Web interface specs.
-- **Reading mail, sending notices about blocked jobs, and when schedules and triggers fire.** The Email and Schedules
-  and triggers specs own them. This spec records the origin details they pass and publishes the events they listen to.
+- **Reading mail, sending notices about blocked jobs, and when schedules fire.** The Email spec and S-007 own them.
+  This spec records the origin details they pass and publishes job events on the feed.
 - **How agents work, hand off and invoke one another.** S-001 owns it.
 - **The front desk itself.** S-001 owns the front desk. It has no job record, so it is never on the board, has no
   definition of done, and the reminder rule, the actions and the repair rules don't apply to it (REQ-022).
@@ -163,9 +163,9 @@ job accepts its job ID or its short number in any letter case (REQ-002).
 
 | Operation | Kind | Input | Result | Requirement |
 |---|---|---|---|---|
-| `jobs.create` | control | `text` (required), `title`, `statedBy`, `idempotencyKey` (S-002 REQ-013), the role, model, thinking level and registered workspace a team member may name (S-001 REQ-012), and `origin`: job sources only (a schedule's entry and fire time, a trigger and its event); refused from any other caller (S-002 AC-012.5) | the new job | REQ-003, REQ-007 |
+| `jobs.create` | control | `text` (required), `title`, `statedBy`, `idempotencyKey` (S-002 REQ-013), the role, model, thinking level and registered workspace a team member or schedule entry may name (S-001 REQ-012), and `origin`: job sources only (a schedule's entry and fire time, and for a run on demand what REQ-003 lists); refused from any other caller (S-002 AC-012.5) | the new job | REQ-003, REQ-007 |
 | `jobs.get` | read | job | the job with its worklog and history, newest last | REQ-014 |
-| `jobs.list` | read | optional `status`, `letter`, `relatedTo`, `limit`, `cursor` | jobs without worklog and history, newest first, and a cursor | REQ-014 |
+| `jobs.list` | read | optional `status`, `letter`, `relatedTo`, `schedule` (a schedule entry's name, S-007 REQ-009), `limit`, `cursor` | jobs without worklog and history, newest first, and a cursor | REQ-014 |
 | `jobs.update` | control | job and any of `title`, `description`, `definitionOfDone` | the job | REQ-004 |
 | `jobs.worklog.add` | control | job, `text` | the entry | REQ-010 |
 | `jobs.worklog.list`, `jobs.history.list` | read | job, `limit`, `cursor` | entries, oldest first, and a cursor | REQ-010, REQ-011 |
@@ -186,11 +186,13 @@ named as a job is `invalid_input`, saying the front desk is not a job conversati
 ### Exposed: job tools
 
 Every seat in a job's conversation carries the job tools, and a tool set can't leave them out, as with S-001's
-coordination capabilities (S-001 REQ-003). A tool acts on the job of the conversation it runs in.
+coordination capabilities (S-001 REQ-003). A tool acts on the job of the conversation it runs in, except as REQ-013
+states.
 
 | Tool | Who | Does |
 |---|---|---|
-| read job | every agent of the job | returns the job, its worklog and its history |
+| read job | every agent of the job | returns the job, its worklog and its history; it may name another job, read-only (REQ-013) |
+| read schedule runs | every agent of the job | returns a schedule entry's run history (S-007 REQ-010) |
 | update job | every agent of the job | changes the editable fields (REQ-004) |
 | add to worklog | every agent of the job | adds an entry (REQ-010) |
 | create job | every agent of the job | creates a follow-up job, keyed by its tool call id; an optional `related` flag, when true, relates it to this job (REQ-003, REQ-007, REQ-009) |
@@ -244,7 +246,7 @@ with its short number, title and status, and these deltas (REQ-015):
 The life of a job from its source to Done, with its refusals, the reminder rule, crash repair, and export and import:
 
 ```
-Job source: team member (any way in), schedule fire, trigger, agent                       REQ-003
+Job source: team member (any way in), schedule fire, agent                       REQ-003
   (through the front desk → the way in's letter, C or W, and the front desk in the origin)  REQ-021
   ↓
 jobs.create → role and overrides checked                                                    REQ-007
@@ -329,14 +331,13 @@ reused or skipped. The origin letter follows the job's origin (REQ-003):
 | request through the local socket (way in `command line`) | `C` |
 | request through the network listener (way in `web interface`) | `W` |
 | request by email (way in `email`) | `E` |
-| schedule fire | `S` |
-| trigger | `T` |
+| schedule fire or run on demand (S-007 REQ-008) | `S` |
 | follow-up job | `A` |
 
-A job the front desk creates takes the letter of the way in of the team member's input it answers, `C` or `W`
-(REQ-021). A request whose way in is `in-process`, the way in S-002 records when a caller names none (S-002
-AC-012.5), has no letter: `jobs.create` SHALL refuse it with `invalid_input`. Tests and the live checks name a real
-way in.
+A job the front desk creates with `create_job` takes the letter of the way in of the team member's input it answers, `C`
+or `W` (REQ-021). A request whose way in is `in-process`, the way in S-002 records when a caller names none (S-002
+AC-012.5), has no letter: `jobs.create` SHALL refuse it with `invalid_input`. Tests and the live checks name a real way
+in.
 
 Every operation that names a job SHALL accept its job ID or its short number in any letter case.
 
@@ -373,8 +374,9 @@ everything known about it. The origin MUST be built from the caller (S-002 AC-01
 - a team member's request records its way in and the details that way in observes: none beyond the way in on the
   local socket, the remote address and port on the network listener, and the message ID and sender for Email, which
   Email observes and passes with the caller
-- an in-process job source states its own details: a schedule its entry and fire time, a trigger its trigger and
-  event
+- an in-process job source states its own details: a schedule its entry and fire time, and for a
+  run on demand that fact, the way in and what that way in observes, and the front desk when it started the run
+  (S-007 REQ-008, REQ-013)
 - a follow-up job records the job and the conversation it was created from
 - a job the front desk creates records a request with the way in of the team member's input the front desk answers,
   and origin details that name the front desk (REQ-021)
@@ -565,7 +567,8 @@ history.
 
 `jobs.create` SHALL first check the role and overrides as S-001 REQ-012 does, and refuse a bad one (an unknown role,
 an unresolvable override) with `invalid_input`, leaving no job and using no number. It then writes the job and starts
-the lead conversation through S-001 REQ-012, with the role and overrides the request names and a first input that
+the lead conversation through S-001 REQ-012, with the role and overrides the request or schedule entry names and a first
+input that
 carries the job's short number and Request. If S-001 REQ-012 still refuses after the job is written, the daemon sets
 the job Done, resolution `cancelled`, with a justification naming the refusal and the daemon as author.
 
@@ -833,7 +836,8 @@ listeners carry them with no listener change. Starting a lead conversation SHALL
 
 Every seat in a job's conversation SHALL carry the job tools of Interfaces, and a role's tool set SHALL NOT be able to
 leave them out. The front desk carries the job tools of REQ-021 instead. A job tool SHALL act only on the job of the
-conversation it runs in, except that create job makes a new job and relate jobs names a second one. The block and
+conversation it runs in, except that create job makes a new job, relate jobs names a second one, read job may name
+any job to read it and changes nothing, and read schedule runs names a schedule entry. The block and
 complete tools SHALL be refused for any agent but the lead agent.
 
 #### AC-013.1 — A tool set can't remove them
@@ -844,10 +848,19 @@ complete tools SHALL be refused for any agent but the lead agent.
 
 **Verification:** test — a service test.
 
+#### AC-013.2 — Reading another job
+
+- **Given:** a lead agent of `S-12` and a Done job `S-11`
+- **When:** it calls read job naming `S-11`, then update job and add to worklog
+- **Then:** read job returns `S-11` with its worklog and history, the other two act on `S-12`, and `S-11` is unchanged
+
+**Verification:** test — a service test.
+
 ### REQ-014 — Reading and listing jobs
 
 `jobs.get` SHALL return one job with its worklog and history. `jobs.list` SHALL return jobs newest first, filtered by
-status, origin letter and Related job when given, in pages of at most `limit` (default 50, at most 500) with a cursor
+status, origin letter, Related job and schedule entry when given, in pages of at most `limit` (default 50, at most 500)
+with a cursor
 for the next page. An unknown status or letter is refused `invalid_input`.
 
 #### AC-014.1 — Filtering and paging
@@ -862,7 +875,7 @@ for the next page. An unknown status or letter is refused `invalid_input`.
 
 The instance scope of the observation feed SHALL carry the jobs that aren't Done in its snapshot and the job deltas of
 Interfaces, each published after the change is written. A job ending SHALL publish one "job done" delta with its
-resolution, which triggers can listen for (Schedules and triggers spec). A relate or unrelate that changes a link SHALL
+resolution. A relate or unrelate that changes a link SHALL
 publish one "related changed" delta with both short numbers, and one that changes nothing publishes none.
 
 #### AC-015.1 — A subscriber sees the lifecycle
@@ -890,7 +903,7 @@ publish one "related changed" delta with both short numbers, and one that change
 the given absolute path while the daemon keeps working, and refuse a relative path or an existing file with
 `invalid_input`. It refuses `busy` when the database stays in a transaction. Work in progress SHALL go on during the
 export. The copy SHALL be created owner-only (S-002 REQ-006; ADR-002 decision 6). It holds the database only; the
-configuration file (roles, registered workspaces, `[network]`) isn't in it.
+configuration file (roles, registered workspaces, `[network]`, schedule entries) isn't in it.
 
 #### AC-016.1 — A copy while working
 
@@ -948,7 +961,8 @@ both jobs. The block and complete tools stay with the lead agent and aren't offe
 
 No agent can steer the front desk: only a team member's input, submitted with the way in `command line` or
 `web interface`, reaches it, and a submit with any other way in is refused (S-001 REQ-020). So every job the front
-desk creates has the letter `C` or `W`. A refused call returns an error result to the agent, and its run goes on.
+desk creates with `create_job` has the letter `C` or `W`; a run of a schedule entry it starts has the letter `S`
+(S-007 REQ-013). A refused call returns an error result to the agent, and its run goes on.
 
 #### AC-021.1 — A job created through the front desk
 
@@ -1155,8 +1169,8 @@ setting changes the statuses, the actions or the letters.
   an instance that belongs to no job, its `desk` role and its tools; this spec's REQ-021 and REQ-022 define the job
   tools it carries and keep it out of the job rules. S-005 (`bob chat`) and the Web interface spec present it.
 - **Other specs.** S-005 names the import command (`bob import`), and S-006 presents the board. Later specs: Email
-  passes the message ID and sender it observes, and schedules and triggers state their entry, fire time, trigger and
-  event. Until those specs exist, tests and the live checks stand in for those job sources.
+  passes the message ID and sender it observes, and S-007's schedules state their entry and fire time. Until those
+  specs are built, tests and the live checks stand in for those job sources.
 - **Node's SQLite.** The daemon's Node 24 SQLite support provides the online backup that REQ-016 uses.
 
 ## Success Criteria
@@ -1211,3 +1225,4 @@ None.
 | 2026-11-07 | v0.14. REQ-008: an abort of a To do job's lead leaves the job To do with no block, no reminder and no history entry; input to its lead starts it, and `jobs.cancel` ends it. New AC-008.8. Workflow follows. Assumptions: S-006 exists, so "Until the … specs exist" covers only Email and schedules and triggers. No identifier retired. | Spec-truth reconciliation of S-006, findings F3 and F13. F3: the abort of a waiting lead was unspecified, and REQ-005 has no To do to Blocked move. The Architect's ruling, which the product owner accepted on 2026-11-07. | T-271 |
 | 2026-11-07 | spec-truth reconciliation — FAIL | REQ-006 not held after an abort of a Blocked lead, a To do lead's abort unspecified, stale assumption, AC-008.6's neighbouring crash window untested; REQ-008's stop otherwise confirmed against v0.13 | none |
 | 2026-11-07 | spec-truth reconciliation — PASS | v0.14 confirmed for REQ-008 and AC-008.8 against T-271, and the stop mark's crash window against T-275; read limited to S-006's findings and 75c7c946..0604b54f | none |
+| 2026-11-07 | v0.15. Triggers leave the job sources: the origin letter `T` and the trigger origin are gone (Definitions, Interfaces, REQ-002, REQ-003, REQ-015). `jobs.create` and REQ-003: a schedule's origin also records a run on demand and its way in. `jobs.list` gains a filter by schedule entry (S-007 REQ-009). Purpose, Users, Exclusions, Workflow and Assumptions: triggers leave the wording. REQ-013, new AC-013.2 and the job tools table: read job may name another job, read-only, and read schedule runs is added. REQ-014: the schedule entry filter. REQ-002, REQ-007 and REQ-021: a run on demand has the letter `S`, and a schedule entry can name overrides. REQ-016: schedule entries aren't in the export. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |

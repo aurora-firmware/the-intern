@@ -1,6 +1,6 @@
 ---
 title: Daemon and host runtime
-version: '0.14'
+version: '0.15'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-16'
 author: planner
@@ -13,7 +13,7 @@ id: S-002
 
 This spec covers the **Intern service** component of S-000. S-001 defines conversations, roles and agents, but leaves
 out the process that runs them: who owns the database, how it starts, stops and recovers, where its files live, how it
-reaches models, and what a worker thread is. Every later spec (control endpoint, jobs, schedules and triggers, email,
+reaches models, and what a worker thread is. Every later spec (control endpoint, jobs, schedules, email,
 web interface) plugs into that process, so its shape has to be fixed first, and it has to serve the command line on
 the machine and the web interface over the team's network alike. This spec fixes one durable daemon that owns the
 database, a transport-free service layer every caller uses, bounded capacity, and an observation feed for clients.
@@ -30,7 +30,7 @@ This spec uses S-001's Definitions. It adds these terms:
 | Instance | One daemon together with its state directory. Two instances share nothing. A second instance with its own state directory is the only hard wall between sets of conversations. |
 | Service layer | The set of service operations. It is the only way for clients and job sources to read or change the daemon's state. |
 | Service operation | One named capability of the daemon, such as "submit input" or "reset a conversation". It is either a **read** operation (it observes) or a **control** operation (it changes state or starts work). |
-| Caller | Whatever invokes a service operation: a client through a listener, a job source (a schedule fire, a trigger, email) or an agent tool. The caller states the actor that S-001 attribution records. |
+| Caller | Whatever invokes a service operation: a client through a listener, a job source (a schedule fire, email) or an agent tool. The caller states the actor that S-001 attribution records. |
 | Listener | A transport that exposes service operations to clients. Listeners belong to S-000's Intern service and are defined in the control-endpoint spec (S-003), not here. |
 | Client | A separate program that uses the daemon through a listener: the `bob` commands and the web interface in a team member's browser. A client holds no work. |
 | Observation feed | The stream of changes the daemon publishes for a scope (the whole instance or one conversation). A subscription gets a snapshot, then deltas. |
@@ -50,7 +50,7 @@ credentials and `settings.json` in pi agent's agent folder.
 | Team member | Uses the-intern through clients (the `bob` command line on the machine, the web interface over the network), and relies on work surviving restarts. |
 | Supervisor (systemd, launchd) | Starts the daemon at machine startup without a login and restarts it after an error exit. |
 | Callers (downstream systems) | Clients through listeners, job sources and agent tools call service operations and subscribe to the observation feed. |
-| Later specs (downstream systems) | The control endpoint, Jobs, schedules and triggers, email and the web interface plug into the daemon's startup, service layer and feed. |
+| Later specs (downstream systems) | The control endpoint, Jobs, schedules, email and the web interface plug into the daemon's startup, service layer and feed. |
 | Developer | Runs the whole daemon, including kills and restarts, on the fake model without a network. |
 
 Journeys, in priority order:
@@ -61,7 +61,8 @@ Journeys, in priority order:
 2. **Work survives every stop.** A shutdown, a storage failure or a kill at any point loses no committed work, and the
    next start resumes it. Delivered by REQ-005, REQ-007, REQ-008.
 3. **A caller drives work through the service layer.** Every capability is a named read or control operation with
-   validated input, a stated actor and fixed error outcomes, callable in-process. Delivered by REQ-012, REQ-013, REQ-016,
+   validated input, a stated actor and fixed error outcomes, callable in-process. Delivered by REQ-012, REQ-013,
+   REQ-016,
    REQ-017.
 4. **Capacity is bounded and visible.** At most the worker-thread count of runs are active; the rest wait in a durable
    order that status and the feed show. Delivered by REQ-009, REQ-010, REQ-011.
@@ -88,7 +89,7 @@ What this specification explicitly does NOT cover:
   operations apply at once (REQ-022).
 - **Configurable capacity limits.** The worker-thread count and the invocation depth cap are built-in constants
   (REQ-009), not settings.
-- **Jobs, skills and instructions, schedules and triggers, email, the web interface and team knowledge.** Each has
+- **Jobs, skills and instructions, schedules, email, the web interface and team knowledge.** Each has
   its own spec. This spec gives them the daemon, the service layer and the observation feed they build on.
 - **Installation.** Release form and the supervisor registration that REQ-004 requires belong to S-000's Installation
   and service setup, decided in the bootstrap plan.
@@ -145,9 +146,13 @@ failed (REQ-013). **Contract** (operation names and kinds):
 | `conversations.abort`, `conversations.reset`, `conversations.compact` | control | Abort (with S-001's cascade), reset or compact a conversation |
 | `conversations.seat` | control | Change a conversation's seat (S-001 REQ-004) |
 | `roles.create`, `roles.change`, `roles.restore`, `roles.remove` | control | Role settings (S-001 REQ-003; REQ-022) |
+| `schedules.list`, `schedules.get`, `schedules.runs` | read | Schedule entries and their run history (S-007 REQ-009) |
+| `schedules.create`, `schedules.change`, `schedules.remove` | control | Schedule settings (S-007 REQ-003; REQ-022) |
+| `schedules.run` | control | Run a schedule entry now (S-007 REQ-008) |
 | `workspaces.register`, `workspaces.unregister` | control | Workspace registration (S-001 REQ-018; REQ-022) |
 
-The tests register `test.createConversation` and `test.failStorage` (`test/support/test_operations.ts`); they are not part of the product's catalogue.
+The tests register `test.createConversation` and `test.failStorage` (`test/support/test_operations.ts`); they are not
+part of the product's catalogue.
 
 ### Exposed: the observation feed
 
@@ -155,7 +160,8 @@ A subscription names the scope `instance` or one conversation. Each delivers a s
 sequence numbers in commit order, and ends with a reason (`lagging`, `unsubscribed`, `stopped`) (REQ-014, REQ-015). The
 instance scope carries every conversation with its job, lead flag, seat, status and the worker threads, and the
 deltas `conversation_created`, `run_started`, `run_finished`, `seat_changed`, `status_changed`, `admission_changed` and
-`settings_changed`. It also carries the jobs that aren't Done and S-004's job deltas, each published after its job
+`settings_changed`. It also carries S-007's schedule fire skipped delta, the jobs that aren't Done and S-004's job
+deltas, each published after its job
 store commit and numbered in the same sequence (S-004 REQ-015). The conversation scope carries its live view and
 entries.
 
@@ -186,7 +192,7 @@ Take single ownership → another live owner? exit non-zero, naming state dir   
 Read job schema version → newer? exit non-zero, naming both versions            REQ-002
   ↓
 Open database, create or migrate job store, ready the tools → check             REQ-002
-  configured models and thinking levels → unresolvable? exit non-zero, naming
+  the models and thinking levels configured for roles → unresolvable? exit non-zero, naming
   the role and value
   ↓
 Ensure per-role default workspaces
@@ -249,7 +255,8 @@ cause:
 3. take single ownership (REQ-001)
 4. read the job schema version, open the database, create or migrate the job store's tables, and make the-intern's
    tools ready, before anything resumes
-5. check that every configured model and thinking level resolves (S-001 Configuration Requirements)
+5. check that every model and thinking level configured for a role resolves (S-001 Configuration Requirements); a
+   schedule entry's model is checked at a fire (S-007 REQ-002)
 6. ensure the per-role default workspaces (S-001 REQ-003) and the front desk (S-001 REQ-021)
 7. restore admission (REQ-010), apply the job repair rules (S-004 REQ-018), resume unfinished work, then submit the
    input those rules owe (S-004 REQ-018)
@@ -266,8 +273,8 @@ cause:
 #### AC-002.2 — Each step fails with its name
 
 - **Given:** an invalid configuration file, an unknown key, an unsafe directory, a relative directory flag, a live
-  owner, an unopenable database, a newer job schema, an unresolvable configured model, a failing workspace or a
-  component that fails to start in step 8
+  owner, an unopenable database, a newer job schema, an unresolvable model configured for a role, a failing workspace or
+  a component that fails to start in step 8
 - **When:** the daemon starts
 - **Then:** it exits non-zero naming the failing step and its cause, creates no database file where the step precedes
   step 4, releases ownership it took, and stops the components already started
@@ -497,6 +504,7 @@ names):
   one (S-001 REQ-018). The settings operations follow REQ-022.
 - Jobs: the `jobs.*` operations of S-004, read and control as Interfaces marks them. Starting a job's lead
   conversation (S-001 REQ-012) isn't a catalogue operation: `jobs.create` calls it in-process.
+- Schedules: the `schedules.*` operations of S-007, read and control as Interfaces marks them.
 
 A submit to a conversation parked for reports holds the message until the conversation continues (S-001 REQ-020),
 whatever its busy mode, and returns `{ held: true }` with no submission id. A submit to a job's lead conversation
@@ -513,13 +521,14 @@ conversation of the job are refused `conflict`, with a message naming the conver
 
 S-001's agent coordination capabilities (handoff, invoke, steer) are control operations of the same service layer.
 Later specs add theirs the same way (for example creating and answering jobs in S-004 and running a schedule now in
-the schedules and triggers spec).
+S-007).
 
 Creating a job (`jobs.create`) SHALL record an origin built from the caller, never taken from a team member or an
 agent: a team member's call records a request with the caller's way in, an agent's call in a job's conversation
 records a follow-up of the agent's own conversation, the front desk's call records a request with the way in of the
 team member's input it answers and the front desk in its origin details (S-004 REQ-021), and only a job source (a
-schedule fire, a trigger) states its own origin details. A team member's request records the details its way in
+schedule fire, or a run on demand, S-007 REQ-008) states its own origin details. A team member's request records the
+details its way in
 observes, which the caller carries: the remote address and port for the network listener, the message ID and sender
 for Email. A call from a team member or an agent whose input names an origin is refused as `invalid_input` (S-004
 Interfaces, `jobs.create`).
@@ -570,7 +579,7 @@ Interfaces, `jobs.create`).
 - **Given:** callers of each kind: a team member with a way in, a team member with none named, an agent, and a job
   source
 - **When:** each creates a job with `jobs.create`; one team member's call names a request origin with another way in,
-  and another names a schedule, trigger or follow-up origin
+  and another names a schedule or follow-up origin
 - **Then:** the team member's job records a request with the caller's way in; the team member's call with no way in
   named, whose way in is `in-process` (S-001 AC-007.1), is refused `invalid_input` (S-004 REQ-002); the agent's job
   records a follow-up of its own conversation; the job source's job records the origin it states; and each team
@@ -635,7 +644,8 @@ operation test in `test/service/`.
 ### REQ-014 — Snapshot, then deltas
 
 A subscription SHALL name a scope: the instance (conversations with seat, status and admission state, plus started
-and finished events, and S-004's jobs and job deltas, each published after its job store commit and numbered in the
+and finished events, S-007's schedule fire skipped delta, and S-004's jobs and job deltas, each published after its job
+store commit and numbered in the
 same sequence), or one conversation (its live view, events and queued input). It first gets a snapshot, then deltas
 in commit order. A new subscription never replays earlier deltas. A subscriber that reconnects starts from a
 fresh snapshot.
@@ -725,7 +735,8 @@ startup and continues.
 Each setting SHALL have one source:
 
 - the configuration file in the config directory holds the settings of S-001 (the team's roles, the changes to
-  the shipped roles, and the registered workspaces) and the sections later specs add, such as S-003's `[network]`
+  the shipped roles, and the registered workspaces) and the sections later specs add, such as S-003's `[network]` and
+  S-007's `[[schedule]]`
 - command-line flags set the instance directories (REQ-006)
 - the environment sets the pi agent folder, as for pi agent itself
 
@@ -762,7 +773,8 @@ The settings in the configuration file SHALL also be changeable through control 
   file stays the single source of truth, so the change survives a restart.
 - A change applies as S-001 states: a role change affects only agents seated after it, a newly
   registered workspace can be used at once, and unregistering follows S-001 REQ-018 (refused while a role's default
-  workspace is that workspace; seated agents keep it until their seat changes; new seats can't name it).
+  workspace is that workspace or a schedule entry names it; seated agents keep it until their seat changes; new seats
+  can't name it).
 - If the file was changed on disk since the daemon last read it, the change is refused as a conflict naming the
   file, so a hand edit is never overwritten. A restart picks up the hand edit.
 - If the file can't be written, the change is refused and nothing applies.
@@ -923,8 +935,8 @@ usual places. No credential is copied into the instance's directories or the dat
     variable name).
   - **Constraints:** read-only for the daemon, apart from the login's token refresh (REQ-018). Tests always point it
     at an isolated folder.
-  - **Missing:** a missing login doesn't stop the daemon unless a configured model needs it (S-001). Model requests
-    fail with an error the agent run shows.
+  - **Missing:** a missing login doesn't stop the daemon unless a model configured for a role needs it (S-001). Model
+    requests fail with an error the agent run shows.
 - **Fake model (test only).**
   - **What:** runs the daemon on the fake model with no network, for deterministic tests. A second test-only switch
     sets a smaller worker-thread count, so tests can fill every worker thread.
@@ -1010,3 +1022,4 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-05 | spec-truth reconciliation — PASS | Work in 8e1eaa08..HEAD confirmed against v0.13; step 7, Workflow and REQ-008 corrected for input submitted after the resume, before listeners open; earlier task logs not read | none |
 | 2026-11-06 | v0.14. No behaviour changes. REQ-013: the gloss of `busy` reads "a reject-if-busy submit, or a resource in use for now". No identifier added or retired. | S-006 second architecture consistency review, finding F3, product owner decision of 2026-11-06: `jobs.export` (S-004 REQ-016) and the export route (S-003 REQ-016) refuse `busy` for a resource in use, which the old gloss didn't cover. Approved with S-006 at Gate 1. | None; spec text only |
 | 2026-11-07 | spec-truth reconciliation — PASS | v0.14 confirmed for the feed shape, the busy gloss and B-023's log line; spec read in part | none |
+| 2026-11-07 | v0.15. Triggers leave the job sources (Purpose, Definitions, Users, Exclusions, REQ-012, AC-012.5). REQ-021: the configuration file holds S-007's schedule entries. Interfaces and REQ-012: the `schedules.*` operations. Interfaces and REQ-014: the schedule fire skipped delta. REQ-002, Workflow, AC-002.2 and Configuration: the startup model check covers roles, and an entry's model is checked at a fire. REQ-022: unregistering a workspace an entry names is refused. REQ-012: a run on demand states its origin. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
