@@ -11,7 +11,7 @@ created: '2026-11-06'
 
 S-006 adds the first pages of the web interface, and later specs add more. The network listener serves them as files
 from the package (S-003 REQ-008). The pages must load everything from the service (S-006 REQ-017), work on current
-Chrome, Firefox and Edge on desktop (REQ-021) and stay readable and keyboard-usable (REQ-020).
+Chrome and Firefox on desktop, with Edge good to have (REQ-021), and stay readable and keyboard-usable (REQ-020).
 
 The product owner would like the look of The Round Table and pages written in TypeScript. The Round Table is built with
 Next.js, Tailwind and shadcn with Radix. The product owner asked for its style and colours, not necessarily its stack.
@@ -189,3 +189,4 @@ the check unless a lint rule forbids it. The `paths` entry covers every import o
 | Date | Change | Reason |
 |---|---|---|
 | 2026-11-06 | Decision 3 states how `tsc` checks every prop: `paths` to `web/types/preact.d.ts`, with a stricter `h`, and props as an object literal or `null`. Context records the probe. Consequences and Alternatives G, H and I added. | T-206 found that Preact's own `h()` declarations don't check undeclared props, `null` for required props, or element attributes, so decision 3's statement was untrue. |
+| 2026-11-07 | Context states S-006 v0.4's browsers: Chrome and Firefox required, Edge good to have. The decision and the dated probes stay. | S-006 v0.4 REQ-021 changed the sentence's source. Nothing in this decision depends on Edge. |
