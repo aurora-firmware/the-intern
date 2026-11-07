@@ -49,10 +49,10 @@ all, `test/web` last and on its own, because its time checks suffer under the ot
 
 **Which tool drives the browser in `test/web`?** `playwright-core` 1.65.0, a dev dependency, driven from `node:test`. It
 covers all of S-006 REQ-021's browsers: Chrome, and Edge where it is installed, through their real builds
-(`channel: "chrome"`, `channel: "msedge"`) and Firefox through Playwright's own build, and it records downloads, separate contexts and keyboard input.
-Its test runner, `@playwright/test`, isn't used, so the project keeps one runner. `axe-core` 4.14.0, a dev dependency,
-runs the contrast check of S-006 AC-020.1 in the page. Puppeteer's Firefox and Edge support is thinner, and Selenium
-needs a driver per browser. Playwright can't drive a stock Firefox, so a by-hand pass covers one before a release.
+(`channel: "chrome"`, `channel: "msedge"`) and Firefox through Playwright's own build, and it records downloads,
+separate contexts and keyboard input. Its test runner, `@playwright/test`, isn't used, so the project keeps one runner.
+`axe-core` 4.14.0, a dev dependency, runs the contrast check of S-006 AC-020.1 in the page. Puppeteer's Firefox and Edge
+support is thinner, and Selenium needs a driver per browser. Playwright can't drive a stock Firefox, so a by-hand pass covers one before a release.
 
 Chrome and Firefox are required; Edge is good to have (S-006 REQ-021). `npm run test:web:setup` runs
 `playwright-core install --with-deps chrome firefox` in CI, and `npm run test:web:setup:edge` runs the same for

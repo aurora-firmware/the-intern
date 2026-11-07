@@ -21,8 +21,8 @@ The pages are served by the network listener, which is off until you add a `[net
 it up as [Running The Intern](running_the_intern.md#reach-the-intern-over-the-network) describes, then open
 `http://<address>:<port>/` in a desktop browser. It redirects to `/ui/`, the Board.
 
-Use a current Chrome or Firefox on a desktop computer. Edge may also work, but isn't required. Safari isn't a target, though nothing blocks it. The pages
-are made for desktop screens, so phones and tablets aren't supported.
+Use a current Chrome or Firefox on a desktop computer. Edge may also work, but isn't required. Safari isn't a target, though nothing blocks it.
+The pages are made for desktop screens, so phones and tablets aren't supported.
 
 The dark sidebar on every page links to the Board, Front desk, Roles, Workspaces and Status. Each page has an address
 of its own, and the browser's back, forward and reload buttons work across them:
