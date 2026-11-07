@@ -51,7 +51,7 @@ describe("short numbers", () => {
     });
 
     it("reads any other text as a job ID", () => {
-        for (const text of ["4f0c9a7e-1b2d", "X-14", "E-", "E-1x", "E-0", "job"]) {
+        for (const text of ["4f0c9a7e-1b2d", "X-14", "T-1", "E-", "E-1x", "E-0", "job"]) {
             assert.deepEqual(parseJobRef(text), { id: text });
         }
     });

@@ -22,7 +22,7 @@ import { type Caller, defineOperation, type Operation, ServiceError } from "./op
 
 const IN_PROCESS_WAY_IN = "in-process";
 const STATUSES: readonly string[] = ["to_do", "in_progress", "blocked", "done"];
-const LETTERS: readonly string[] = ["C", "W", "E", "S", "T", "A"];
+const LETTERS: readonly string[] = ["C", "W", "E", "S", "A"];
 export const STORE_PAGE_SIZE = 500;
 
 type JobDetail = Job & { leadConversation?: string; worklog: WorklogEntry[]; history: HistoryEntry[] };
