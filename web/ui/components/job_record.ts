@@ -13,7 +13,6 @@ export type Author =
 export type Origin =
     | { kind: "request"; wayIn: string; observed?: Observed; frontDesk?: string }
     | { kind: "schedule"; entry: string }
-    | { kind: "trigger"; trigger: string }
     | { kind: "follow_up"; jobId: string };
 export type JobRecord = {
     id: string;
@@ -72,8 +71,6 @@ const originText = (origin: Origin, sourceNumber: string | undefined): string =>
                 : `Request by ${origin.wayIn} through the front desk`;
         case "schedule":
             return `Schedule ${origin.entry}`;
-        case "trigger":
-            return `Trigger ${origin.trigger}`;
         case "follow_up":
             return sourceNumber === undefined ? "Follow-up of another job" : `Follow-up of job ${sourceNumber}`;
     }

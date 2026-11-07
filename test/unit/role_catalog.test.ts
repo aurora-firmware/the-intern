@@ -174,12 +174,12 @@ describe("createRoleCatalog", () => {
 
     it("refuses to remove a role a reference source names, naming the referrers", async () => {
         await catalog.create(teamRole());
-        referrers.reviewer = ["schedule nightly", "trigger on-push"];
+        referrers.reviewer = ["schedule nightly", "schedule weekly"];
         const before = await fileText();
         const error = await refusalOf(() => catalog.remove("reviewer"));
         assert.equal(error.kind, "conflict");
         assert.match(error.message, /schedule nightly/);
-        assert.match(error.message, /trigger on-push/);
+        assert.match(error.message, /schedule weekly/);
         assert.equal(await fileText(), before);
         assert.ok(catalog.get("reviewer"));
     });
