@@ -1232,7 +1232,7 @@ other conversation, except read schedule runs, which S-004 REQ-013 also offers i
   it acts on, as S-004 REQ-021 defines.
 - **State:** read a conversation's status, entries and invocations; read the daemon status; read usage. Each returns
   what the matching read operation returns (REQ-016; S-002 REQ-012).
-- **Schedules:** list, add, change, remove and run schedule entries and read their run history, each acting as the
+- **Schedules:** list, create, change, remove and run schedule entries and read their run history, each acting as the
   matching operation (S-007 REQ-013).
 - **Steering:** send input to a conversation of a job, which acts as `conversations.submit` does: a steer or a
   follow-up for a running conversation, a held message for one parked for reports, and the input that continues a lead

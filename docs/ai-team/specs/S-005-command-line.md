@@ -717,8 +717,8 @@ sense.
   exist as specified.
 - **S-004's import step** (REQ-017) runs in-process and holds single ownership of the instance (S-002 REQ-001).
 - **Installation and service setup** puts `bob` on the `PATH`; until then the manual shows `node src/cli/bob.ts`.
-- **Later specs** (S-007, Skills and instructions, Team knowledge, Email) add their groups under the
-  reserved names and follow the conventions of Interfaces.
+- **Later specs** (Skills and instructions, Team knowledge, Email) add their groups under the reserved names and follow
+  the conventions of Interfaces. S-007 adds `schedules` the same way.
 
 ## Success Criteria
 
