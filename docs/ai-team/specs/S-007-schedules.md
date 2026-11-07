@@ -590,8 +590,8 @@ recent scheduled runs linked to their Job pages, and skipped fires with the reas
 remove and run an entry there. The page SHALL have the address `/ui/#/schedules`, update from the feed and follow
 S-006's rules: addresses, back, forward and reload (REQ-001), refusals and simultaneous actions (REQ-013), lost
 connections (REQ-014), everything from the service (REQ-017), timeliness (REQ-018), style (REQ-016), reading and
-keyboard use (REQ-020), browsers (REQ-021) and words (REQ-022). A scheduled run's Job page SHALL show the entry, the fire
-time and whether it was run on demand.
+keyboard use (REQ-020), browsers (REQ-021) and words (REQ-022). A scheduled run's Job page SHALL show the entry, the
+fire time and whether it was run on demand.
 
 #### AC-012.1 — Manage entries on the page
 
@@ -646,7 +646,8 @@ origin the way in of the team member's input and the front desk, with no address
 #### AC-013.3 — A scheduled run the front desk starts
 
 - **Given:** an entry with no open scheduled run, and the front desk
-- **When:** a team member writes over the local socket "run the backups check now", and the fake model calls the run tool
+- **When:** a team member writes over the local socket "run the backups check now", and the fake model calls the run
+  tool
 - **Then:** a job `S-n` exists, its origin records the entry, on demand, way in `command line` and the front desk
 
 **Verification:** test — a service test on the fake model.

@@ -335,10 +335,9 @@ reused or skipped. The origin letter follows the job's origin (REQ-003):
 | follow-up job | `A` |
 
 A job the front desk creates with `create_job` takes the letter of the way in of the team member's input it answers, `C`
-or `W`
-(REQ-021). A request whose way in is `in-process`, the way in S-002 records when a caller names none (S-002
-AC-012.5), has no letter: `jobs.create` SHALL refuse it with `invalid_input`. Tests and the live checks name a real
-way in.
+or `W` (REQ-021). A request whose way in is `in-process`, the way in S-002 records when a caller names none (S-002
+AC-012.5), has no letter: `jobs.create` SHALL refuse it with `invalid_input`. Tests and the live checks name a real way
+in.
 
 Every operation that names a job SHALL accept its job ID or its short number in any letter case.
 

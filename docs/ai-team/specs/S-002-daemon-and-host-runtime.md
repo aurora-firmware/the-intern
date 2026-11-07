@@ -274,8 +274,7 @@ cause:
 
 - **Given:** an invalid configuration file, an unknown key, an unsafe directory, a relative directory flag, a live
   owner, an unopenable database, a newer job schema, an unresolvable model configured for a role, a failing workspace or
-  a
-  component that fails to start in step 8
+  a component that fails to start in step 8
 - **When:** the daemon starts
 - **Then:** it exits non-zero naming the failing step and its cause, creates no database file where the step precedes
   step 4, releases ownership it took, and stops the components already started
@@ -937,8 +936,7 @@ usual places. No credential is copied into the instance's directories or the dat
   - **Constraints:** read-only for the daemon, apart from the login's token refresh (REQ-018). Tests always point it
     at an isolated folder.
   - **Missing:** a missing login doesn't stop the daemon unless a model configured for a role needs it (S-001). Model
-    requests
-    fail with an error the agent run shows.
+    requests fail with an error the agent run shows.
 - **Fake model (test only).**
   - **What:** runs the daemon on the fake model with no network, for deterministic tests. A second test-only switch
     sets a smaller worker-thread count, so tests can fill every worker thread.
