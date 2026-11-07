@@ -14,6 +14,7 @@ for scope.
 | [writing_style.md](writing_style.md) | How to write documents, tasks, reviews and commit messages: words, sentences, layout and the manual's tone. | You write or review any text. |
 | [release_form.md](release_form.md) | The comparison of the ways to release The Intern, with a recommendation for the product owner. | You work on installation, the boot-time service or upgrades. |
 | [local_runs.md](local_runs.md) | How to run your own instance, apart from a team's, and how to inspect it. | You want to run the service by hand against a real model. |
+| [brand/](brand/) | The Aurora Firmware brand manual and the logo variants, for the style review of the web interface (S-006 AC-016.1). The web interface serves only `web/ui/assets/brand/`. | You review a page against the brand. |
 
 ## Where else to look
 

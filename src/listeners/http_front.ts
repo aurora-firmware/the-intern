@@ -7,7 +7,7 @@ import {
     ServiceError,
     type ServiceErrorCode,
 } from "../service/operations.ts";
-import { streamFeed } from "./feed_stream.ts";
+import { type ConversationSubscription, streamConversations, streamFeed } from "./feed_stream.ts";
 
 export type WayIn = "command line" | "web interface";
 
@@ -151,6 +151,8 @@ function isFeedRoute(req: IncomingMessage, pathname: string): boolean {
     return req.method === "GET" && pathname === FEED_PATH;
 }
 
+type SubscribeInput = { scope: string; conversationId?: string };
+
 function conversationIdOf(query: URLSearchParams): string {
     const id = query.get("id");
     if (!id)
@@ -158,14 +160,27 @@ function conversationIdOf(query: URLSearchParams): string {
     return id;
 }
 
-/** The `feed.subscribe` input the query of `GET /feed` stands for (S-003 Interfaces). */
-function subscribeInputOf(query: URLSearchParams): { scope: string; conversationId?: string } {
+/** The ids `scope=conversations` names, each once; none, or an empty one, is refused. */
+function conversationIdsOf(query: URLSearchParams): string[] {
+    const ids = query.getAll("id");
+    if (ids.length === 0 || ids.includes(""))
+        throw new ServiceError(
+            "invalid_input",
+            "Query parameter id must name every conversation of scope conversations",
+        );
+    return [...new Set(ids)];
+}
+
+/** The `feed.subscribe` inputs the query of `GET /feed` stands for, one per conversation of `scope=conversations`. */
+function subscribeInputsOf(query: URLSearchParams): SubscribeInput[] {
     const scope = query.get("scope");
-    if (scope === "instance") return { scope };
-    if (scope === "conversation") return { scope, conversationId: conversationIdOf(query) };
+    if (scope === "instance") return [{ scope }];
+    if (scope === "conversation") return [{ scope, conversationId: conversationIdOf(query) }];
+    if (scope === "conversations")
+        return conversationIdsOf(query).map((conversationId) => ({ scope: "conversation", conversationId }));
     throw new ServiceError(
         "invalid_input",
-        `Query parameter scope must be "instance" or "conversation", got ${scope ?? "none"}`,
+        `Query parameter scope must be "instance", "conversation" or "conversations", got ${scope ?? "none"}`,
     );
 }
 
@@ -227,25 +242,41 @@ export function createHttpFront(options: HttpFrontOptions): HttpFront {
         }
     }
 
+    /** Subscribes to each input; when one is refused, closes those already open and rethrows the first refusal. */
+    async function subscribeAll(req: IncomingMessage, inputs: SubscribeInput[]): Promise<FeedSubscription[]> {
+        const settled = await Promise.allSettled(
+            inputs.map((input) => options.catalogue.invoke(SUBSCRIBE_OPERATION, input, callerOf(req))),
+        );
+        const opened = settled.flatMap((outcome) => (outcome.status === "fulfilled" ? [outcome.value] : []));
+        const refused = settled.find((outcome) => outcome.status === "rejected");
+        if (refused) {
+            for (const subscription of opened) (subscription as FeedSubscription).close();
+            throw refused.reason;
+        }
+        return opened as FeedSubscription[];
+    }
+
     async function openFeed(
         req: IncomingMessage,
         res: ServerResponse,
         query: URLSearchParams,
         signal: AbortSignal,
     ): Promise<void> {
-        let subscription: FeedSubscription;
+        let inputs: SubscribeInput[];
+        let subscriptions: FeedSubscription[];
         try {
-            const input = subscribeInputOf(query);
-            subscription = (await options.catalogue.invoke(
-                SUBSCRIBE_OPERATION,
-                input,
-                callerOf(req),
-            )) as FeedSubscription;
+            inputs = subscribeInputsOf(query);
+            subscriptions = await subscribeAll(req, inputs);
         } catch (error) {
             sendError(res, asServiceError(error, SUBSCRIBE_OPERATION));
             return;
         }
-        await streamFeed(subscription, res, signal);
+        if (query.get("scope") !== "conversations")
+            return streamFeed(subscriptions[0] as FeedSubscription, res, signal);
+        const named = subscriptions.map((subscription, index): ConversationSubscription => {
+            return { conversationId: inputs[index]?.conversationId as string, subscription };
+        });
+        await streamConversations(named, res, signal);
     }
 
     async function answerUnrouted(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {

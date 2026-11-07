@@ -3,7 +3,7 @@
  * the daemon either reminds the lead once or blocks the job. The daemon is the actor of the reminder and the author of
  * the block (S-001 v0.7 REQ-007).
  */
-import { hasQueuedUserInput, hasSubmissionWithRequestId } from "../host/conversation_control.ts";
+import { hasQueuedUserInput, hasSubmissionWithRequestId, isStopMarkLive } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { watchInstance } from "../host/host_observation.ts";
 import { readConversationMeta } from "../host/seating.ts";
@@ -32,6 +32,17 @@ async function isLeadWaiting(deps: JobActionDeps, jobId: string, leadId: string)
         if (busy && id !== leadId && (await readConversationMeta(host, id))?.jobId === jobId) return true;
     }
     return false;
+}
+
+// A team member's stop of the lead's run leaves a live stop mark, which blocks the job without a reminder.
+async function isLeadStopped(host: HarnessHost, leadId: string): Promise<boolean> {
+    const meta = await readConversationMeta(host, leadId);
+    return meta !== undefined && (await isStopMarkLive(host, leadId, meta));
+}
+
+async function isJobLeadStopped(host: HarnessHost, jobId: string): Promise<boolean> {
+    const leadId = await leadConversationOf(host, jobId);
+    return leadId !== undefined && (await isLeadStopped(host, leadId));
 }
 
 /** A reminder the rule owes a lead conversation. */
@@ -70,6 +81,7 @@ export async function evaluateTurnEnd(
     const decision = turnEndDecision({
         definitionOfDone: job.definitionOfDone,
         isReminderSpent: await hasSubmissionWithRequestId(ctx.host, leadId, requestId),
+        isStopped: await isLeadStopped(ctx.host, leadId),
     });
     if (decision.kind === "block") {
         await blockJob(deps, job.id, decision.reason, { kind: "daemon" });
@@ -85,17 +97,24 @@ export async function checkTurnEnd(deps: JobActionDeps, jobId: string, knownLead
 }
 
 /**
- * Checks the job of each lead conversation whose run finishes, one at a time in the order the runs finished. `ready`
+ * Checks the job of each lead conversation whose run finishes, and of another conversation of a job whose lead is
+ * stopped, and of each lead handed to `leadStopped`, one at a time in the order the runs finished. `ready`
  * settles once the watch is in place, so runs that resume after a restart are seen.
  */
-export function startTurnEndRule(deps: JobActionDeps): { stop(): void; ready: Promise<void> } {
+export function startTurnEndRule(deps: JobActionDeps): {
+    stop(): void;
+    ready: Promise<void>;
+    leadStopped(leadId: string): void;
+} {
     const { ctx, options } = deps;
     let queue: Promise<void> = Promise.resolve();
     let isStopped = false;
     const check = async (conversationId: string): Promise<void> => {
         if (isStopped) return;
         const meta = await readConversationMeta(ctx.host, conversationId);
-        if (!meta?.isLead || meta.jobId === null) return;
+        if (meta === undefined || meta.jobId === null) return;
+        // The run of another conversation of the job matters only when its lead is stopped, which nothing else ends.
+        if (!meta.isLead && !(await isJobLeadStopped(ctx.host, meta.jobId))) return;
         await options.afterWrite?.("turn-ended", meta.jobId);
         await checkTurnEnd(deps, meta.jobId);
     };
@@ -118,5 +137,6 @@ export function startTurnEndRule(deps: JobActionDeps): { stop(): void; ready: Pr
             watching.then((watch) => watch.stop()).catch(() => undefined);
         },
         ready: watching.then(() => undefined),
+        leadStopped: enqueue,
     };
 }

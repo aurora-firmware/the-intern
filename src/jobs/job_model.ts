@@ -121,7 +121,12 @@ export const checkEdit = (status: JobStatus, names: readonly string[]): JobCheck
 
 export type TurnEndDecision = { kind: "remind" } | { kind: "block"; reason: string };
 
-export const turnEndDecision = (input: { definitionOfDone: string; isReminderSpent: boolean }): TurnEndDecision => {
+export const turnEndDecision = (input: {
+    definitionOfDone: string;
+    isReminderSpent: boolean;
+    isStopped: boolean;
+}): TurnEndDecision => {
+    if (input.isStopped) return { kind: "block", reason: "stopped by a team member" };
     if (isEmpty(input.definitionOfDone)) return { kind: "block", reason: "no definition of done" };
     if (!input.isReminderSpent) return { kind: "remind" };
     return { kind: "block", reason: "the lead stopped without completing or blocking" };

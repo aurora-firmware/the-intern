@@ -1,0 +1,292 @@
+/* Component styles. Contrast limits follow docs/development/architecture.md, Style: Red, Orange, Success Green, Info
+   Blue and Status Gray are never text colours on a light surface. */
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    display: flex;
+    min-height: 100vh;
+    background: var(--color-light-gray);
+    color: var(--color-dark-blue);
+    font-family: var(--font-body);
+}
+
+h1,
+h2.page-heading,
+.agent-name,
+details.activity > summary,
+.app-title {
+    font-family: var(--font-display);
+    font-weight: 400;
+}
+
+h2,
+h3 {
+    font-weight: 600;
+}
+
+.caption,
+label {
+    font-weight: 300;
+}
+
+.caption,
+.secondary {
+    color: var(--color-text-gray);
+}
+
+main {
+    flex: 1;
+    min-width: 0;
+    padding: 2rem;
+}
+
+:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: 2px;
+}
+
+/* Sidebar */
+
+.sidebar {
+    flex: none;
+    width: 14rem;
+    padding: 1.5rem 0;
+    background: var(--color-dark-blue);
+    color: var(--color-white);
+}
+
+.sidebar .app-title {
+    padding: 0 1.5rem 0.75rem;
+}
+
+.sidebar a {
+    display: block;
+    padding: 0.75rem 1.5rem;
+    border-left: 2px solid transparent;
+    color: var(--color-white);
+    text-decoration: none;
+}
+
+.sidebar a:hover {
+    background: var(--color-dark-blue-light);
+}
+
+.sidebar a[aria-current="page"] {
+    border-left-color: var(--color-orange);
+    color: var(--color-orange);
+}
+
+/* Cards */
+
+.card,
+dialog {
+    border: 1px solid var(--color-medium-gray);
+    border-radius: var(--radius-card);
+    background: var(--color-white);
+    box-shadow: var(--shadow-card);
+}
+
+.card {
+    padding: 1rem;
+}
+
+.card-blocked {
+    border-left: 4px solid var(--color-red);
+}
+
+/* Buttons */
+
+.button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-control);
+    background: var(--color-orange);
+    color: var(--color-dark-blue);
+    font-family: var(--font-body);
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.button:hover {
+    background: var(--color-orange-light);
+}
+
+.button-destructive {
+    background: var(--color-red);
+}
+
+.button-destructive:hover {
+    background: var(--color-red-light);
+}
+
+.button-secondary {
+    border-color: var(--color-medium-gray);
+    background: var(--color-white);
+}
+
+.button-secondary:hover {
+    background: var(--color-light-gray);
+}
+
+.button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.icon {
+    width: 1em;
+    height: 1em;
+    fill: none;
+    stroke: currentcolor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* Badges: Dark Blue text on the status colour */
+
+.badge {
+    display: inline-block;
+    padding: 0.125rem 0.5rem;
+    border-radius: var(--radius-control);
+    background: var(--color-status-gray);
+    color: var(--color-dark-blue);
+    font-size: 0.875rem;
+    font-weight: 600;
+}
+
+.badge-done {
+    background: var(--color-success-green);
+}
+
+.badge-in-progress {
+    background: var(--color-info-blue);
+}
+
+.badge-blocked {
+    background: var(--color-red);
+}
+
+/* Errors: Dark Blue text on Orange Subtle, a Red left border and an icon */
+
+.error {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    border-left: 4px solid var(--color-red);
+    border-radius: var(--radius-control);
+    background: var(--color-orange-subtle);
+}
+
+/* Connection banner */
+
+.connection-banner {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    margin-bottom: 1rem;
+    padding: 0.75rem 1.5rem;
+    background: var(--color-red);
+    color: var(--color-dark-blue);
+    font-weight: 600;
+}
+
+/* Dialog */
+
+dialog {
+    max-width: 32rem;
+    padding: 1.5rem;
+    color: var(--color-dark-blue);
+}
+
+dialog::backdrop {
+    background: rgb(8 10 36 / 60%);
+}
+
+dialog .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 1rem;
+}
+
+/* Form fields: a label stacks its text above its control, and a form wraps its fields in a row */
+
+form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+input,
+select,
+textarea {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--color-medium-gray);
+    border-radius: var(--radius-control);
+    background: var(--color-white);
+    color: var(--color-dark-blue);
+    font: inherit;
+}
+
+textarea {
+    min-height: 6rem;
+    resize: vertical;
+}
+
+/* Activity section: long conversations stay cheap to draw */
+
+.activity {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 20rem;
+}
+
+.activity-entry {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 4rem;
+}
+
+/* Collapsed output: the first lines show until the team member expands it */
+
+.output-collapsed {
+    max-height: 10lh;
+    overflow: hidden;
+}
+
+.output {
+    font-family: ui-monospace, monospace;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* Board: the columns, and cards that are drawn only when they are near the screen */
+
+.board-columns {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1rem;
+    align-items: start;
+}
+
+.board-card {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 5rem;
+}

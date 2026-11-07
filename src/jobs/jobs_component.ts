@@ -6,7 +6,8 @@ import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
 import { onInputSubmitted } from "../host/conversation_control.ts";
-import { setJobDoneCheck } from "../host/job_section.ts";
+import { onLeadStopMarked, onLeadStopped } from "../host/invocation.ts";
+import { setJobStatusCheck } from "../host/job_section.ts";
 import { waitForMarkedConversations } from "../host/repair_abort.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import { jobActionOperations } from "../service/job_action_operations.ts";
@@ -35,7 +36,8 @@ export type WritePoint =
     | "job-cancelled"
     | "conversations-closed"
     | "lead-input"
-    | "turn-ended";
+    | "turn-ended"
+    | "lead-stop-marked";
 
 export type JobsComponentOptions = {
     agents: AgentsComponent;
@@ -72,7 +74,9 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
     let stopListening: (() => void) | undefined;
     let stopInputListening: (() => void) | undefined;
     let stopTurnEndRule: (() => void) | undefined;
-    let stopJobDoneCheck: (() => void) | undefined;
+    let stopLeadListening: (() => void) | undefined;
+    let stopMarkListening: (() => void) | undefined;
+    let stopJobStatusCheck: (() => void) | undefined;
     let markedByRepair: string[] = [];
     let firstInputsOwed: PendingFirstInput[] = [];
     let heldDeliveriesOwed: PendingHeldDelivery[] = [];
@@ -96,11 +100,11 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
             // Step 5 comes before work resumes, so runs that resume after a restart are covered.
             async checkModels(ctx) {
                 context = ctx;
-                stopJobDoneCheck = setJobDoneCheck(ctx.host, async (jobId) => {
+                stopJobStatusCheck = setJobStatusCheck(ctx.host, async (jobId) => {
                     try {
-                        return (await ctx.jobStore.getJob(jobId)).status === "done";
+                        return (await ctx.jobStore.getJob(jobId)).status;
                     } catch (error) {
-                        if (error instanceof JobNotFoundError) return false;
+                        if (error instanceof JobNotFoundError) return undefined;
                         throw error;
                     }
                 });
@@ -110,9 +114,17 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
                 stopInputListening = onInputSubmitted(ctx.host, (input) =>
                     resumeAfterLeadInput({ ctx, options }, input),
                 );
+                const { afterWrite } = options;
+                if (afterWrite !== undefined) {
+                    stopMarkListening = onLeadStopMarked(ctx.host, async (leadId) => {
+                        const jobId = (await readConversationMeta(ctx.host, leadId))?.jobId;
+                        if (jobId != null) await afterWrite("lead-stop-marked", jobId);
+                    });
+                }
                 if (options.turnEndRule !== false) {
                     const rule = startTurnEndRule({ ctx, options });
                     stopTurnEndRule = rule.stop;
+                    stopLeadListening = onLeadStopped(ctx.host, rule.leadStopped);
                     await rule.ready;
                 }
             },
@@ -139,12 +151,16 @@ export async function createJobsComponent(options: JobsComponentOptions): Promis
                 markedByRepair = [];
             },
             async stop() {
-                stopJobDoneCheck?.();
-                stopJobDoneCheck = undefined;
+                stopJobStatusCheck?.();
+                stopJobStatusCheck = undefined;
                 stopListening?.();
                 stopListening = undefined;
                 stopInputListening?.();
                 stopInputListening = undefined;
+                stopLeadListening?.();
+                stopMarkListening?.();
+                stopMarkListening = undefined;
+                stopLeadListening = undefined;
                 stopTurnEndRule?.();
                 stopTurnEndRule = undefined;
                 context = undefined;

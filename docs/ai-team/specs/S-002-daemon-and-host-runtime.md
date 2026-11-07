@@ -1,6 +1,6 @@
 ---
 title: Daemon and host runtime
-version: '0.12'
+version: '0.14'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-16'
 author: planner
@@ -192,7 +192,8 @@ Open database, create or migrate job store, ready the tools → check           
 Ensure per-role default workspaces
   ↓
 Restore admission order, apply the job repair rules (S-004 REQ-018), resume     REQ-010
-  unfinished work (held worker threads first, then the queue)
+  unfinished work (held worker threads first, then the queue), then submit the
+  input those rules owe (S-004 REQ-018)
   ↓
 Start listeners and scheduler → status "ready"                                  REQ-003
 ```
@@ -250,7 +251,8 @@ cause:
    tools ready, before anything resumes
 5. check that every configured model and thinking level resolves (S-001 Configuration Requirements)
 6. ensure the per-role default workspaces (S-001 REQ-003) and the front desk (S-001 REQ-021)
-7. restore admission (REQ-010), apply the job repair rules (S-004 REQ-018), then resume unfinished work
+7. restore admission (REQ-010), apply the job repair rules (S-004 REQ-018), resume unfinished work, then submit the
+   input those rules owe (S-004 REQ-018)
 8. start the components that start after work resumes (listeners, scheduler), then report ready
 
 #### AC-002.1 — The steps run in order
@@ -602,9 +604,9 @@ Every operation MUST:
 - validate its input and refuse an invalid call without changing state
 - name its caller's actor and, for a team member, the details its way in observed, which S-001 records where it
   requires attribution
-- end with a result or one of a fixed set of error outcomes: not found, invalid input, busy (a reject-if-busy
-  submit), conflict, unavailable (the daemon isn't ready or is stopping), internal. Each outcome carries a message
-  that names what failed.
+- end with a result or one of a fixed set of error outcomes: not found, invalid input, busy (a reject-if-busy submit, or
+  a resource in use for now), conflict, unavailable (the daemon isn't ready or is stopping), internal. Each outcome
+  carries a message that names what failed.
 
 A control operation that creates something (a job, a role, a workspace registration) accepts an
 idempotency key. A repeated call with the same key returns the original result and creates nothing. Submits are
@@ -854,7 +856,8 @@ operation, the next start MUST:
 - resume every unfinished agent run
 - keep every queued input, parked conversation and waiting run
 - leave every service operation that changes state either completed or not applied, never half-applied (S-001
-  REQ-017); a job operation cut off part way is completed by S-004 REQ-018 before work resumes
+  REQ-017); a job operation cut off part way is completed by S-004 REQ-018 at the next start, before any listener
+  answers a call other than `daemon.status`
 
 #### AC-008.1 — Kill at each point
 
@@ -1003,3 +1006,7 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-03 | v0.11. REQ-012: a conversation of a Done job is closed (S-001 v0.9 REQ-026); the list and get give it status `closed`, every read works on it, and submit, abort, reset, compact and seat on it are refused `conflict`. Architecture consistency review (findings F2, F4 and F8), same version: REQ-012, the refusals apply from the job's complete or cancel and include `submissions.withdraw`; new AC-012.7, verified by the service test of S-001 AC-026.2. | Product owner decision of 2026-11-03, during the S-005 dev-loop (T-166). S-002 owns the catalogue and its error outcomes. Architecture consistency review of the amendment, 2026-11-03. | T-166 (blocked on it); T-186 to T-196 (Gate 2 passed 2026-11-03; the amendment merged into `dev-pi-durable-s005` before the preflight, by the product owner's approval of the in-flight amendment) |
 | 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The device-model alternative stays, because it is a different interface for the same need. The other three alternatives were implementation approaches: they, the system diagram, the responsibility table and the durability principle moved to `docs/development/architecture.md`, and ADR-001 records the reasoning. Configuration Requirements and Implementation Order no longer use the table's component names "state layout", "harness host" and "model runtime". | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |
 | 2026-11-05 | v0.12. No behaviour changes (CR-001): technology and implementation words leave the requirement text, and each REQ keeps its guarantee. Changed: AC-001.1, AC-001.2, REQ-002 (the same eight steps and numbers), AC-002.1, AC-002.2, AC-003.1, REQ-005, AC-005.1, AC-005.3, REQ-007, AC-007.1, REQ-008, REQ-009 (constants unchanged), REQ-010, AC-010.3, REQ-013, AC-016.1, REQ-017, REQ-019, AC-019.1, REQ-020, with the copies in Definitions, Users, Exclusions, Workflow and Implementation Order. Moved statements live in ADR-001 decisions 1, 2, 3, 4 and 5 and `docs/development/architecture.md`. AC-016.1 points to ADR-001 decision 2. No identifier added or retired. | CR-001, approved by the product owner. | T-202 (inspects AC-016.1); spec text otherwise |
+| 2026-11-05 | v0.13. No behaviour changes. Workflow and REQ-002 step 7: the daemon restores admission, applies the job repair rules, resumes unfinished work, then submits the input those rules owe (S-004 v0.12 REQ-018). REQ-008: a job operation cut off part way is completed by S-004 REQ-018 at the next start, before any listener answers a call other than `daemon.status`, in place of "before work resumes". | spec-truth reconciliation: the text was stale against the built behaviour, and the Architect found no behaviour change (D1). | None; spec text only |
+| 2026-11-05 | spec-truth reconciliation — PASS | Work in 8e1eaa08..HEAD confirmed against v0.13; step 7, Workflow and REQ-008 corrected for input submitted after the resume, before listeners open; earlier task logs not read | none |
+| 2026-11-06 | v0.14. No behaviour changes. REQ-013: the gloss of `busy` reads "a reject-if-busy submit, or a resource in use for now". No identifier added or retired. | S-006 second architecture consistency review, finding F3, product owner decision of 2026-11-06: `jobs.export` (S-004 REQ-016) and the export route (S-003 REQ-016) refuse `busy` for a resource in use, which the old gloss didn't cover. Approved with S-006 at Gate 1. | None; spec text only |
+| 2026-11-07 | spec-truth reconciliation — PASS | v0.14 confirmed for the feed shape, the busy gloss and B-023's log line; spec read in part | none |

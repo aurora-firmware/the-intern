@@ -218,7 +218,7 @@ describe("the instance feed's jobs", () => {
         subscription.close();
     });
 
-    it("publishes nothing when a Related link changes", async () => {
+    it("publishes one job_related_changed with both short numbers when two jobs are related", async () => {
         const started = await start();
         const a = await started.create();
         const b = await started.create();
@@ -227,7 +227,45 @@ describe("the instance feed's jobs", () => {
         await started.ctx.jobStore.relate(a.id, b.id, author);
         await started.invoke("jobs.worklog.add", { job: a.id, text: "marker" });
 
+        const delta = await next(subscription);
+        assert.equal(delta.type, "job_related_changed");
+        assert.deepEqual(
+            [...(delta as { numbers: string[] }).numbers].sort(),
+            [a.number, b.number].sort(),
+            "both short numbers",
+        );
+        assert.equal((await next(subscription)).type, "job_worklog_added", "one delta, then the marker");
+        subscription.close();
+    });
+
+    it("publishes no delta when the jobs are related again", async () => {
+        const started = await start();
+        const a = await started.create();
+        const b = await started.create();
+        await started.ctx.jobStore.relate(a.id, b.id, author);
+        const subscription = started.ctx.instanceFeed.subscribe();
+
+        await started.ctx.jobStore.relate(a.id, b.id, author);
+        await started.invoke("jobs.worklog.add", { job: a.id, text: "marker" });
+
         assert.equal((await next(subscription)).type, "job_worklog_added");
+        subscription.close();
+    });
+
+    it("publishes one job_related_changed with both short numbers when two jobs are unrelated", async () => {
+        const started = await start();
+        const a = await started.create();
+        const b = await started.create();
+        await started.ctx.jobStore.relate(a.id, b.id, author);
+        const subscription = started.ctx.instanceFeed.subscribe();
+
+        await started.ctx.jobStore.unrelate(a.id, b.id, author);
+        await started.invoke("jobs.worklog.add", { job: a.id, text: "marker" });
+
+        const delta = await next(subscription);
+        assert.equal(delta.type, "job_related_changed");
+        assert.deepEqual([...(delta as { numbers: string[] }).numbers].sort(), [a.number, b.number].sort());
+        assert.equal((await next(subscription)).type, "job_worklog_added", "one delta, then the marker");
         subscription.close();
     });
 });

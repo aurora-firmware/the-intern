@@ -10,8 +10,11 @@ export type StreamEvent = { event: string; id?: string; data: string };
 export type Transport = {
     /** Calls the operation and resolves with the answer's JSON body, whatever its status. */
     call(name: string, input: unknown): Promise<unknown>;
-    /** Opens the feed route at `path` and yields its events until the daemon ends the stream. */
-    stream(path: string): AsyncIterable<StreamEvent>;
+    /**
+     * Opens the feed route at `path` and yields its events until the daemon ends the stream. Once `signal` aborts, the
+     * read ends without an error and the connection closes, even while the stream is quiet.
+     */
+    stream(path: string, signal?: AbortSignal): AsyncIterable<StreamEvent>;
 };
 
 /** An operation failed: `code` and `message` are the ones the in-process call gives (S-002's codes). */
@@ -51,16 +54,37 @@ export type FeedScope = { scope: "instance" } | { scope: "conversation"; convers
 
 export type FeedItem = { snapshot: unknown } | { delta: unknown };
 
+/** One item of a feed for several conversations: a snapshot or a delta, with the conversation it belongs to. */
+export type ConversationFeedItem =
+    | { conversationId: string; snapshot: unknown }
+    | { conversationId: string; delta: unknown };
+
+/**
+ * What a subscription takes. A generator's `return()` cannot end a read that waits on a quiet stream, so a caller that
+ * must stop one at any moment aborts `signal`: the subscription then returns `{ end: "aborted" }`, a reason of the
+ * client's and never the daemon's.
+ */
+export type SubscribeOptions = { signal?: AbortSignal };
+
+export const ABORTED_END = "aborted";
+
 export type Client = {
     invoke(name: string, input?: unknown): Promise<unknown>;
-    subscribe(scope: FeedScope): AsyncGenerator<FeedItem, { end: string }>;
+    subscribe(scope: FeedScope, options?: SubscribeOptions): AsyncGenerator<FeedItem, { end: string }>;
+    /** Subscribes to every named conversation over one connection. */
+    subscribeConversations(
+        conversationIds: readonly string[],
+        options?: SubscribeOptions,
+    ): AsyncGenerator<ConversationFeedItem, { end: string }>;
 };
 
-export function feedPath(scope: FeedScope): string {
-    const query =
-        scope.scope === "instance"
-            ? new URLSearchParams({ scope: "instance" })
-            : new URLSearchParams({ scope: "conversation", id: scope.conversationId });
+export function feedPath(scope: FeedScope | { scope: "conversations"; conversationIds: readonly string[] }): string {
+    if (scope.scope === "instance") return `/feed?${new URLSearchParams({ scope: "instance" })}`;
+    if (scope.scope === "conversation") {
+        return `/feed?${new URLSearchParams({ scope: "conversation", id: scope.conversationId })}`;
+    }
+    const query = new URLSearchParams({ scope: "conversations" });
+    for (const id of scope.conversationIds) query.append("id", id);
     return `/feed?${query}`;
 }
 
@@ -128,18 +152,44 @@ export function decodeAnswer(body: unknown): unknown {
  * Yields the snapshot, then the deltas, and returns the reason of the `end` event. It opens one stream only: a stream
  * that ends or breaks is never reopened, so a reader never misses deltas without knowing (S-003 REQ-009).
  */
-async function* subscribe(transport: Transport, scope: FeedScope): AsyncGenerator<FeedItem, { end: string }> {
-    for await (const event of transport.stream(feedPath(scope))) {
+async function* subscribe(
+    transport: Transport,
+    scope: FeedScope,
+    signal: AbortSignal | undefined,
+): AsyncGenerator<FeedItem, { end: string }> {
+    for await (const event of transport.stream(feedPath(scope), signal)) {
         if (event.event === "end") return { end: (JSON.parse(event.data) as { reason: string }).reason };
         if (event.event === "snapshot") yield { snapshot: JSON.parse(event.data) };
         else if (event.event === "delta") yield { delta: JSON.parse(event.data) };
     }
+    if (signal?.aborted) return { end: ABORTED_END };
     throw new Error(`The feed ${feedPath(scope)} closed without an end event`);
+}
+
+type WrappedEvent = { conversationId: string; event: unknown };
+
+/** As `subscribe`, for the one stream of several conversations, whose events each name their conversation. */
+async function* subscribeConversations(
+    transport: Transport,
+    conversationIds: readonly string[],
+    signal: AbortSignal | undefined,
+): AsyncGenerator<ConversationFeedItem, { end: string }> {
+    const path = feedPath({ scope: "conversations", conversationIds });
+    for await (const event of transport.stream(path, signal)) {
+        if (event.event === "end") return { end: (JSON.parse(event.data) as { reason: string }).reason };
+        if (event.event !== "snapshot" && event.event !== "delta") continue;
+        const { conversationId, event: payload } = JSON.parse(event.data) as WrappedEvent;
+        yield event.event === "snapshot" ? { conversationId, snapshot: payload } : { conversationId, delta: payload };
+    }
+    if (signal?.aborted) return { end: ABORTED_END };
+    throw new Error(`The feed ${path} closed without an end event`);
 }
 
 export function createClient(transport: Transport): Client {
     return {
         invoke: async (name, input) => decodeAnswer(await transport.call(name, input)),
-        subscribe: (scope) => subscribe(transport, scope),
+        subscribe: (scope, options) => subscribe(transport, scope, options?.signal),
+        subscribeConversations: (conversationIds, options) =>
+            subscribeConversations(transport, conversationIds, options?.signal),
     };
 }

@@ -4,7 +4,7 @@
  * the stream ends.
  */
 import type { ServerResponse } from "node:http";
-import type { CloseReason, Subscription } from "../feed/observation_feed.ts";
+import { type CloseReason, FEED_MAX_PENDING, type Subscription } from "../feed/observation_feed.ts";
 
 type FeedEvent = { name: "snapshot" | "delta" | "end"; id?: number; data: unknown };
 
@@ -86,5 +86,72 @@ export async function streamFeed(
         }
     } finally {
         signal.removeEventListener("abort", stop);
+    }
+}
+
+export type ConversationSubscription = { conversationId: string; subscription: Subscription<unknown, { seq: number }> };
+
+/**
+ * Writes the subscriptions of several conversations as one stream (S-003 REQ-006): a `snapshot` per conversation, then
+ * the deltas, each event naming its conversation, and one `end` for the whole stream. A reader per subscription moves
+ * its deltas into one queue, so the queue holds every delta accepted and not yet written: more than
+ * `FEED_MAX_PENDING` of them across the stream end it `lagging` (S-003 REQ-011). When any subscription closes, the
+ * others are closed and the stream ends with that reason; the client leaving or the signal aborting closes them all.
+ */
+export async function streamConversations(
+    subscriptions: readonly ConversationSubscription[],
+    res: ServerResponse,
+    signal: AbortSignal,
+): Promise<void> {
+    const queue: { conversationId: string; delta: { seq: number } }[] = [];
+    const ended = new AbortController();
+    let endReason: CloseReason | undefined;
+    let wakeWriter: (() => void) | undefined;
+
+    const end = (reason: CloseReason) => {
+        if (endReason) return;
+        endReason = reason;
+        queue.length = 0;
+        for (const { subscription } of subscriptions) subscription.close();
+        ended.abort();
+        wakeWriter?.();
+    };
+    const read = async ({ conversationId, subscription }: ConversationSubscription) => {
+        while (!endReason) {
+            const result = await subscription.next();
+            if ("closed" in result) return end(result.closed);
+            queue.push({ conversationId, delta: result.delta });
+            if (queue.length > FEED_MAX_PENDING) return end("lagging");
+            wakeWriter?.();
+        }
+    };
+
+    const leave = () => end("unsubscribed");
+    res.on("close", leave);
+    signal.addEventListener("abort", leave, { once: true });
+    if (res.closed || signal.aborted) leave();
+    const wake = AbortSignal.any([signal, ended.signal]);
+    try {
+        // A quiet stream is still being read, so the server's idle timeout must not end it (S-003 REQ-012).
+        res.setTimeout(0);
+        res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" });
+        for (const { conversationId, subscription } of subscriptions) {
+            await writeEvent(res, { name: "snapshot", data: { conversationId, event: subscription.snapshot } }, wake);
+        }
+        for (const entry of subscriptions) void read(entry);
+        while (!endReason) {
+            const next = queue.shift();
+            if (!next) {
+                await new Promise<void>((resolve) => {
+                    wakeWriter = resolve;
+                });
+                continue;
+            }
+            const { conversationId, delta } = next;
+            await writeEvent(res, { name: "delta", id: delta.seq, data: { conversationId, event: delta } }, wake);
+        }
+        finish(res, endReason, signal);
+    } finally {
+        signal.removeEventListener("abort", leave);
     }
 }

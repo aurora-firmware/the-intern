@@ -33,6 +33,9 @@ since a socket path over 107 bytes fails.
 This check shows that a computer on the local network (LAN) reaches the network listener (S-003 Success Criterion 5).
 It needs a second computer on the same network as the machine that runs the daemon.
 
+The check runs on the team's network, at whatever address the second computer reaches, such as a Tailscale address.
+Step 1's LAN address is one such address.
+
 1. Find the machine's LAN address, for example with `ip -4 addr` on Linux or `ipconfig getifaddr en0` on macOS, and
    choose a fixed port that nothing on the machine listens on (`ss -ltn` lists the ports in use on Linux).
 2. Write the `[network]` section into the development instance's `config.toml`, with that address and port. The
@@ -54,16 +57,19 @@ It needs a second computer on the same network as the machine that runs the daem
      --runtime-dir "$PWD/.tmp/dev-lan/runtime"
    ```
 
-4. On the other computer, open `http://192.168.1.20:8080/ui/` in a browser. Until the web interface is released, the
-   page reads "The web interface comes later."
-5. On the other computer, call `daemon.status`:
+4. On the other computer, open `http://192.168.1.20:8080/ui/` in a browser. The Board opens; the
+   [web interface chapter](../manual/web_interface.md) describes the pages.
+5. On the other computer, use the pages, and create a job directly on the Front desk page. A job created through the
+   chat records no address (S-006 REQ-015).
+6. Read the job's origin on its Job page, and with `bob jobs show <number>` on the service's machine.
+7. On the other computer, call `daemon.status`:
 
    ```
    curl -X POST -H 'Content-Type: application/json' http://192.168.1.20:8080/operations/daemon.status
    ```
 
    The answer is `{"result":{"phase":"ready",…}}`.
-6. Stop the daemon with Ctrl-C.
+8. Stop the daemon with Ctrl-C.
 
 The network listener has no login and no encryption (S-003). Run this check only on a network you trust.
 

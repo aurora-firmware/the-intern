@@ -161,6 +161,12 @@ invoked agent of the job running or reporting. The Intern then acts for the job:
 The reminder shows in the lead's conversation as a steer from the daemon, and the block shows in the job's history with
 the daemon as author. A job that is blocked and then resumed gets a new reminder at the lead's next stop.
 
+A stop you make is the exception. When you stop the lead of an In progress job while it runs, has input queued or
+waits for agents it invoked, the lead gets no reminder. Once the stop and the aborts that follow it have ended, the
+Intern blocks the job with the reason "stopped by a team member", with the daemon as author in the history, whatever the
+definition of done holds. A message to the lead resumes the job. Stopping an idle lead changes nothing, and stopping
+the lead of a Blocked job keeps its reason. [A Blocked job](jobs.md#a-blocked-job) describes the answer.
+
 Every role carries the job tools, whatever its tool list says. They read the job, edit its title, description and
 definition of done, add to its worklog, create a follow-up job and relate jobs. A follow-up job is Related to the job
 only when the agent chooses to relate it. Only the job's lead can block and complete the job. An agent the lead

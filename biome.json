@@ -1,7 +1,7 @@
 {
     "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
     "files": {
-        "includes": ["src/**", "test/**", "package.json", "tsconfig.json", "biome.json"]
+        "includes": ["src/**", "test/**", "web/**", "package.json", "tsconfig.json", "biome.json"]
     },
     "formatter": {
         "enabled": true,
@@ -14,5 +14,17 @@
         "rules": {
             "preset": "recommended"
         }
-    }
+    },
+    "overrides": [
+        {
+            "includes": ["web/ui/assets/brand/**"],
+            "linter": {
+                "rules": {
+                    "a11y": {
+                        "noSvgWithoutTitle": "off"
+                    }
+                }
+            }
+        }
+    ]
 }

@@ -17,7 +17,7 @@ import { conversationMetaDoc, createSeatedConversation, readConversationMeta } f
 import { steerConversation } from "../../src/host/steering.ts";
 import { blockJob, cancelJob, completeJob, type JobActionDeps } from "../../src/jobs/job_actions.ts";
 import { type JobAuthor, reminderRequestId } from "../../src/jobs/job_model.ts";
-import { repairJobs } from "../../src/jobs/job_repair.ts";
+import { deliverPendingHeld, repairJobs } from "../../src/jobs/job_repair.ts";
 import { createJobsComponent, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import { REMINDER_TEXT } from "../../src/jobs/turn_end_rule.ts";
 import { DEFAULT_LEAD_ROLE } from "../../src/roles/shipped_roles.ts";
@@ -61,6 +61,10 @@ type BootOptions = {
     workerThreadCount?: number;
     /** Components that follow the Jobs component, for a test that adds an extension or observes startup. */
     components?: readonly DaemonComponent[];
+    /** Components between the agents and the Jobs components: their `afterResume` runs before the Jobs delivery. */
+    componentsBeforeJobs?: readonly DaemonComponent[];
+    /** The daemon's log lines are appended here, for a test that checks what a failed startup names. */
+    logLines?: string[];
     /** `false` returns once the daemon runs, ready or not, so a test can look at it while it is still starting. */
     isReadyAwaited?: boolean;
 };
@@ -148,6 +152,9 @@ async function createRig(options: { isCompactingAtSecondTurn?: boolean } = {}): 
             };
         },
         async boot(bootOptions = {}) {
+            const logger = bootOptions.logLines
+                ? createLogger({ stream: { write: (line) => !!bootOptions.logLines?.push(String(line)) } })
+                : quietLogger;
             const agents = await createAgentsComponent({ logger: quietLogger });
             const jobs = await createJobsComponent({
                 agents,
@@ -171,9 +178,15 @@ async function createRig(options: { isCompactingAtSecondTurn?: boolean } = {}): 
                 },
                 env: env.env,
                 homeDir: env.root,
-                logger: quietLogger,
+                logger,
                 sections: agents.sections,
-                components: [agents.component, jobs.component, probe, ...(bootOptions.components ?? [])],
+                components: [
+                    agents.component,
+                    ...(bootOptions.componentsBeforeJobs ?? []),
+                    jobs.component,
+                    probe,
+                    ...(bootOptions.components ?? []),
+                ],
                 operations: [...agents.operations, ...jobs.operations],
                 ...(bootOptions.workerThreadCount !== undefined && {
                     workerThreadCount: bootOptions.workerThreadCount,
@@ -494,6 +507,59 @@ describe("rule 1: the first input of a lead that exists", () => {
         assert.equal(leadInputs.length, 1, "the lead of the repaired job runs once, on its first input");
         assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [1]);
         heldCall.release();
+    });
+});
+
+describe("rule 1: the first input of a lead that exists, when the delivery after the resume fails", () => {
+    it("fails step 7, exits 1, and applies the rule again at the next start", async () => {
+        const rig = await createRig();
+        const first = await rig.boot();
+        const { job } = await first.ctx.jobStore.insertJob({
+            letter: "W",
+            requestText: "do it",
+            origin: { kind: "request", wayIn: "web interface" },
+            leadStart: {
+                role: DEFAULT_LEAD_ROLE,
+                overrides: {},
+                actor: { kind: "team_member", wayIn: "web interface" },
+            },
+        });
+        const { conversationId: leadId } = await createSeatedConversation(first.ctx.host, {
+            scope: "job.lead",
+            key: job.id,
+            job: { jobId: job.id, isLead: true, origin: { kind: "request", wayIn: "web interface" }, depth: 0 },
+            seat: first.deps.options.agents.runtime().catalog.seatFor(DEFAULT_LEAD_ROLE),
+            actor: { kind: "team_member", wayIn: "web interface" },
+        });
+        await first.stop();
+        const failsAfterResume: DaemonComponent = {
+            name: "fails-after-resume",
+            afterResume: async () => {
+                throw new Error("the submit failed after the resume");
+            },
+        };
+        const logLines: string[] = [];
+
+        const second = await rig.boot({
+            componentsBeforeJobs: [failsAfterResume],
+            isStartupExpectedToFail: true,
+            logLines,
+        });
+
+        assert.equal(await second.daemon.exited, 1);
+        const failure = logLines.find((line) => line.includes("startup failed"));
+        assert.match(failure ?? "", /step=7 name="?restore admission and resume/);
+        assert.match(failure ?? "", /the submit failed after the resume/);
+        assert.equal(rig.modelInputs.length, 0, "the lead never took its first input");
+
+        const third = await rig.boot();
+
+        assert.equal(await hasSubmissionWithRequestId(third.ctx.host, leadId, `lead:${job.id}`), true);
+        await waitFor(() => rig.modelInputs.length === 1, "the lead's first run");
+        assert.match(rig.modelInputs[0]?.[0] ?? "", /^W-1\n\ndo it\n/);
+        assert.deepEqual(rulesOf(await repairsOf(third.ctx, job.id)), [1, 1]);
+        await waitFor(() => isIdle(third.ctx, leadId), "the lead to be idle");
+        assert.equal(rig.modelInputs.length, 1, "the first input is held once");
     });
 });
 
@@ -859,6 +925,50 @@ describe("rule 3: the delivery of held messages is owed past the repair", () => 
         assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [3, 3]);
         await waitFor(() => rig.modelInputs.some((users) => users.includes(HELD_TEXT)), "the lead to take the message");
         assert.equal(rig.modelInputs.filter((users) => users.includes(HELD_TEXT)).length, 1);
+    });
+});
+
+describe("rule 3: a block the lead makes while the held messages are delivered", () => {
+    it("stands: the job stays Blocked and the lead stays parked for an answer", async () => {
+        const rig = await createRig();
+        const daemon = await rig.boot();
+        const job = await daemon.createJob();
+        await waitFor(() => isIdle(daemon.ctx, job.leadConversation), "the lead to be idle");
+        await parkConversation(daemon.ctx.host, job.leadConversation, { waitingFor: "reports", continueOn: "all" });
+        await daemon.ctx.jobStore.applyAction(job.id, "block", { blockedReason: REASON }, daemonAuthor);
+        await steerConversation(daemon.ctx.host, job.leadConversation, {
+            content: HELD_TEXT,
+            mode: "followUp",
+            actor: teamMember,
+            requestId: "held-1",
+        });
+        // The lead's run blocks the job the first time the delivery reads the job after its submit resumed it.
+        let isBlockedByLead = false;
+        const blockOnceResumed = async (): Promise<void> => {
+            if (isBlockedByLead || (await daemon.ctx.jobStore.getJob(job.id)).status !== "in_progress") return;
+            isBlockedByLead = true;
+            await blockJob(daemon.deps, job.id, "lead asks", daemonAuthor);
+        };
+        const jobStore = new Proxy(daemon.ctx.jobStore, {
+            get(target, property) {
+                const member = Reflect.get(target, property, target);
+                if (typeof member !== "function") return member;
+                if (property !== "getJob" && property !== "listHistory") return member.bind(target);
+                return async (...args: unknown[]) => {
+                    await blockOnceResumed();
+                    return member.apply(target, args);
+                };
+            },
+        });
+
+        await deliverPendingHeld({ ctx: { ...daemon.ctx, jobStore }, options: daemon.deps.options }, [
+            { conversationId: job.leadConversation, jobId: job.id },
+        ]);
+
+        assert.ok(isBlockedByLead, "the lead blocked the job after the delivery's submit");
+        assert.equal((await daemon.ctx.jobStore.getJob(job.id)).status, "blocked");
+        const parked = (await readConversationMeta(daemon.ctx.host, job.leadConversation))?.parked;
+        assert.deepEqual(parked, { waitingFor: "answer", continueOn: "each" });
     });
 });
 

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createServer, type Server } from "node:net";
 import { afterEach, describe, it } from "node:test";
 import { ServiceError } from "../../src/service/operations.ts";
 import type { DaemonStatus } from "../../src/service/status_operation.ts";
-import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
+import { type DaemonProcess, freeLoopbackPort, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const SMALL_WORKER_THREAD_COUNT = 3;
@@ -187,5 +189,51 @@ describe("signals", () => {
         daemon.signal("SIGTERM");
 
         assert.deepEqual(await daemon.exited, { code: 0, signal: null });
+    });
+});
+
+function ephemeralPortRange(): { low: number; high: number } {
+    const [low, high] = readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8").trim().split(/\s+/).map(Number);
+    return { low: low ?? 0, high: high ?? 0 };
+}
+
+function listenOn(port: number): Promise<Server> {
+    return new Promise((resolve, reject) => {
+        const server = createServer();
+        server.once("error", reject);
+        server.listen(port, "127.0.0.1", () => resolve(server));
+    });
+}
+
+describe("freeLoopbackPort", () => {
+    it("gives a port outside the range the system hands out to other sockets", async () => {
+        const { low, high } = ephemeralPortRange();
+
+        for (let attempt = 0; attempt < 20; attempt++) {
+            const port = await freeLoopbackPort();
+            assert.ok(port < low || port > high, `port ${port} is inside the ephemeral range ${low}-${high}`);
+        }
+    });
+
+    it("gives a port that can be listened on at once", async () => {
+        const port = await freeLoopbackPort();
+
+        const server = await listenOn(port);
+
+        server.close();
+    });
+});
+
+describe("a start that fails", () => {
+    it("rejects ready with the child's stderr in the message", async () => {
+        const port = await freeLoopbackPort();
+        const occupier = await listenOn(port);
+        try {
+            const daemon = track(startDaemon({ hermetic: await hermetic(), networkListener: true, fixedPort: port }));
+
+            await assert.rejects(daemon.ready, /EADDRINUSE/);
+        } finally {
+            occupier.close();
+        }
     });
 });

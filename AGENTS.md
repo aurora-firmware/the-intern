@@ -11,8 +11,8 @@ This file gives coding agents the commands and conventions they need to work in 
 ## Status
 
 The Intern (`bob`) is one TypeScript/Node package that embeds pi as a library on `@earendil-works/pi-durable`.
-The package and its tooling exist (TypeScript, tests, lint, formatting, CI and the user manual site), but there is no
-product code yet.
+The package, its tooling and the product code exist: S-001 to S-006 are built, from the service and its control
+endpoint to the command line and the web interface. Specs after S-006 are still to come.
 
 Read these before designing anything:
 
@@ -45,7 +45,8 @@ npm ci
 npm test
 ```
 
-`npm run test:unit` and `npm run test:service` run the two test folders separately.
+`npm run test:unit`, `npm run test:service` and `npm run test:web` run the three test folders separately.
+`test:web` drives real browsers; `README.md`, Development environment, says how to get them.
 
 ## Run
 
@@ -104,7 +105,8 @@ code change alone.
 ├── biome.json                   # Lint and format configuration
 ├── mise.toml                    # Tool versions and the ai-team pin
 ├── src/                         # Product code
-├── test/                        # Tests (unit/, support/)
+├── web/ui/                      # Web pages: TypeScript modules the daemon serves
+├── test/                        # Tests (unit/, service/, web/, support/)
 ├── .github/workflows/
 │   ├── build.yml                # CI: Format, Build, User Documentation, Tests
 │   ├── pages.yml                # Publishes the user manual to GitHub Pages

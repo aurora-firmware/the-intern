@@ -34,6 +34,7 @@ export type InstanceDelta = { seq: number } & (
     | { type: "job_worklog_added"; number: string; entry: Extract<JobChange, { type: "worklog_added" }>["entry"] }
     | { type: "job_status_changed"; number: string; old: JobStatus; new: JobStatus; blockedReason?: string }
     | { type: "job_done"; number: string; resolution: Extract<JobChange, { type: "job_done" }>["resolution"] }
+    | { type: "job_related_changed"; numbers: [string, string] }
 );
 
 export type InstanceFeed = {
@@ -163,6 +164,7 @@ export async function createInstanceFeed(options: {
                 publish({ type: "job_done", number: change.number, resolution: change.resolution });
                 return;
             case "related_changed":
+                publish({ type: "job_related_changed", numbers: change.numbers });
                 return;
         }
     }

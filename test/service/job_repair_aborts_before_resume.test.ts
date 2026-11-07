@@ -16,6 +16,7 @@ const FAKE_PROVIDER = "faux";
 const FAKE_MODEL = "faux-1";
 const DONE_JOB_TEXTS = ["done job A", "done job B", "done job C"];
 const IN_PROGRESS_JOB_TEXT = "job still in progress";
+const LEAD_CRASH_JOB_TEXT = "crash after the resume";
 
 type ModelRequest = { firstUserText: string; phase: string };
 type JobView = { id: string; leadConversation: string };
@@ -101,5 +102,55 @@ describe("rule 4: the aborts of several Done jobs after a kill -9", () => {
                 (await modelRequestsOf(second)).some((request) => request.firstUserText.includes(IN_PROGRESS_JOB_TEXT)),
             "the In progress job's lead to run again",
         );
+    });
+});
+
+describe("rule 1: a kill -9 after the host resumes and before the first input is delivered", () => {
+    it("delivers the first input once at the next start, before any call other than daemon.status is answered", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        await writeFile(
+            join(env.piAgentDir, "settings.json"),
+            JSON.stringify({ defaultProvider: FAKE_PROVIDER, defaultModel: FAKE_MODEL }),
+        );
+        const first = startDaemon({ hermetic: env, script: "echo", turnEndRule: false, jobCrashAt: "lead-created" });
+        daemons.push(first);
+        await first.ready;
+        await assert.rejects(first.invoke("jobs.create", { text: LEAD_CRASH_JOB_TEXT }), /exited/);
+        await first.exited;
+
+        const second = startDaemon({ hermetic: env, script: "echo", turnEndRule: false, killAfterResume: true });
+        daemons.push(second);
+        await assert.rejects(second.ready, /exited/);
+        assert.equal((await second.exited).signal, "SIGKILL");
+
+        const third = startDaemon({ hermetic: env, script: "echo", turnEndRule: false });
+        daemons.push(third);
+        await third.ready;
+
+        const [job] = ((await third.invoke("jobs.list", {})) as { jobs: JobView[] }).jobs;
+        assert.ok(job);
+        const [lead] = (await third.invoke("test.waiting", { job: job.id })) as { id: string }[];
+        assert.ok(lead);
+        const submission = await third.invoke("test.submissionState", {
+            conversationId: lead.id,
+            requestId: `lead:${job.id}`,
+        });
+        assert.ok(submission, "the first input was submitted before the first call after ready");
+        const history = (await third.invoke("jobs.history.list", { job: job.id, limit: 100 })) as {
+            entries: { field: string }[];
+        };
+        assert.equal(history.entries.filter((entry) => entry.field === "repair").length, 2, "rule 1 applied twice");
+        await untilTrue(
+            async () =>
+                (await modelRequestsOf(third)).some((request) => request.firstUserText.includes(LEAD_CRASH_JOB_TEXT)),
+            "the lead to run on its first input",
+        );
+        const leadRequests = (await modelRequestsOf(third)).filter((request) =>
+            request.firstUserText.includes(LEAD_CRASH_JOB_TEXT),
+        );
+        assert.equal(leadRequests.length, 1, "the first input is held once");
     });
 });

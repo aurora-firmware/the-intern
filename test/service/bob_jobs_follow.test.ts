@@ -178,7 +178,7 @@ describe("bob jobs follow", () => {
         const daemon = await readyDaemon(env, "echo");
         const job = await createJob(daemon);
         const child = jobsFollow(env, job.number, "--json");
-        await child.waitFor("stdout", '"entries"');
+        await child.waitFor("stdout", '"busy"');
 
         await daemon.invoke("jobs.cancel", { job: job.id, justification: JUSTIFICATION });
 
@@ -194,7 +194,7 @@ describe("bob jobs follow", () => {
             "the instance snapshot",
         );
         assert.ok(
-            values.some((value) => Array.isArray(value.entries)),
+            values.some((value) => "live" in value),
             "the conversation snapshot",
         );
         const done = values.find((value) => value.type === "job_done");

@@ -15,6 +15,7 @@ import {
 import { parseConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { inOpenConversation } from "./job_section.ts";
+import type { ConversationMeta } from "./seating.ts";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -194,6 +195,19 @@ export async function hasInputSince(host: HarnessHost, conversationId: string, a
         cursor = page.next;
     } while (cursor !== undefined);
     return false;
+}
+
+/**
+ * Whether the conversation's stop mark is live: it holds a mark and no input entry follows the entry the mark holds. A
+ * document with no mark is not marked. Nothing clears the mark, so a later input is what ends it.
+ */
+export async function isStopMarkLive(
+    host: HarnessHost,
+    conversationId: string,
+    meta: Pick<ConversationMeta, "stopped">,
+): Promise<boolean> {
+    if (meta.stopped === undefined) return false;
+    return !(await hasInputSince(host, conversationId, meta.stopped));
 }
 
 /** Withdraws a queued input, which settles `unanswered`. Input already placed in the transcript cannot be withdrawn. */

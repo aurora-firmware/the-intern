@@ -38,6 +38,11 @@ Prerequisites:
   those tests are skipped, and they fail when the environment variable `CI` is set.
 - The pi CLI logged in to a model provider, only for manual runs against a real model. The test suite never calls a
   real model.
+- Browsers, for `npm run test:web`. Chrome and Firefox are required; Edge is good to have. Next to an installed Chrome,
+  `npx playwright-core install firefox` is enough. A missing browser skips its tests with a diagnostic. With
+  `BOB_WEB_ALL_BROWSERS=1`, as CI sets, a missing Chrome or Firefox fails them instead. Edge's tests run where Edge is
+  installed (`npm run test:web:setup:edge` installs it) and are skipped where it isn't. See
+  `docs/development/tech_stack.md`, Test harness.
 
 Keep the state of manual runs in a git-ignored `.tmp/` directory inside the working copy. Tests use temporary
 directories and must not touch your own pi configuration.

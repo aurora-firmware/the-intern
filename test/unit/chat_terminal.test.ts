@@ -32,6 +32,9 @@ function terminalIo(): CommandIo {
 function clientWithFailingCatchUp(failures: number) {
     let entriesReads = 0;
     const client: Client = {
+        subscribeConversations: () => {
+            throw new Error("this test never subscribes to several conversations");
+        },
         async invoke(name) {
             if (name === "desk.get") return { conversationId: DESK_ID };
             entriesReads++;
@@ -91,6 +94,9 @@ function chatOnScriptedFeed(reportedColumns = SCREEN_COLUMNS) {
     const queue: unknown[] = [];
     let wake = () => {};
     const client: Client = {
+        subscribeConversations: () => {
+            throw new Error("this test never subscribes to several conversations");
+        },
         async invoke(name) {
             if (name === "desk.get") return { conversationId: DESK_ID };
             if (name === "conversations.submit") return { submissionId: "s-1" };

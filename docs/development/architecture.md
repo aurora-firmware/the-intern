@@ -52,12 +52,15 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   REQ-007).
 - **Client library.** The TypeScript library in `src/client/` calls operations and follows the feed through a
   listener, from Node over the local socket or a URL, or from a browser over a URL. The `bob` commands and the web
-  interface reach the daemon only through it (S-003 REQ-009).
+  interface reach the daemon only through it (S-003 REQ-009). A subscription takes an `AbortSignal` (ADR-007 decision
+  5).
 - **Job origin.** The service layer builds a job's origin from the caller, never from the input: a team member's job
   records a request with the caller's way in, an agent's job a follow-up of its conversation, and only a job source
   states its own origin (S-002 REQ-012, AC-012.5).
 - **Observation feed.** The one source of live data for clients: a snapshot, then deltas. A client that is slow or
-  gone never affects an agent run (S-002).
+  gone never affects an agent run (S-002). A conversation's snapshot and deltas carry its state and the entries each
+  commit added, never its whole view, and clients read stored history through `conversations.entries`
+  ([ADR-008](../ai-team/decisions/ADR-008-the-conversation-feed-sends-state-and-new-entries-never-the-whole-view.md)).
 - **Worker threads.** A worker thread is a logical slot for one active agent run, not an operating-system thread. The
   count is fixed, and work beyond it waits in a stored arrival order (S-001, S-002, ADR-001).
 - **Jobs and conversations.** Work is organised as jobs. Each job has one lead conversation whose current agent is
@@ -83,8 +86,8 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   `inOpenConversation(host, conversationId, work)` reads the conversation's job, then runs the closed check and the work
   in that job's section; for the front desk and a conversation with no job it runs the work with no section. Both
   throw `ConversationClosedError`, and a lead start for a Done job throws `JobDoneError` (`refuseIfJobDone`). The
-  jobs component registers the job Done check at startup step 5 (`setJobDoneCheck`), because the host module must not
-  import the job store. The service layer maps the errors to `conflict`.
+  jobs component registers the job status check at startup step 5 (`setJobStatusCheck`), because the host module
+  must not import the job store. The service layer maps the errors to `conflict`.
 - **What runs in the section.** `inOpenConversation` wraps the admission of input and the holding of a steering message
   (`src/host/steering.ts`, `src/host/conversation_control.ts`), abort, reset and compaction
   (`src/host/conversation_control.ts`), the clearing that an abort with awaited conversations makes (`abortWithAwaited`
@@ -139,8 +142,9 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   `block_job` and `complete_job` for its lead only. A job's status changes only through the actions in
   `src/jobs/job_actions.ts`, and each job write is committed before the pi-durable change it goes with.
 - **Job feed deltas.** The instance scope of the observation feed carries the jobs that aren't Done in its snapshot,
-  then the deltas `job_created`, `job_changed`, `job_worklog_added`, `job_status_changed` and `job_done`, published
-  after their job store commit (`src/feed/instance_feed.ts`).
+  then the deltas `job_created`, `job_changed`, `job_worklog_added`, `job_status_changed`, `job_related_changed` (with
+  both short numbers, S-004 REQ-015) and `job_done`, published after their job store commit
+  (`src/feed/instance_feed.ts`).
 - **Export and import.** `jobs.export` copies the whole database to a new owner-only file with SQLite's online backup
   on the daemon's connection, while work goes on (`src/host/database_copy.ts`, `backupDatabase`). `importDatabase` in
   `src/host/database_import.ts` places an exported file as the database of a stopped instance, under the single-owner
@@ -237,7 +241,8 @@ A requirement number with no spec named in this section is S-001's.
 
 **The conversation's own document.** Each conversation's `intern.conversation` document holds the conversation's parked
 state, the messages held for it while it is parked, the invoked conversations whose reports it awaits, its abort mark,
-which records that its invoker is owed an "aborted" report (REQ-019), and its closed mark (REQ-026). They are facts
+which records that its invoker is owed an "aborted" report (REQ-019), its stop mark, which records that a team member's
+abort stopped a job's lead (S-004 REQ-008), and its closed mark (REQ-026). They are facts
 the-intern owns, written in the commit that changes them, and the only recovery from them is redelivery (ADR-001
 decision 4). An abort's facts are written in one commit just before pi-durable's abort; when a job's abort closes the
 conversation, the closed mark and the removal of its queued items are written in that same commit. The document is
@@ -290,12 +295,203 @@ small.
 - **Durability belongs to the runtime.** Recovery, exactly-once admission of input, queued input and checkpoints come
   from pi-durable. The daemon adds no retry loops, intake tables or recovery code of its own, except two bounded
   exceptions (ADR-001 decision 4). The first: the facts the-intern owns about a conversation (held messages, awaiting
-  links, parked state, the abort mark, the closed mark and creation keys) live in its own documents, and the only
+  links, parked state, the abort mark, the stop mark, the closed mark and creation keys) live in its own documents, and
+  the only
   recovery is redelivering the input those facts show as undelivered, made safe to repeat by pi-durable request ids.
   Each daemon-owned fact is committed in the same atomic commit as the change it describes, except for an abort. An
   abort's facts are written in one commit just before pi-durable's abort, not in pi-durable's abort commit. The
   second: job writes are committed before their pi-durable change, and four startup repair rules are the only job
   recovery (S-004 REQ-018).
+
+## Web interface
+
+This is how S-006's behaviour is built. A requirement number with no spec named in this section is S-006's. Technology
+choices and their reasons are in
+[ADR-006](../ai-team/decisions/ADR-006-web-pages-are-typescript-modules-with-no-build-step.md) and
+[tech_stack.md](tech_stack.md), and the feed connections in
+[ADR-007](../ai-team/decisions/ADR-007-one-shared-worker-holds-a-browser-s-feed-connections.md).
+
+```
+ browser profile
+ ┌─ tab ────────────────────┐      ┌─ shared worker (feed_worker.ts) ─┐
+ │ page (Preact, hash route)│◄────►│ instance feed: 1 stream          │──┐
+ │ pure models, drafts      │ port │ conversations: 1 stream (union)  │──┤
+ └───────────┬──────────────┘      │ daemon.status every 10 s         │──┤
+ ┌─ tab ─────┼──────────────┐      └──────────────────────────────────┘  │ at most 2 streams
+ │ page      │              │◄──── the same port protocol                │
+ └───────────┤ calls        │                                            │
+             │              └─ hidden iframe: GET /export                │
+             ▼                                                           ▼
+       network listener: /operations/<name>, /feed, /export, /ui/ (static_files.ts)
+```
+
+### Served files
+
+`src/listeners/static_files.ts` serves `web/ui/` and the four table addresses of ADR-006 decision 4. It adds the content
+types `.ts` and `.mjs` (`text/javascript; charset=utf-8`), `.woff2` (`font/woff2`), `.ico` (`image/x-icon`) and `.txt`
+(`text/plain; charset=utf-8`). Each answer carries `cache-control: no-cache` and a content hash as `ETag`, and a
+matching `If-None-Match` gets `304`. A `.ts` file's stripped text is kept in memory by path, modification time and size.
+A file that can't be stripped answers `500 internal`; a unit test strips every shipped `.ts` file, so a release can't
+hold one.
+
+| Files | Where |
+|---|---|
+| Page shell and import map | `web/ui/index.html`, `web/ui/app.ts` |
+| Pages and components | `web/ui/pages/`, `web/ui/components/` |
+| Pure models | `web/ui/model/` |
+| Feed worker, its logic, the tab's side | `web/ui/feed_worker.ts`, `web/ui/feed_hub.ts`, `web/ui/feed_connection.ts` |
+| Tokens and component styles | `web/ui/style/` |
+| Fonts, with `OFL.txt` | `web/ui/assets/fonts/` |
+| Logo and favicon | `web/ui/assets/brand/` (Blanco as `logo.svg`, Secundario as `favicon.svg`) |
+| Lucide's licence, next to the icon module | `web/ui/components/icons.ts`, `web/ui/components/ICONS_LICENSE.txt` |
+| Brand manual and the other logo variants, for the style review (AC-016.1) | `docs/development/brand/` |
+
+The fonts are the `woff2` files of `@fontsource/bruno-ace` 5.3.0 and `@fontsource-variable/josefin-sans` 5.3.0: the
+`latin` and `latin-ext` subsets, with `unicode-range`, copied once and committed. They aren't npm dependencies, because
+a font file changes only by a deliberate copy. `corporate_image/` holds no font files, only the manual's link to Google
+Fonts, and The Round Table's `favicon.ico` is the Next.js default. Neither is copied. The page links `favicon.svg`,
+which every target browser shows.
+
+### Style
+
+`web/ui/style/tokens.css` holds REQ-016's colours as custom properties, under The Round Table's names (`--color-orange`
+and so on), and the two fonts. The measures follow The Round Table: `border-radius` 8 px on cards, 6 px on controls, a
+1 px Medium Gray border and a small shadow on cards, a 2 px left border in Orange on the active sidebar link, and a 2 px
+Orange focus ring with a 2 px offset.
+
+Measured contrast limits what each colour may do under REQ-020's 4.5:1:
+
+| Use | Colours | Contrast |
+|---|---|---|
+| Primary button | Dark Blue on Orange | 8.53 |
+| Destructive button | Dark Blue on Red | 4.65 |
+| Secondary text on cards and content | Text Gray on White, on Light Gray | 4.94, 4.54 |
+| Status badge | Dark Blue on Success Green, Info Blue, Status Gray | 8.54, 5.29, 7.66 |
+| Sidebar | White or Orange on Dark Blue | 19.46, 8.53 |
+
+So Red, Orange, Success Green, Info Blue and Status Gray are never text colours on a light surface: they measure 4.18,
+2.28, 2.28, 3.68 and 2.54 on White. White on Red measures 4.18, so a destructive button's text is Dark Blue, as text on
+Orange is. An error shows as Dark Blue text on Orange Subtle, with a Red left border and an icon. A Blocked card has a
+Red left border, its reason in Dark Blue text and a `Blocked` badge, so it stands out by more than its column (REQ-002).
+
+### Pages and data
+
+Each page reads through `createClient(browserTransport(location.origin))` and hears changes from the worker. A tab asks
+the worker to follow, then reads with the operations S-006 Interfaces names, and applies the deltas that came in
+meanwhile, so a read can't hide a change. The pages decide nothing about what's allowed (REQ-013): a refusal's `message`
+shows next to the action, and the typed text stays.
+
+- **Board.** `jobs.list` per status: every page of To do, In progress and Blocked, the first 50 of Done, and more of
+  Done on request with the `cursor`. Job deltas move and change the cards. CSS `content-visibility: auto` keeps a column
+  of hundreds cheap to draw.
+- **Job page.** `jobs.get`, then history and worklog, then `conversations.invocations` from the lead for the tree of
+  agents. Each conversation shows in its own collapsible section, under its role's name. A `conversation_created` delta
+  leads to ADR-007 decision 3.
+- **Status page.** It reads `daemon.status` and `usage.get` again after each instance delta, at most once a second, and
+  `models.list` after a `settings_changed` delta.
+- **Roles and Workspaces.** The list is read again after a `settings_changed` delta.
+- **Connection banner and typed text.** Connection state comes from the worker (ADR-007 decision 6), and a tab's own
+  call that fails as unreachable or `unavailable` shows the banner at once with no refusal message (REQ-014). Each text
+  box keeps its text in `sessionStorage`, keyed by page and box, and clears it after the call succeeds.
+
+### Reading entries
+
+`conversations.entries` gains an optional input `order`, `"ascending"` by default as today (S-002 AC-012.4) or
+`"descending"`. pi-durable's entry scan already reads in both orders, and its cursor keeps the order. Pages read only
+newest first:
+
+- **Opening.** A conversation's or the front desk's newest 200 entries. Reaching the top of the list loads the next page
+  through `next`. This is what makes a long-lived front desk open as fast as a new one.
+- **Catching up.** ADR-007 decision 4 reads newest first until it reaches an entry the tab already has.
+- **The seat on a descending page.** The first page takes the current seat from the `intern.conversation` document and
+  walks back through the page, each `intern.seat` record giving the seat before it through its `previous`. A later page
+  first reads forward from its newest entry to the next seat record, and uses that record's `previous`, or the current
+  seat when there's none. The read costs what the team member has already scrolled through, not the whole transcript.
+
+An `intern.steer` record with no `content` marks a message held for a parked conversation. The page shows it as "held
+until it continues", and only the delivered entry shows the words, so they appear once (ADR-004 decision 4; AC-006.4).
+
+Long output collapses above 20 lines or 2 KiB, with its first lines showing. The full text is put in the DOM only when
+it is expanded, as one text node, which is what keeps expanding a 1 MiB result within REQ-019's 500 milliseconds.
+Entries use `content-visibility: auto` too.
+
+### The export download
+
+The Status page starts the download by pointing a hidden, same-origin `<iframe>` at `/export`, after the confirmation.
+The browser's download manager writes the file straight to disk, so the page holds nothing of it. Chrome's memory rose
+by 25 MiB for a 1 GiB download this way, against 1,034 MiB for `fetch` and a `Blob`. `showSaveFilePicker` and a service
+worker aren't available over plain HTTP.
+
+- **Before the first byte.** A refusal has no `Content-Disposition`, so the frame loads it as a document and fires
+  `load`. The page reads the frame's text and shows the error's `message`, in place. A text that doesn't parse, such as
+  the browser's own error page, shows a general error. Measured on Chrome, Firefox, with its JSON viewer on, and Edge.
+- **Success.** No `load` fires, and the browser's download list takes over. The page says the copy is being made and the
+  browser will show the download, and that only a finished download is a good backup. It never says the download
+  succeeded, because it can't know (REQ-012).
+- **After the first byte.** The route closes the connection short of its `Content-Length`, and the browser marks the
+  download failed: `canceled` in Chrome and Edge and `NS_ERROR_NET_PARTIAL_TRANSFER` in Firefox, as measured.
+
+### The export route
+
+ADR-001 decision 2 fixes its order and its folder. This adds the following.
+
+- **The margin** is `EXPORT_FREE_SPACE_MARGIN_BYTES`, 256 MiB, in `src/listeners/export_route.ts`. The route refuses
+  when the free space is under the database's size, plus its `-wal` file's, plus the margin. The copy itself fits in the
+  first two, because `jobs.export` copies all pages in one step. The margin keeps room for what running jobs write while
+  the file downloads, because the live database shares that disk and a failed write ends the daemon (ADR-001 decision
+  5). The figure is an estimate: 32 worker threads at about 50 KiB/s each is 1.6 MiB/s, so 256 MiB lasts about 160
+  seconds at that peak, and a 1 GiB download takes about 10 seconds on a gigabit network.
+- **The file name** is `the-intern-<instance>-<YYYY-MM-DD>.sqlite`, where `<instance>` is the last folder of the state
+  directory from `daemon.status`, keeping only letters, digits, `.`, `-` and `_`, and the date is the daemon's UTC date.
+- **The response** is `application/vnd.sqlite3`, with `Content-Disposition: attachment`, the size from `jobs.export` as
+  `Content-Length`, and the body from a read stream that respects the connection's back-pressure.
+- **A stalled client.** The route leaves the listener's idle timeout on, unlike a feed stream, so a client that stops
+  reading frees the slot and the copy when the timeout ends the connection.
+- **Test switch.** `NetworkListenerOptions` takes a test-only `readFreeSpace` for AC-016.8, as it takes `freePort`.
+
+### Stop mark
+
+ADR-001 decision 4 states the rule. It's built at these points.
+
+- **The field.** `ConversationMeta.stopped?: string` in `src/host/seating.ts` holds the entry ID.
+- **Setting it.** `abortWithAwaited` in `src/host/invocation.ts` has two callers, `conversations.abort` and the front
+  desk's `stop_conversation`, and both name what a team member's abort names. In the section, for the root only and
+  before clearing, it decides whether a mark is due: the conversation is a lead, its job is In progress, and it's busy,
+  has input queued (`hasQueuedUserInput`), is parked or awaits a report. `clearWaiting` writes the mark, the ID
+  from `readNewestEntryId`, in the commit it already makes. A cascade and `closeJobConversations` never set it.
+- **The job's status.** The host can't read the job store, so `setJobStatusCheck` in `src/host/job_section.ts` answers
+  the job's status, with `refuseIfJobDone` built on it. The jobs component registers it
+  at startup step 5, as today.
+- **Whether a mark is live.** `isStopMarkLive(host, conversationId, meta)` in `src/host/conversation_control.ts` is
+  `hasInputSince` on the mark's entry, the read repair rule 3 makes, with the same input entry kinds.
+- **The decision.** `turnEndDecision` in `src/jobs/job_model.ts` takes `isStopped`, tested first, and blocks with the
+  reason "stopped by a team member" whatever the definition of done holds. `evaluateTurnEnd` in
+  `src/jobs/turn_end_rule.ts` passes it after `isLeadWaiting`, so input that reached the lead first leaves it something
+  to wait for. The block is the daemon's `blockJob`, with its usual job write and then park.
+- **When the rule runs.** A lead's run ending works as today. For a run of another conversation of the job ending,
+  `check` in `startTurnEndRule` reads the job's lead, and goes on only when that lead's mark is live, so nothing changes
+  for a job with no mark. For an abort that set a mark, `abortWithAwaited` calls a listener registered with
+  `onLeadStopped(host, listener)` in `src/host/invocation.ts`, in the manner of `onInputSubmitted`, once its last abort
+  has ended. The jobs component passes that to the rule's one serial queue. All three pass the `turn-ended` write point,
+  so the crash tests of S-004 AC-008.6 use it.
+- **At startup.** `evaluateTurnEnd` runs in the turn-end check as today and reads the mark itself, so there's no new
+  rule and no new read for a job that isn't In progress with an idle lead.
+
+### Browser tests
+
+`test/web/` runs real pages against a real daemon child (`test/support/daemon_process.ts`) on the fake model, with a
+hermetic instance and `[network]` on a free port. Decision logic in `web/ui/model/` and `web/ui/feed_hub.ts` is tested
+in `test/unit/`. `test/support/browser.ts` launches a browser. It opens pages at `http://intern.test:<port>/ui/`, the
+name mapped to the daemon's loopback address, so the pages run outside a secure context as on a team's network. ADR-007
+decision 10 covers the proxy for what a worker does. Tool choices are in [tech_stack.md](tech_stack.md).
+
+Chrome and Firefox are the required browsers; Edge is good to have (S-006 REQ-021).
+
+| Runs in | Tests |
+|---|---|
+| Chrome | Every browser test |
+| Firefox as well | 21 tests, in nine groups: the page shell (`shell.test.ts`, 5), the connection banner (`connection_banner.test.ts`, 5), moving between pages (`navigation.test.ts`, 2), the shared worker (`feed_worker.test.ts`, 2), long activity (`activity_scale.test.ts`, 2), timeliness and a full board (`board_scale.test.ts`, 2), the journey (`browsers.test.ts`, 1), many agents (`many_agents.test.ts`, 1) and the host probe (`browser_support.test.ts`, 1). They carry AC-021.1, AC-005.4 and AC-001.2, which depend on the shared worker (ADR-007). Firefox doesn't reach the connection limit with 6 streams, so there AC-005.4 checks the shared worker and not the limit, which only Chrome and Edge test. Long activity and the full board carry AC-018.1 and AC-019.1 to AC-019.3 |
+| Edge as well, where it is installed | The same tests as Firefox. Edge is good to have, not required: its tests are skipped where it isn't installed |
 
 ## Rejected approaches
 
@@ -314,6 +510,9 @@ it records.
   pi-durable's format, which has no compatibility promise across versions, it can't be indexed or read with standard
   SQLite tools, and every filter scans a whole family.
 - **The status in pi-durable documents and the other fields in tables.** Rejected: one job kept in two places.
+- **Next.js, or a compile step for the pages.** Rejected: see ADR-006, Alternatives Considered.
+- **A feed stream in each browser tab, or a whole view in each delta.** Rejected: see ADR-007 and ADR-008, Alternatives
+  Considered.
 
 ## Components and owning specs
 
@@ -327,7 +526,7 @@ that defines it.
 | Jobs | The job record and the life of a job, blocked jobs and answers, history, export and import | S-004 |
 | Schedules and triggers | Starts jobs at set times and on events, with run history and on-demand runs | No spec yet |
 | Email | The Intern's own mailbox as a way in and out | No spec yet |
-| Web interface | The team's browser view and configuration, built only on service operations | No spec yet |
+| Web interface | The team's browser view and configuration, built only on service operations | S-006 for jobs, conversations, roles, workspaces, status and the export download; later specs add their own pages |
 | Command line | The `bob` commands, built only on service operations | S-005 |
 | Skills and instructions | Shipped skills and instructions, and the team's overlay | No spec yet |
 | Team knowledge | Reaching, reading and updating the wiki and other knowledge sources | No spec yet |
@@ -350,6 +549,10 @@ are not described here.
   through the client library, except `serve` and `import`, which load the daemon's code by a dynamic import inside
   `run` (S-005 REQ-016, ADR-005). The path layout, `src/daemon/state_layout.ts`, is the one daemon file every command
   loads (`connection.ts` uses it for the runtime directory); it imports only Node modules.
+- **Web pages stay in the browser's own world.** Modules in `web/ui/` import only each other, `preact`, `preact/hooks`
+  and the two browser-safe client modules, by relative path in a worker (ADR-006). They use no secure-context API
+  (ADR-007 decision 8). Decision logic such as the board's columns, the catch-up of entries and the worker's feed loop
+  sits in pure modules with no DOM, which `test/unit` runs on Node.
 - **Listeners and the client library use only the service layer.** Listener and client library code imports neither
   the harness host nor any pi package. Listeners reach the daemon's state only through the catalogue, the feed and the
   lifecycle hooks, and import the daemon and feed modules only as types (S-003 REQ-013, ADR-001 decision 2). No service

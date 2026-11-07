@@ -1,7 +1,7 @@
 ---
 id: S-003
 title: Control endpoint
-version: '0.3'
+version: '0.6'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-01'
 author: planner
@@ -74,7 +74,8 @@ What this specification explicitly does NOT cover:
   restart (S-002 REQ-021).
 - **The content of the web interface and of the `bob` commands.** The Web interface and Command line specs own them.
   This spec serves the web interface files and gives both a client library.
-- **New service operations.** This spec adds none. The listeners carry whatever the catalogue holds.
+- **New service operations.** This spec adds none. The listeners carry whatever the catalogue holds. The export route
+  (REQ-016) serves the copy S-004 REQ-016 defines.
 - **A stable public API.** The routes are the contract of The Intern's own clients. Other programs may use them, but
   they get no compatibility promise across versions.
 - **Windows, Linux arm64 and Intel macOS.** These remain unsupported (S-000).
@@ -119,12 +120,15 @@ Both listeners serve these routes (REQ-003 to REQ-006). Any other method or path
 | `POST /operations/<name>` | `Content-Type: application/json` (parameters such as `charset` allowed), also when the body is empty; body: the operation's input as JSON, or empty for no input | `200`, body `{"result": <result>}` | Status from the table below, body `{"error": {"code": "<code>", "message": "<message>"}}` |
 | `GET /feed?scope=instance` | none | `200`, `Content-Type: text/event-stream`, events below | Status and error body as for operations, before any event |
 | `GET /feed?scope=conversation&id=<conversation id>` | none | as above | as above |
+| `GET /feed?scope=conversations&id=<conversation id>&id=<conversation id>` | none | as above, one stream for all the named conversations, each event naming its conversation (REQ-006) | as above |
 | `GET /ui/…` (network listener only) | none | The web interface file | `404` for a missing file |
 | `GET /` (network listener only) | none | Redirect to `/ui/` | — |
+| `GET /export` (network listener only) | none | `200`, a file attachment holding the whole database (REQ-016) | Status and error body as for operations, before any byte of the file; after that, the connection closes without completing the response |
 
 `feed.subscribe` is served only at `GET /feed`, its query standing in for the operation's input. Called at
 `POST /operations/feed.subscribe`, it is refused with `invalid_input` and a message naming `GET /feed`. It is the
-only streaming operation; a later spec that adds another names its route by amending this spec.
+only streaming operation; a later spec that adds another names its route by amending this spec. `scope=conversations`
+is no scope of `feed.subscribe`: the listener makes one subscription per conversation and writes them to one stream.
 
 **Contract** (error outcome to HTTP status; the codes are S-002's):
 
@@ -147,6 +151,10 @@ Clients branch on `code`, never on the status.
 | `delta` | The delta's sequence number | The delta, as JSON |
 | `end` | none | `{"reason": "lagging" \| "stopped"}`; the stream closes after it |
 
+**Contract** (`scope=conversations`): one `snapshot` event per named conversation, then `delta` events. The `data` of
+each is `{"conversationId": "<id>", "event": <the snapshot or delta>}`, and a delta's `id` is its sequence number. Order
+holds within a conversation; the stream promises no order between conversations. One `end` event ends the whole stream.
+
 A client that closes the connection is unsubscribed; no `end` event can reach it. A new request starts a new
 subscription with a fresh snapshot; the listener ignores `Last-Event-ID` (S-002 REQ-014).
 
@@ -161,8 +169,9 @@ A TypeScript library, usable in Node and in the browser (REQ-009):
   daemon uses, resolved from the runtime directory as S-002 REQ-006 resolves it, and can be overridden
 - call an operation by name with an input; the call returns the result, or fails with the same code and message an
   in-process call gives
-- subscribe to a scope; the subscription yields the snapshot, then the deltas in order, and ends with the reason; it
-  never starts a new subscription on its own after an `end` or a closed connection
+- subscribe to a scope, or to several conversations over one connection, with each event naming its conversation; the
+  subscription yields the snapshot, then the deltas in order, and ends with the reason; it never starts a new
+  subscription on its own after an `end` or a closed connection
 - fail with a distinct "unreachable" error, naming the socket path or URL, when no daemon answers or the connection
   closes before a call's answer arrives; it is not one of S-002's error codes
 
@@ -173,6 +182,7 @@ The library's function names and types are not contract; the tasks fix them.
 - S-002's catalogue: listing operations and invoking one by name with an input and a caller (S-002 REQ-012, REQ-013,
   REQ-017), with a job's origin built from the caller (S-002 AC-012.5).
 - S-002's observation feed: subscribing to a scope and its end reasons (S-002 REQ-014, REQ-015).
+- S-004's `jobs.export`, which makes the copy the export route sends (S-004 REQ-016; ADR-001 decision 2).
 - S-002's startup step 8, shutdown order, readiness and stop bound, and the runtime directory (S-002 REQ-002,
   REQ-003, REQ-005, REQ-006).
 - The `[network]` section of the configuration file (Configuration Requirements; S-002 REQ-021, REQ-022).
@@ -205,9 +215,17 @@ Feed
     → snapshot → delta … → end(reason)                                                       REQ-006
     → client stops reading → end(lagging), run unaffected                                    REQ-011
     → client disconnects → unsubscribed                                                      REQ-006
+  GET /feed?scope=conversations&id=…&id=…
+    → no id 400; an unknown id 404, before any event                                         REQ-006
+    → a snapshot per conversation → deltas naming their conversation → one end for all       REQ-006
+
+Export
+  GET /export (network listener) → consistent copy as a file, work goes on → log, temporary copy removed   REQ-016
+    → a download already running → 409 busy; too little free space → 409 conflict            REQ-016
+  Next start after a kill → a copy left behind removed                                       REQ-016
 
 Shutdown (S-002 REQ-005)
-  "stopping" → new calls 503 unavailable → running calls cut (503 or closed connection)
+  "stopping" → new calls 503 unavailable → running calls and downloads cut (503 or closed connection)
   → streams end(stopped) → listeners close → socket file removed → database closes           REQ-010
 ```
 
@@ -377,6 +395,12 @@ deltas with their sequence numbers as event ids, and a final `end` event with th
 gives them. An invalid scope is refused with `invalid_input` and an unknown conversation with `not_found`, before any
 event. When the client closes the connection, the subscription is ended as `unsubscribed`.
 
+`GET /feed?scope=conversations` SHALL give one stream for several conversations, composed from one `feed.subscribe`
+subscription per named conversation, with each event naming its conversation. A repeated id counts once. A request with
+no id is refused `invalid_input`, and one with an unknown id `not_found`, before any event. When one subscription ends
+with `lagging` or `stopped`, the listener SHALL end the others and send one `end` with that reason. When the client
+closes the connection, each subscription is ended as `unsubscribed`.
+
 #### AC-006.1 — Snapshot, then deltas
 
 - **Given:** a conversation with a run
@@ -401,6 +425,26 @@ event. When the client closes the connection, the subscription is ended as `unsu
   stream and closes it
 - **Then:** the first gets `400 invalid_input`, the second `404 not_found`, and the closed stream's subscription ends
   as `unsubscribed` and holds no resources
+
+**Verification:** test — a service test.
+
+#### AC-006.4 — One stream for several conversations
+
+- **Given:** three conversations with runs
+- **When:** a client opens `GET /feed?scope=conversations` naming the three, over each listener
+- **Then:** the stream starts with one `snapshot` per conversation, then the deltas of all three on the one connection,
+  each naming its conversation and in commit order within it, the same deltas that three conversation feeds give
+
+**Verification:** test — a service test over both listeners.
+
+#### AC-006.5 — Refusals and the end of a stream for several conversations
+
+- **Given:** a ready daemon
+- **When:** a client opens `scope=conversations` with no id, with an unknown id among known ones, with known ids while
+  one subscription lags, and with a repeated id, and closes another such stream
+- **Then:** the first gets `400 invalid_input`, the second `404 not_found` and no event, the third one `end` with
+  `lagging` and a closed stream, the fourth one `snapshot` for the repeated id, and the closed stream's subscriptions
+  all end as `unsubscribed`
 
 **Verification:** test — a service test.
 
@@ -455,17 +499,18 @@ doesn't serve them. A missing file gets `404`.
 - **Then:** `/` redirects to `/ui/`, the files are returned with their content types, and the missing file gets `404`;
   the same paths on the local socket get `404`
 
-**Verification:** test — a service test using a placeholder file until the Web interface spec delivers the content.
+**Verification:** test — a service test.
 
 ### REQ-009 — The client library
 
 The client library SHALL let a program in Node (over the local socket or a URL) or in a browser (over a URL) call any
 operation by name and subscribe to any feed scope. A failed call MUST fail with the same code and message as the
 in-process call. A subscription yields the snapshot, then the deltas in order, ends with the reason, and never starts
-a new subscription on its own. When no daemon answers, or the connection closes before a call's answer arrives, the
+a new subscription on its own. It SHALL also subscribe to several conversations over one connection (REQ-006), and
+each event names its conversation. When no daemon answers, or the connection closes before a call's answer arrives, the
 call fails with an "unreachable" error naming the socket path or URL. In Node, the default socket is the daemon's,
 resolved as S-002 REQ-006 resolves the runtime directory, and can be overridden. The `bob` commands and the web
-interface call the daemon only through this library.
+interface call the daemon only through this library, except for the browser's own download of `GET /export` (REQ-016).
 
 #### AC-009.1 — Calls and subscriptions over both listeners
 
@@ -496,11 +541,21 @@ interface call the daemon only through this library.
 
 **Verification:** inspection — the client library's browser transport and its shared format code.
 
+#### AC-009.4 — Several conversations through the library
+
+- **Given:** a ready daemon with both listeners and two conversations with runs
+- **When:** the library subscribes to both over one connection, once over the socket and once over the URL
+- **Then:** it opens one request, yields each conversation's snapshot and deltas in order with its conversation id, and
+  ends with `stopped` when the daemon stops, starting no new subscription
+
+**Verification:** test — a service test of the library in Node over both listeners.
+
 ### REQ-010 — Listeners at shutdown
 
 When the daemon reports "stopping" (S-002 REQ-005), the listeners SHALL answer new calls `503 unavailable`, end every
 open feed stream with `end` and the reason `stopped`, and end every call still running, such as a
-`submissions.wait`, with `503 unavailable` or by closing its connection, without waiting for it to finish. They close
+`submissions.wait`, with `503 unavailable` or by closing its connection, without waiting for it to finish. A running
+download of `GET /export` ends as REQ-016 states. They close
 before the database closes and within the daemon's 10-second stop bound. The local socket file is removed.
 
 #### AC-010.1 — Shutdown with open streams and a waiting call
@@ -528,12 +583,106 @@ REQ-022) MUST leave it exactly as written.
 
 **Verification:** test — a service test.
 
+### REQ-016 — The export route
+
+The network listener SHALL answer `GET /export` with a consistent copy of the instance's whole database, the same copy
+S-004 REQ-016 defines, as a file attachment whose suggested name holds the instance and the date. Work in progress SHALL
+go on during the download. The configuration file isn't in it. The daemon SHALL log each download with the way in, the
+remote address and port (REQ-007). A failure before the first byte SHALL use the operations' error body (REQ-005), and
+a failure after it SHALL close the connection without completing the response, so that a client can tell the file is
+partial. The local socket SHALL answer this path `404`, and `bob export` stays the way in for a machine's own files.
+
+Any temporary copy on the daemon's machine SHALL be accessible only to the service account (ADR-002 decision 6). The
+daemon SHALL remove it when the download ends, whether it finished, failed or the client left. When the daemon stops
+during a download, the connection SHALL close without completing the response and no temporary copy SHALL remain, within
+the daemon's stop bound (REQ-010). A temporary copy that a killed daemon left SHALL be removed at the next start, with
+or without a `[network]` section.
+
+One download SHALL run at a time, and a request made while one runs SHALL get `409 busy`. A copy the database is too
+busy to make gets `409 busy` as well, as `jobs.export` refuses it. When the free space where the temporary copy goes is
+under the database's size plus a margin, the route SHALL refuse the request with `409 conflict` and a message naming the
+space needed, and SHALL make no copy. The margin is a built-in constant that Feature Architecture fixes.
+
+#### AC-016.1 — A copy while working
+
+- **Given:** a daemon with jobs running on the fake model
+- **When:** a client requests `GET /export` over the network listener
+- **Then:** the response is a file attachment that opens as a database holding every job, worklog entry, history entry
+  and conversation committed before the export began; the jobs go on; the log names the way in and the client's address
+  and port; and no temporary copy remains
+
+**Verification:** test — a service test on a loopback port. The test requests again on `409 busy`, because `jobs.export`
+answers `busy` when the database stays in a transaction while running jobs write to it.
+
+#### AC-016.2 — A client that leaves, and a failure
+
+- **Given:** a ready daemon
+- **When:** a client disconnects part way through a download, and in a second run the copy can't be made
+- **Then:** the first leaves no temporary copy and the jobs go on; the second answers with the error body, with no file,
+  and leaves no temporary copy
+
+**Verification:** test — a service test.
+
+#### AC-016.3 — Not on the local socket, and not while stopping
+
+- **Given:** a daemon with both listeners
+- **When:** a client requests `GET /export` over the local socket, and over the network listener during startup and
+  during shutdown
+- **Then:** the local socket answers `404`, and the network listener answers `503 unavailable` during startup and
+  shutdown
+
+**Verification:** test — a service test.
+
+#### AC-016.4 — The temporary copy is owner-only
+
+- **Given:** a download held part way, with a client that has stopped reading
+- **When:** the test reads the modes of what the download made in the daemon's directories
+- **Then:** each file is accessible only to the service account, and each folder too
+
+**Verification:** test — a service test on a loopback port.
+
+#### AC-016.5 — A download running at shutdown
+
+- **Given:** a download held part way
+- **When:** the daemon receives SIGTERM
+- **Then:** the connection closes without completing the response, no temporary copy remains, and the daemon exits 0
+  within the stop bound
+
+**Verification:** test — a service test on a loopback port.
+
+#### AC-016.6 — A copy left by a killed daemon
+
+- **Given:** a daemon killed during a download, so its temporary copy remains, once with `[network]` set and once with
+  the section removed before the restart
+- **When:** a daemon starts on the instance
+- **Then:** in both cases, once it reports ready, the temporary copy is gone
+
+**Verification:** test — a service test that kills the daemon during a held download.
+
+#### AC-016.7 — One download at a time
+
+- **Given:** a download held part way
+- **When:** a second client requests `GET /export`, and requests it again after the first download ends
+- **Then:** its first attempt gets `409 busy` with the error body and the running download goes on; its second attempt
+  gets the file
+
+**Verification:** test — a service test on a loopback port.
+
+#### AC-016.8 — Too little free space
+
+- **Given:** a daemon whose free space reads under the database's size plus the margin, as the test arranges
+- **When:** a client requests `GET /export`
+- **Then:** it gets `409 conflict` with a message naming the space needed, and no temporary copy is made
+
+**Verification:** test — a service test on a loopback port.
+
 ## Quality Requirements
 
 ### REQ-011 — Clients don't affect work
 
 A client that stops reading a feed stream MUST be ended with `lagging` once more than 1000 deltas are undelivered
-(S-002 REQ-015), counting deltas the listener has accepted but not yet written to the connection. Neither a slow or
+(S-002 REQ-015), counting deltas the listener has accepted but not yet written to the connection. For a stream of
+several conversations, the count covers the whole connection. Neither a slow or
 stalled connection nor any number of open connections delays an agent run, holds a worker thread or loses a
 committed change.
 
@@ -625,7 +774,8 @@ account's access (ADR-002).
   - **Where:** an option of the library; the Command line spec decides how `bob` exposes it.
   - **Missing:** the daemon's default socket.
 
-Built-in constants, not configurable: the 10 MiB body limit (REQ-004) and the 1000-delta lag bound (S-002 REQ-015).
+Built-in constants, not configurable: the 10 MiB body limit (REQ-004), the 1000-delta lag bound (S-002 REQ-015) and the
+export route's free-space margin (REQ-016).
 
 ## Assumptions and Dependencies
 
@@ -633,24 +783,23 @@ Built-in constants, not configurable: the 10 MiB body limit (REQ-004) and the 10
   feed with its end reasons, startup step 8, the shutdown order, readiness, the stop bound and the
   runtime directory. This spec relies on S-002 v0.7's amendments, made on the same planning branch: listeners refuse
   calls until ready (REQ-003), a job's origin is built from the caller (AC-012.5), and the configuration file keeps
-  sections later specs add (REQ-021, REQ-022). The current code may deviate from them; the S-003 breakdown includes a
-  task that investigates and closes the deviations.
+  sections later specs add (REQ-021, REQ-022). T-094 closed the code's deviations from them.
 - **S-001** records the team member's way in on seat records and messages (S-001 REQ-007); this spec supplies its
   value.
 - **ADR-001** keeps pi-durable behind the host; **ADR-002** settles that no listener authenticates and that reach
   decides who is a team member. Both are accepted.
 - **Node 24's built-in HTTP support** serves HTTP on a Unix socket and on TCP, and supports Server-Sent Events by
-  streaming a response; browsers support `fetch` and event streams. No dependency is added.
+  streaming a response; browsers support `fetch` and event streams. The listeners add no dependency for this. ADR-006
+  adds the dependencies for serving and drawing the web interface files.
 - **Platform socket path limits** (about 104 bytes on macOS, 108 on Linux). The default runtime directories fit; long
   overridden paths may not (REQ-001).
-- **The Web interface spec** delivers the web interface files. Until then, `/ui/` serves what the package ships, which
-  may be a placeholder.
+- **S-006, the Web interface spec,** delivers the web interface files, and `/ui/` serves them from the package.
 - **Assumption, confirmed by the product owner on 2026-11-01:** the team limits who reaches the network listener with
   its network setup, and security of the listeners is a later decision.
 
 ## Success Criteria
 
-1. Every acceptance scenario of REQ-001 to REQ-015 passes in `npm test` on the fake model, with a temporary instance,
+1. Every acceptance scenario of REQ-001 to REQ-016 passes in `npm test` on the fake model, with a temporary instance,
    a temporary socket and free loopback ports only.
 2. One test calls every operation of the catalogue except `feed.subscribe` through both listeners and gets the same
    result as in-process (REQ-003); the feed's tests cover `feed.subscribe` (REQ-006). Measured by `npm test`.
@@ -671,8 +820,10 @@ Built-in constants, not configurable: the 10 MiB body limit (REQ-004) and the 10
 | 3 | The feed over Server-Sent Events, with the lag bound and shutdown ends | Phase 2 |
 | 4 | The network listener: `[network]` settings, bind failures, the web interface files and the manual | Phases 2 and 3 |
 | 5 | The client library for Node and the browser, the live check and the LAN demonstration | Phases 2 to 4 |
+| 6 | One stream for several conversations, in the listeners and the client library | Phases 3 and 5 |
+| 7 | The export route: the copy, its log line, owner-only temporary copies and their removal, one download at a time and the free-space refusal | Phases 4 and 5, S-004 `jobs.export` |
 
-The Command line and Web interface specs need phase 5.
+The Command line spec needs phase 5. The Web interface spec needs phases 5 to 7.
 
 ## Open Questions
 
@@ -685,3 +836,10 @@ None affect the specified behaviour.
 | 2026-11-02 | v0.2. REQ-007: each listener passes the caller details it observes with the way in: the network listener the TCP peer's remote address and port, never a header such as `X-Forwarded-For`, and the local socket none beyond the way in (no OS account); a job created through a listener records them (new AC-007.3). AC-007.2: the refused origin claim is a `jobs.create` call, which creates no job and uses no number, and without the origin creates `C-n`. AC-003.1: observed caller details may differ between the three results. Design Principles, "Listeners are transports only": the caller is fixed by the listener and the connection. | S-004 architecture consistency review; product owner decisions 2026-11-02 (the OS account dropped). Driving ADR: ADR-001, amended 2026-11-02 for the job store. | None yet; the code changes (observed caller details, `jobs.create` in place of `jobs.startLead` in the tests) come in the S-004 breakdown |
 | 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The runtime-dependency principle moved to `docs/development/tech_stack.md`. All alternatives stay. | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |
 | 2026-11-05 | v0.3. No behaviour changes (CR-001): implementation words leave the requirement text, and each REQ keeps its guarantee. Changed: REQ-001, AC-001.4, REQ-002, REQ-010 (start hooks, the harness), REQ-013, AC-013.1, with the copies in Consumed, Workflow and Assumptions. REQ-013 and AC-013.1 point to ADR-001 decision 2. No identifier added or retired. | CR-001, approved by the product owner. | T-202 (inspects AC-013.1); spec text otherwise |
+| 2026-11-05 | v0.4. No behaviour changes. Assumptions, S-002: T-094 closed the code's deviations from the S-002 v0.7 amendments, in place of the statement that a task would investigate them. | spec-truth reconciliation: a stale assumption (D4). | None; spec text only |
+| 2026-11-05 | spec-truth reconciliation — PASS | Work in 8e1eaa08..HEAD confirmed against v0.4; one stale assumption corrected; no requirement drift found; its task logs not read | none |
+| 2026-11-06 | v0.5. Added the route `GET /export` to the Routes contract, with REQ-016, AC-016.1 to AC-016.8 and its Workflow lines; the Exclusion on new service operations names it. It answers on the network listener only and sends the copy S-004 REQ-016 defines. Its temporary copy is owner-only, goes when the download ends, at shutdown within the stop bound, and at the next start after a kill; one download runs at a time, a second gets `409 busy`, and too little free space gets `409 conflict`; AC-016.1's test allows for `busy` from `jobs.export`. REQ-009: the browser's download of `GET /export` is the one call outside the client library. Added one stream for several conversations, `GET /feed?scope=conversations`, composed by the listener from several `feed.subscribe` subscriptions with events naming their conversation (Interfaces, Workflow, REQ-006, new AC-006.4 and AC-006.5, REQ-009, new AC-009.4, REQ-010, REQ-011). S-002's feed isn't amended. Success Criteria 1 runs to REQ-016, and Implementation Order gains phases 6 and 7. No identifier retired. | S-006's export download: the product owner chose a browser download, and no route could return a file. S-006 architecture consistency review, findings F4, F6 and F7, product owner decision of 2026-11-06: plain HTTP allows a browser 6 connections per host across its tabs, and a stream per invoked conversation would use them up. Approved with S-006 at Gate 1. | Created with S-006's breakdown |
+| 2026-11-07 | v0.6. No behaviour changes. Assumptions: ADR-006 added dependencies for the web interface files, so "No dependency is added" holds only for the listeners; S-006 has delivered the files that the placeholder wording awaited. AC-008.1's Verification drops the same wording. No identifier added or retired. | Spec-truth reconciliation of S-006, finding F13: stale text. | None; spec text only |
+| 2026-11-07 | spec-truth reconciliation — FAIL | Export route and shared stream confirmed against v0.5; stale assumptions only | none |
+| 2026-11-07 | spec-truth reconciliation — PASS | v0.6 text corrections confirmed; no S-003 behaviour changed in 75c7c946..0604b54f; read limited to S-006's findings | none |
+| 2026-11-07 | spec-truth reconciliation — PASS | B-030 changes one test only; AC-016.6 passes as root in CI; a failing rm is untested, and ADR-001 decision 2 owns that behaviour; read limited to REQ-016 | none |

@@ -1,6 +1,6 @@
 ---
 title: Agent roles and conversations
-version: '0.13'
+version: '0.15'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-15'
 author: planner
@@ -277,7 +277,7 @@ Either: does the work itself
         each invoked agent finishes its part → report-back                                  REQ-019
           → report arrives as new input; a parked agent continues on a free worker thread
         an invoked conversation aborted on its own → "aborted" report;
-        a cascading abort → no report, nothing left parked or awaiting                      REQ-008, REQ-019
+        a cascading abort → no report, nothing left parked for reports or awaiting          REQ-008, REQ-019
   ↓
 At any time: a team member reseats, resets or steers any conversation                       REQ-004, REQ-011, REQ-020
 A seat's workspace folder disappears → tool errors, the daemon keeps running                REQ-015
@@ -343,7 +343,7 @@ a default workspace.
   default lead
 
 **Verification:** test — `test/unit/shipped_roles.test.ts`, `test/service/agents_startup.test.ts`,
-`test/service/role_operations.test.ts` ("lists the shipped roles bob and gp through roles.list").
+`test/service/role_operations.test.ts` ("lists the shipped roles bob, gp and desk through roles.list").
 
 ### REQ-002 — What the shipped roles are for
 
@@ -710,10 +710,13 @@ defaults, and a job prompt for its part.
   conversation of the job and closes them (REQ-026), except that a lead completing the job through its tool is closed
   and ends its own run; the operation that does it belongs to the Jobs spec, and this spec delivers the capability it
   calls. A closed conversation can't be aborted (REQ-026).
-- An abort leaves no aborted conversation parked or waiting for a report. Its held messages (REQ-020) are withdrawn,
-  as an abort withdraws queued input. Whether its invoking conversation gets a report follows REQ-019. The one
-  exception is the abort after a failed close (REQ-026), which clears nothing itself: S-004 REQ-018 rule 4 clears
+- An abort leaves no aborted conversation parked for reports or waiting for a report. Its held messages (REQ-020) are
+  withdrawn, as an abort withdraws queued input. Whether its invoking conversation gets a report follows REQ-019. The
+  one exception is the abort after a failed close (REQ-026), which clears nothing itself: S-004 REQ-018 rule 4 clears
   these at the next start.
+- An abort that names the lead of a Blocked job leaves that lead parked for an answer (REQ-014). The job's abort clears
+  that park too, because it closes the lead (REQ-026). When a team member's abort stops the lead of an In progress job,
+  the block that follows (S-004 REQ-008) parks the lead for an answer once the abort and its cascade have ended.
 
 #### AC-008.1 — Each context mode
 
@@ -771,14 +774,17 @@ defaults, and a job prompt for its part.
 **Verification:** test — `test/service/abort_cascade.test.ts` ("abortJobConversations"), and a service test on the fake
 model with each failure injected and the compaction's model request held.
 
-#### AC-008.7 — An abort leaves nothing parked or awaiting
+#### AC-008.7 — An abort leaves nothing parked for reports or awaiting
 
-- **Given:** a steerable or a parked invoker with report delivery running
-- **When:** it is aborted, or its job's conversations are
-- **Then:** no aborted conversation is parked, awaiting a report or holding messages, except after a failed close
-  (REQ-026), until the next start
+- **Given:** a steerable invoker or one parked for reports, with report delivery running, and in a second case the lead
+  of a Blocked job, parked for an answer
+- **When:** the first is aborted, or its job's conversations are, and a team member's abort names the second
+- **Then:** in the first case no aborted conversation is parked for reports, awaiting a report or holding messages,
+  except after a failed close (REQ-026), until the next start. In the second case the lead stays parked and its job
+  stays Blocked with its reason, and the next start writes no `repair` entry for it (S-004 REQ-018 rule 2)
 
-**Verification:** test — `test/service/abort_cascade.test.ts` ("an abort with report delivery running").
+**Verification:** test — `test/service/abort_cascade.test.ts` ("an abort with report delivery running"), and a service
+test on the fake model that aborts a Blocked job's lead and restarts the daemon.
 
 ### REQ-019 — Clean-up step and reports
 
@@ -1432,7 +1438,7 @@ which a team member or an agent of any job may create and may relate to the firs
   conversation it created is closed by the job abort.
 - A closed conversation runs no more model turns, after a restart too, apart from the known exception above: it takes
   no automatic compaction, report or held message. A closed conversation whose abort a crash left unfinished is
-  aborted by S-004 REQ-018 rule 4 before work resumes.
+  aborted by S-004 REQ-018 rule 4 at the next start, with no model turn.
 - The front desk belongs to no job and never closes (REQ-021, REQ-025).
 
 #### AC-026.1 — Done closes every conversation of the job
@@ -1620,7 +1626,7 @@ the file stops the daemon at startup, an invalid runtime change is refused with 
 - **S-004 (Jobs).** Creates jobs and starts their lead conversations, in-process only, from `jobs.create` (REQ-012);
   decides when a job is blocked and delivers its answer (REQ-014); completes and cancels jobs, and its complete and
   cancel actions call this spec's abort capability (REQ-008); adds the job tools to every role (REQ-003, REQ-005).
-- **The schedules and triggers spec, the command-line spec and the Email spec (not yet written).** They own the fire
+- **The schedules and triggers spec and the Email spec (not yet written), and S-005.** They own the fire
   behaviour (REQ-013), the monitoring views (REQ-016) and the mailbox. This spec's live acceptance test 1 moved to the
   schedules and triggers spec (product owner ruling, 2026-10-31).
 - **pi-durable** (the pinned version in `README.md`). Provides the durable conversations, inbox, reset, compaction,
@@ -1642,7 +1648,7 @@ the file stops the daemon at startup, an invalid runtime change is refused with 
 - **Assumption, confirmed in the pinned pi-durable 1.4.0 and `src/host/conversation_control.ts`: a reset keeps the
   conversation id.** `conversations.reset` calls the pi-durable conversation's `reset`, which writes a `pi.reset` entry
   into the same conversation, so `desk.get` names the same front desk after a reset (REQ-024).
-- **The command-line spec and the Web interface spec (not yet written).** They present the front desk: `bob chat` and
+- **S-005 and the Web interface spec (not yet written).** They present the front desk: `bob chat` and
   the web chat call `desk.get` and then the operations of REQ-021. S-003's listeners carry `desk.get` with no change,
   as they carry every catalogue operation.
 
@@ -1724,3 +1730,8 @@ behaviour. Deciding either one is a scope amendment of this spec.
 | 2026-11-05 | Same version, format only; no requirement changed. Restructured to the ai-team 0.19.0 spec layout: `## Architecture` is gone and `## Alternatives Considered` is a top-level section holding solution alternatives only. The design principles are dropped: each is a requirement, its rationale or an implementation constraint already recorded elsewhere. The system diagram, the responsibility table and the conversation's own document moved to `docs/development/architecture.md`. Definitions gain Entry routing, Role catalog and Role prompt, drawn from that table, because REQ-012, REQ-021, Workflow, Implementation Order and S-004 REQ-008 use them. Interfaces, Consumed: "S-002's configuration component" became "S-002's configuration loading". | ai-team 0.20.0 upgrade; specs say what, the architecture documents and ADRs say how | T-185 |
 | 2026-11-05 | v0.12. No behaviour changes (CR-001): technology and implementation words leave the requirement text, and each REQ keeps its guarantee. Changed: REQ-008, AC-008.6, REQ-012, REQ-017, REQ-021, AC-021.3, AC-021.5, REQ-022, AC-022.7, REQ-024, AC-024.1, REQ-026, AC-026.4, AC-026.9, with the copies in Purpose, Definitions, Exclusions, Interfaces, Workflow, Assumptions and Implementation Order. REQ-026's settlement outcomes are unchanged. The Entry routing, Role catalog and Role prompt rows leave Definitions; `docs/development/architecture.md` describes them. Worker thread and Exclusions now leave the process model to S-002 REQ-009 and ADR-001 decision 3. REQ-021 points to ADR-001 decision 4, which now holds "adds no lock of its own". Moved statements live in ADR-001 decision 4, ADR-003 and ADR-004 decision 3. No identifier added or retired. | CR-001, approved by the product owner. | None; spec text only |
 | 2026-11-05 | v0.13. REQ-026, AC-008.6 and Interfaces (the in-process job abort capability): on a lead's complete through its tool or a team member's `jobs.complete` or `jobs.cancel`, a closed mark that can't be set or an abort that fails, without a storage error, stops no other abort: the daemon tries to abort every conversation of the job, except a lead completing through its tool whose mark landed, and logs each failure. A compaction running in a conversation whose mark landed is aborted on these paths too, and is no longer an exception. The known exception narrows to a conversation whose own abort fails: on every path, the lead's complete tool included, it keeps running until the next start. An automatic compaction running apart from the run of a conversation without its mark still goes on until the next start, when rule 4 aborts it. Architecture consistency review, same version: the input of a conversation without its mark settles `unanswered` with reason `aborted` unless its own abort fails, and "no input starts a run" holds apart from the known exception (F2); AC-008.6's partial failure names a complete or cancel. The text requires the aborts after a failed mark, and neither requires nor forbids attempting the remaining marks. No identifier added or retired. | B-010, product owner decision of 2026-11-05: both failures count, and the compaction after a partial close on the lead's own-tool path is in scope. Product owner answers on the amendment, 2026-11-05. Architecture consistency review. | B-010 |
+| 2026-11-05 | v0.14. No behaviour changes. REQ-026: a closed conversation whose abort a crash left unfinished is aborted by S-004 REQ-018 rule 4 at the next start, with no model turn, in place of "before work resumes" (S-004 v0.12 REQ-018 states when each part takes effect). AC-001.1: the Verification line names the test as it is now, "lists the shipped roles bob, gp and desk through roles.list". Assumptions: S-005 exists, so it is no longer listed as not yet written. | spec-truth reconciliation: the text was stale against the built behaviour, and the Architect found no behaviour change (D1, D3, D4). | None; spec text only |
+| 2026-11-05 | spec-truth reconciliation — PASS | Work in 8e1eaa08..HEAD confirmed against v0.14; stale REQ-026 timing, AC-001.1 test name and assumptions corrected; earlier task logs sampled only | none |
+| 2026-11-07 | v0.15. REQ-008: an abort leaves no aborted conversation parked for reports, in place of parked of any kind; an abort that names the lead of a Blocked job leaves it parked for an answer (REQ-014), and the job's abort clears that park as it closes the lead (REQ-026); the block after a team member's abort parks the lead for an answer once the abort and its cascade have ended. AC-008.7 says "parked for reports" and adds the case of a Blocked job's lead, with a test that restarts the daemon. Workflow follows. No identifier added or retired. | Spec-truth reconciliation of S-006, finding F2, confirming the B-021 ruling: REQ-008 and AC-008.7 read wider than REQ-014, S-004 REQ-006 and S-004 REQ-018 rule 2, which are authoritative. The Architect amends ADR-001 decision 4 with this. | T-270 |
+| 2026-11-07 | spec-truth reconciliation — FAIL | REQ-008 and AC-008.7 read wider than REQ-014; an abort clears a Blocked lead's park; text tightened and follow-up routed; spec read in part | none |
+| 2026-11-07 | spec-truth reconciliation — PASS | v0.15 confirmed for REQ-008 and AC-008.7 against T-270; read limited to S-006's findings and 75c7c946..0604b54f | none |

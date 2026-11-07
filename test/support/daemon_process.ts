@@ -4,6 +4,7 @@
  * from the test process.
  */
 import { fork } from "node:child_process";
+import { createServer } from "node:net";
 import { join } from "node:path";
 import type { DeskCreatePoint } from "../../src/desk/desk_component.ts";
 import type { WritePoint } from "../../src/jobs/jobs_component.ts";
@@ -25,6 +26,15 @@ const READY_POLL_TIMEOUT_MS = 30_000;
  * so a partial answer is committed while the turn is still running.
  * `desk-steer`: an input `steer <conversationId>` makes the answering agent call `send_to_conversation` to that
  * conversation with the message `from-desk`, and its answer after the tool result is slow, so a kill lands in that run.
+ * `block-with-reason`: a lead blocks its job with the job's text as the reason; after an answer it waits until the test
+ * calls `releaseRuns()`, then sets a definition of done and completes the job.
+ * `invoke-many`: a lead's first answer is a parked invoke of 8 `gp` agents, whose answers wait until the test calls
+ * `releaseRuns()`.
+ * `long-output`: a lead's first answer, and that of any input after its old result is compacted away, calls a test tool
+ * whose result is 1 MiB of text; an input starting `text only: ` and a compaction summary request are answered with text.
+ * `long-output-failing-summary`: as `long-output`, but a compaction summary request is answered with a tool call, so
+ * the compaction fails.
+ * `desk-create-job`: an input `create job <text>` makes the answering agent call `create_job` with that text.
  * All of the others answer anything else with an echo.
  */
 export type FakeScript =
@@ -38,10 +48,44 @@ export type FakeScript =
     | "invoke-and-complete"
     | "gated"
     | "streaming-gated"
-    | "desk-steer";
+    | "desk-steer"
+    | "block-with-reason"
+    | "invoke-many"
+    | "long-output"
+    | "long-output-failing-summary"
+    | "desk-create-job";
 
 /** Recorded among the child's model requests at the point the host resumes, so a test can tell which came before. */
 export const RESUME_MARKER = "<host resumed>";
+
+/** The child's test operation that tells whether its network listener started and the port it is in use on. */
+export const NETWORK_STATE_OPERATION = "test.networkListener";
+
+const PORT_PICK_ATTEMPTS = 50;
+// Below Linux's default ephemeral range (32768-60999), so a socket the system numbers itself cannot take the port
+// between the pick and the daemon child's bind.
+const FIXED_PORT_LOW = 20_000;
+const FIXED_PORT_SPAN = 12_000;
+
+function canListenOn(port: number): Promise<boolean> {
+    return new Promise((resolve) => {
+        const server = createServer();
+        server.once("error", () => resolve(false));
+        server.listen(port, "127.0.0.1", () => server.close(() => resolve(true)));
+    });
+}
+
+/**
+ * A port nothing listens on at the moment, to pass as `fixedPort`. It is picked at random below the range the system
+ * hands out to other sockets, so no unrelated process takes it before the daemon child binds it.
+ */
+export async function freeLoopbackPort(): Promise<number> {
+    for (let attempt = 0; attempt < PORT_PICK_ATTEMPTS; attempt++) {
+        const port = FIXED_PORT_LOW + Math.floor(Math.random() * FIXED_PORT_SPAN);
+        if (await canListenOn(port)) return port;
+    }
+    throw new Error(`No free loopback port found in ${PORT_PICK_ATTEMPTS} attempts`);
+}
 
 export type StartDaemonOptions = {
     hermetic: HermeticEnv;
@@ -68,6 +112,20 @@ export type StartDaemonOptions = {
      * and its caller is still waiting, so the kill lands inside the steering tool call, before its result is saved.
      */
     killOnSteer?: boolean;
+    /**
+     * The child kills itself with `SIGKILL` in the `afterResume` of a component placed before the Jobs component: the
+     * host has resumed and the inputs the repair owes are not yet delivered.
+     */
+    killAfterResume?: boolean;
+    /**
+     * Adds the network listener, with a `[network]` section on the loopback address written to the instance's
+     * `config.toml` before the daemon starts. It listens on a free port, which `networkPort()` gives.
+     */
+    networkListener?: boolean;
+    /** With `networkListener`: listens on this port, so a restart finds the same address (see `freeLoopbackPort`). */
+    fixedPort?: number;
+    /** With `networkListener`: keeps the component and writes no `[network]` section, so it opens no port. */
+    omitNetworkSection?: boolean;
 };
 
 export type DaemonProcess = {
@@ -77,6 +135,8 @@ export type DaemonProcess = {
     release(): void;
     /** Lets the answers of the `gated` script through, now and from then on. */
     releaseRuns(): void;
+    /** The port the network listener is in use on; rejects when it listens on none. */
+    networkPort(): Promise<number>;
     stderr(): string;
     signal(sig: NodeJS.Signals): void;
     kill9(): void;
@@ -135,8 +195,13 @@ export function startDaemon(options: StartDaemonOptions): DaemonProcess {
             const failure = new Error(`The daemon child exited (code ${code}, signal ${signal}) before answering`);
             for (const request of pending.values()) request.reject(failure);
             pending.clear();
-            readyMessage.reject(failure);
             resolve({ code, signal });
+        });
+        // `close` follows `exit` once stderr has been read to its end, so the rejection can carry the child's error.
+        child.on("close", (code, signal) => {
+            const detail = stderrText.trim();
+            const reason = `The daemon child exited (code ${code}, signal ${signal}) before answering`;
+            readyMessage.reject(new Error(detail ? `${reason}: ${detail}` : reason));
         });
     });
 
@@ -187,6 +252,11 @@ export function startDaemon(options: StartDaemonOptions): DaemonProcess {
         invoke,
         release: () => child.send({ release: true }),
         releaseRuns: () => child.send({ releaseRuns: true }),
+        networkPort: async () => {
+            const state = (await invoke(NETWORK_STATE_OPERATION, {})) as { port?: number };
+            if (state.port === undefined) throw new Error("The daemon child has no network port in use");
+            return state.port;
+        },
         stderr: () => stderrText,
         signal: (sig) => child.kill(sig),
         kill9: () => child.kill("SIGKILL"),

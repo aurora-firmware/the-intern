@@ -4,6 +4,7 @@
  * with every input admission, control operation and creation of a conversation of the job, so none slips in between
  * the abort's listing of the job's conversations and its marks. The section is in-process: one daemon owns the database.
  */
+import type { JobStatus } from "../jobs/job_model.ts";
 import type { HarnessHost } from "./harness_host.ts";
 import { readConversationMeta } from "./seating.ts";
 
@@ -27,12 +28,12 @@ export class JobDoneError extends Error {
     }
 }
 
-type JobDoneCheck = (jobId: string) => Promise<boolean>;
+type JobStatusCheck = (jobId: string) => Promise<JobStatus | undefined>;
 type SectionHook = (conversationId: string) => void | Promise<void>;
 
 // The last section of each job that still holds or awaits work; a job with none has no entry.
 const sectionTails = new WeakMap<HarnessHost, Map<string, Promise<void>>>();
-const jobDoneChecks = new WeakMap<HarnessHost, JobDoneCheck>();
+const jobStatusChecks = new WeakMap<HarnessHost, JobStatusCheck>();
 const sectionHooks = new WeakMap<HarnessHost, SectionHook>();
 
 function tailsOf(host: HarnessHost): Map<string, Promise<void>> {
@@ -61,11 +62,14 @@ export function inJobSection<T>(host: HarnessHost, jobId: string, work: () => Pr
     return result;
 }
 
-/** Registers how the host learns that a job is Done. A new check replaces the old one; with none no job is Done. */
-export function setJobDoneCheck(host: HarnessHost, check: JobDoneCheck): () => void {
-    jobDoneChecks.set(host, check);
+/**
+ * Registers how the host learns a job's status. A new check replaces the old one; with none no job has a status. The
+ * check answers `undefined` for a job that does not exist.
+ */
+export function setJobStatusCheck(host: HarnessHost, check: JobStatusCheck): () => void {
+    jobStatusChecks.set(host, check);
     return () => {
-        if (jobDoneChecks.get(host) === check) jobDoneChecks.delete(host);
+        if (jobStatusChecks.get(host) === check) jobStatusChecks.delete(host);
     };
 }
 
@@ -77,13 +81,14 @@ export function setSectionHook(host: HarnessHost, hook: SectionHook): () => void
     };
 }
 
-async function isJobDone(host: HarnessHost, jobId: string): Promise<boolean> {
-    return (await jobDoneChecks.get(host)?.(jobId)) ?? false;
+/** Answers the job's status from the registered check, or `undefined` when there is none or the job does not exist. */
+export async function readJobStatus(host: HarnessHost, jobId: string): Promise<JobStatus | undefined> {
+    return jobStatusChecks.get(host)?.(jobId);
 }
 
 /** Throws `JobDoneError` when the registered check reports the job Done. */
 export async function refuseIfJobDone(host: HarnessHost, jobId: string): Promise<void> {
-    if (await isJobDone(host, jobId)) throw new JobDoneError(jobId);
+    if ((await readJobStatus(host, jobId)) === "done") throw new JobDoneError(jobId);
 }
 
 /**
@@ -93,7 +98,7 @@ export async function refuseIfJobDone(host: HarnessHost, jobId: string): Promise
 export async function isConversationClosed(host: HarnessHost, conversationId: string): Promise<boolean> {
     const meta = await readConversationMeta(host, conversationId);
     if (meta === undefined || meta.jobId === null) return false;
-    return meta.closed === true || (await isJobDone(host, meta.jobId));
+    return meta.closed === true || (await readJobStatus(host, meta.jobId)) === "done";
 }
 
 /** Throws `ConversationClosedError` when the conversation is closed, then awaits the test hook. Call it in the section. */

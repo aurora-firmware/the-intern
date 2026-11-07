@@ -5,15 +5,27 @@
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { CommitChange, ConversationId, EntryRecord, JsonObject, TaskId } from "@earendil-works/pi-durable";
+import type { Logger } from "../daemon/logger.ts";
 import { HostNotFoundError } from "./conversation_control.ts";
 import { parseConversationId, toConversationId } from "./conversation_id.ts";
 import { type HarnessHost, type HostEntry, internalHarness, toHostEntry } from "./harness_host.ts";
-import { CONVERSATION_META_KIND, type ConversationMeta } from "./seating.ts";
+import {
+    CONVERSATION_META_KIND,
+    type ConversationMeta,
+    SEAT_RECORD_KIND,
+    type SeatRecord,
+    type SeatSummary,
+} from "./seating.ts";
 
 const context = BACKGROUND_CONTEXT;
 
-export type ConversationView = { entries: HostEntry[]; live: unknown; inbox: unknown; busy: boolean };
-export type ConversationFrame = { view: ConversationView; ops: unknown[] };
+export type ConversationView = { live: unknown; inbox: unknown; busy: boolean };
+/** Where a conversation stands: its newest entry's id, or null when it has none, and its state (ADR-008 decision 1). */
+export type ConversationSnapshot = ConversationView & { newestEntryId: string | null };
+/** An entry as `conversations.entries` shows it: an assistant entry names the seat that produced it. */
+export type WatchedEntry = HostEntry & { seat?: SeatSummary };
+/** What one commit changed: the state, and the entries it added, in order (ADR-008 decision 2). */
+export type ConversationFrame = { view: ConversationView; entries: WatchedEntry[] };
 export type InstanceEvent = {
     type: "conversation_created" | "run_started" | "run_finished";
     conversationId: string;
@@ -31,10 +43,54 @@ function isViewBusy(docs: StructuralView["docs"]): boolean {
 
 function toConversationView(view: StructuralView): ConversationView {
     return {
-        entries: view.entries.map(toHostEntry),
         live: view.docs["pi.live"] ?? null,
         inbox: view.docs["pi.inbox"] ?? null,
         busy: isViewBusy(view.docs),
+    };
+}
+
+const ASSISTANT_ENTRY_KIND = "pi.assistant";
+
+function seatOfMeta(meta: ConversationMeta | undefined): SeatSummary | undefined {
+    if (meta === undefined || meta.seat.model === "") return undefined;
+    const { role, model, thinkingLevel, workspace } = meta.seat;
+    return { role, model, ...(thinkingLevel !== undefined && { thinkingLevel }), workspace };
+}
+
+// The seat at attachment: the latest seat record in the view, otherwise the conversation's document. A view without a
+// seat record holds no seat change, so the document's seat is the one that produced its entries.
+function seatAtAttachment(view: StructuralView): SeatSummary | undefined {
+    const record = view.entries.findLast((entry) => entry.kind === SEAT_RECORD_KIND);
+    if (record !== undefined) return (record.data as unknown as SeatRecord).next;
+    return seatOfMeta(view.docs[CONVERSATION_META_KIND] as unknown as ConversationMeta | undefined);
+}
+
+/**
+ * Follows what a watch has passed on: the newest entry id and the seat. `entriesAfterNewest` walks the view's entries
+ * for entries whose id is above the newest passed on. It reads the whole view, because a compaction puts its entry
+ * before the kept entries, which have lower ids, and it never looks for the newest id itself, because a compaction can
+ * remove it.
+ */
+function createEntryTracker(attached: StructuralView) {
+    let newestId = attached.entries.reduce<EntryRecord["id"] | undefined>(
+        (newest, entry) => (newest === undefined || Number(entry.id) > Number(newest) ? entry.id : newest),
+        undefined,
+    );
+    let seat = seatAtAttachment(attached);
+    return {
+        newestEntryId: newestId === undefined ? null : String(newestId),
+        entriesAfterNewest(view: StructuralView): WatchedEntry[] {
+            const added = view.entries
+                .filter((entry) => newestId === undefined || Number(entry.id) > Number(newestId))
+                .sort((a, b) => Number(a.id) - Number(b.id));
+            const last = added.at(-1);
+            if (last !== undefined) newestId = last.id;
+            return added.map((entry) => {
+                if (entry.kind === SEAT_RECORD_KIND) seat = (entry.data as unknown as SeatRecord).next;
+                const shown = toHostEntry(entry);
+                return entry.kind === ASSISTANT_ENTRY_KIND && seat !== undefined ? { ...shown, seat } : shown;
+            });
+        },
     };
 }
 
@@ -114,25 +170,26 @@ async function trackCommits(host: HarnessHost, onEvent: (event: InstanceEvent) =
 }
 
 /**
- * Watches one conversation. `snapshot` is its view at attachment; `onFrame` then runs once per commit that touches it,
- * in commit order, with nothing replayed.
+ * Watches one conversation. `snapshot` is where it stands at attachment; `onFrame` then runs once per commit that
+ * touches it, in commit order, with the entries that commit added and nothing replayed.
  */
 export async function watchConversation(
     host: HarnessHost,
     id: string,
     onFrame: (frame: ConversationFrame) => void,
-): Promise<{ snapshot: ConversationView; stop(): Promise<void> }> {
+): Promise<{ snapshot: ConversationSnapshot; stop(): Promise<void> }> {
     const harness = internalHarness(host);
     const numericId = parseConversationId(id);
     const conversation = numericId === undefined ? undefined : await harness.conversation(numericId, context);
     if (!conversation) throw new HostNotFoundError(`Conversation "${id}" does not exist.`);
 
     const watch = await conversation.watch(context);
-    const snapshot = toConversationView(watch.value);
+    const tracker = createEntryTracker(watch.value);
+    const snapshot = { newestEntryId: tracker.newestEntryId, ...toConversationView(watch.value) };
     let isStopped = false;
-    watch.start(async (view, ops) => {
+    watch.start(async (view) => {
         if (isStopped) return;
-        onFrame({ view: toConversationView(view), ops: [...ops] });
+        onFrame({ view: toConversationView(view), entries: tracker.entriesAfterNewest(view) });
     });
     return {
         snapshot,
@@ -173,6 +230,38 @@ export async function watchConversationMeta(
             const meta = change.value as unknown as ConversationMeta;
             if (meta.jobId === "") continue;
             listener({ conversationId: String(change.conversationId), meta });
+        }
+    });
+    return {
+        stop() {
+            isStopped = true;
+            unsubscribe();
+        },
+    };
+}
+
+const COMPACTION_TASK_KIND = "pi.compaction";
+
+/**
+ * Logs each compaction that ends `failed` or `faulted` to standard error with its conversation: pi-durable records
+ * such a failure only in the task's outcome, never as an entry or a report, and nothing else in the host reads it.
+ * Only commits after the call are heard; a failure from before a restart is not replayed.
+ */
+export function logCompactionFailures(host: HarnessHost, logger: Logger): { stop(): void } {
+    let isStopped = false;
+    const unsubscribe = internalHarness(host).subscribeCommits((publication) => {
+        if (isStopped) return;
+        for (const change of publication.changes) {
+            if (change.type !== "task" || change.value.kind !== COMPACTION_TASK_KIND) continue;
+            const { state } = change.value;
+            if (state.status !== "terminal") continue;
+            const { outcome } = state;
+            if (outcome.status !== "failed" && outcome.status !== "faulted") continue;
+            logger.error("compaction failed", {
+                conversation: String(change.value.conversationId),
+                outcome: outcome.status,
+                cause: outcome.error?.message ?? "",
+            });
         }
     });
     return {

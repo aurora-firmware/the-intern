@@ -5,6 +5,7 @@
 import type { IncomingMessage } from "node:http";
 import type { DaemonComponent } from "../daemon/daemon.ts";
 import type { ObservedDetails } from "../service/operations.ts";
+import { createExportRoute, type ExportRoute, removeExportLeftovers } from "./export_route.ts";
 import { createHttpFront, type Fallback } from "./http_front.ts";
 import { type ListenerServer, startListenerServer } from "./listener_server.ts";
 import { networkSection } from "./network_section.ts";
@@ -27,22 +28,35 @@ export type NetworkListenerOptions = {
     freePort?: boolean;
     /** Answers the requests the front has no route for; the web interface files by default. */
     fallback?: Fallback;
+    /** Test-only: the free bytes of the file system holding the export folder, instead of reading it. */
+    readFreeSpace?: (folder: string) => Promise<number>;
 };
 
 export function createNetworkListenerComponent(options: NetworkListenerOptions = {}): NetworkListenerComponent {
     let listener: ListenerServer | undefined;
     let inUse: { host: string; port: number } | undefined;
+    let exportRoute: ExportRoute | undefined;
     return {
         name: "network listener",
         async start(ctx) {
+            await removeExportLeftovers(ctx.dirs.stateDir, ctx.logger);
             const settings = ctx.config.current(networkSection);
             if (settings === undefined) return;
             const port = options.freePort ? ANY_FREE_PORT : settings.port;
+            const route = createExportRoute({
+                invoke: (name, input, caller) => ctx.catalogue.invoke(name, input, caller),
+                wayIn: "web interface",
+                observe: observePeer,
+                logger: ctx.logger,
+                ...(options.readFreeSpace && { readFreeSpace: options.readFreeSpace }),
+            });
+            exportRoute = route;
+            const otherFiles = options.fallback ?? createStaticFiles(WEB_UI_DIR);
             const front = createHttpFront({
                 catalogue: ctx.catalogue,
                 wayIn: "web interface",
                 observe: observePeer,
-                fallback: options.fallback ?? createStaticFiles(WEB_UI_DIR),
+                fallback: async (req, res) => (await route(req, res)) || (await otherFiles(req, res)),
             });
             const started = await startListenerServer(front, { host: settings.address, port });
             listener = started;
@@ -54,7 +68,10 @@ export function createNetworkListenerComponent(options: NetworkListenerOptions =
             const running = listener;
             listener = undefined;
             inUse = undefined;
+            const route = exportRoute;
+            exportRoute = undefined;
             await running?.stop();
+            await route?.settled();
         },
         address: () => inUse,
     };

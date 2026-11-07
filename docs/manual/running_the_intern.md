@@ -61,7 +61,16 @@ reason. Run `chmod 700` on the directory, or choose another one with the flag.
 The `jobs.export` operation writes a copy of the whole database to a new file while The Intern keeps working. Give it
 `path`, an absolute path to a file that doesn't exist yet in a folder that does. It returns the path and the size
 written.
-From the command line, run [`bob export <file>`](commands.md#bob-export-file).
+From the command line, run [`bob export <file>`](commands.md#bob-export-file). That is the way in for a file on the
+machine itself.
+
+The network listener also serves the same copy as a download: `GET /export` answers with the copy as a file. The
+[web interface](web_interface.md#download-a-copy-of-the-database) uses it on the Status page.
+
+- One download runs at a time. A second request while one runs is refused as `409 busy`.
+- If the disk has too little free space for the copy, the request is refused as `409 conflict`.
+- The service account's owner-only protection covers the copy while it is on the service's machine. The file a client
+  saves is on the client's machine, and it isn't owner-only there.
 
 - The copy holds the jobs, their worklogs and histories, and the conversations and queued work, as committed when the
   copy started. It doesn't hold `config.toml`, so back that up on its own.
@@ -177,13 +186,14 @@ Both keys are required, and the section takes no other key. Choose a fixed port 
   names the address, the port and the reason. Free the port or fix the address, then start the service again.
 
 After a restart, open `http://<address>:<port>/` in a browser, with the machine's address or host name on your network,
-for example `http://192.168.1.20:8080/`. Until the web interface is released, the page reads "The web interface comes
-later."
+for example `http://192.168.1.20:8080/`. It redirects to the Board, the first page of the web interface. See
+[The web interface](web_interface.md) for the pages.
 
 ::: warning No login and no encryption
 The network listener has no login and no encryption. Anyone who can reach its address and port can use The Intern,
-with the service account's access, and what they send and receive crosses the network as plain text. Limit who can
-reach that address with your network setup, for example with a firewall.
+with the service account's access, and what they send and receive crosses the network as plain text. Anyone who can
+reach the listener can also take a copy of the whole database, with whatever agents' tool output wrote into it. Limit
+who can reach that address with your network setup, for example with a firewall.
 :::
 
 ## Who can use The Intern

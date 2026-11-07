@@ -12,6 +12,7 @@ import type { Seat } from "../roles/role_model.ts";
 import {
     abortConversation,
     compactConversation,
+    hasQueuedUserInput,
     type InputRecord,
     submissionIdFor,
     submitInput,
@@ -19,7 +20,7 @@ import {
 import { toConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { findCreatedConversation } from "./idempotency.ts";
-import { inJobSection, inOpenConversation } from "./job_section.ts";
+import { inJobSection, inOpenConversation, readJobStatus } from "./job_section.ts";
 import {
     type ContextMode,
     type ConversationMeta,
@@ -313,17 +314,36 @@ export async function continueWithHeld(host: HarnessHost, conversationId: string
     await clearHeld(host, conversationId);
 }
 
-// One commit per conversation (ADR-001 decision 4): an aborted conversation is left neither parked nor waiting for
-// a report, and its held messages are withdrawn as an abort withdraws queued input. The same commit marks a lone
-// abort of an invoked conversation (`isReportOwed`), so its invoker is owed an "aborted" report.
-async function clearWaiting(host: HarnessHost, conversationId: string, isReportOwed = false): Promise<void> {
+// One commit per conversation (ADR-001 decision 4): an aborted conversation is left neither parked for reports nor
+// waiting for a report, and its held messages are withdrawn as an abort withdraws queued input. A lead's park for an
+// answer stays: it is the lead of a Blocked job, which the job's abort closes (S-001 REQ-008, REQ-014). The same
+// commit marks a lone abort of an invoked conversation (`isReportOwed`), so its invoker is owed an "aborted" report.
+async function clearWaiting(
+    host: HarnessHost,
+    conversationId: string,
+    marks: { isReportOwed?: boolean; stopped?: string | null } = {},
+): Promise<void> {
     if ((await readConversationMeta(host, conversationId)) === undefined) return;
     await updateMeta(host, conversationId, (meta) => {
-        meta.parked = null;
+        if (!(meta.isLead && meta.parked?.waitingFor === "answer")) meta.parked = null;
         meta.awaiting = [];
         meta.held = [];
-        if (isReportOwed) meta.aborted = true;
+        if (marks.isReportOwed === true) meta.aborted = true;
+        if (marks.stopped != null) meta.stopped = marks.stopped;
     });
+}
+
+// A team member's abort of a lead marks it when the abort stops something: the lead is running, has input queued, is
+// parked or awaits a report, and its job is In progress. The caller reads this before clearing.
+async function stopMarkDue(host: HarnessHost, conversationId: string, meta: ConversationMeta | undefined) {
+    if (meta === undefined || !meta.isLead || meta.jobId === null) return null;
+    if ((await readJobStatus(host, meta.jobId)) !== "in_progress") return null;
+    const isStopping =
+        (await host.conversationInfo(conversationId))?.busy === true ||
+        (await hasQueuedUserInput(host, conversationId)) ||
+        meta.parked !== null ||
+        meta.awaiting.length > 0;
+    return isStopping ? host.readNewestEntryId(conversationId) : null;
 }
 
 // The abort's root owes a report only when it was invoked and its invoker still awaits it.
@@ -339,30 +359,73 @@ async function clearRecursively(
     conversationId: string,
     cleared: Set<string>,
     isRoot = false,
-): Promise<void> {
-    if (cleared.has(conversationId)) return;
+): Promise<boolean> {
+    if (cleared.has(conversationId)) return false;
     // Read before clearing: the list is what the cascade follows. A conversation that was not seated has no
     // invocation links and awaits nothing.
     const meta = await readConversationMeta(host, conversationId);
     const isReportOwed = isRoot && (await isReportOwedTo(host, meta, conversationId));
     cleared.add(conversationId);
     // Cleared before any abort, so no cascaded run finds its invoker still waiting.
-    await clearWaiting(host, conversationId, isReportOwed);
+    const stopped = isRoot ? await stopMarkDue(host, conversationId, meta) : null;
+    await clearWaiting(host, conversationId, { isReportOwed, stopped });
     for (const awaitedId of meta?.awaiting ?? []) await clearRecursively(host, awaitedId, cleared);
+    return stopped !== null;
+}
+
+type LeadStoppedListener = (leadId: string) => void;
+
+const leadStoppedListeners = new WeakMap<HarnessHost, LeadStoppedListener[]>();
+
+/**
+ * Registers a listener that is called once an abort that set a stop mark on a lead has ended, its cascade included.
+ * An abort of a parked lead ends no run, so this is what tells the turn-end rule. Returns the function that removes it.
+ */
+export function onLeadStopped(host: HarnessHost, listener: LeadStoppedListener): () => void {
+    const listeners = leadStoppedListeners.get(host) ?? [];
+    listeners.push(listener);
+    leadStoppedListeners.set(host, listeners);
+    return () => {
+        const index = listeners.indexOf(listener);
+        if (index >= 0) listeners.splice(index, 1);
+    };
+}
+
+type LeadMarkedListener = (leadId: string) => void | Promise<void>;
+
+const leadMarkedListeners = new WeakMap<HarnessHost, LeadMarkedListener[]>();
+
+/**
+ * Test-only: registers a listener that is awaited once an abort has committed a stop mark on a lead and before
+ * pi-durable's abort starts, so a test can act in that window. Returns the function that removes it.
+ */
+export function onLeadStopMarked(host: HarnessHost, listener: LeadMarkedListener): () => void {
+    const listeners = leadMarkedListeners.get(host) ?? [];
+    listeners.push(listener);
+    leadMarkedListeners.set(host, listeners);
+    return () => {
+        const index = listeners.indexOf(listener);
+        if (index >= 0) listeners.splice(index, 1);
+    };
 }
 
 /**
  * Aborts the conversation, then every conversation it still awaits a report from, recursively, whether it is
  * steerable or parked. An invoked conversation that has reported has left `awaiting` and is not touched. No aborted
- * conversation stays parked, waits for a report or keeps held messages. A closed conversation is refused with
+ * conversation stays parked for reports, waits for a report or keeps held messages; the lead of a Blocked job stays
+ * parked for an answer. A closed conversation is refused with
  * `ConversationClosedError`. The check and the clearing commits run in the job's section; the aborts wait for the
  * runs to end, so they run after the section is released.
  */
 export async function abortWithAwaited(host: HarnessHost, conversationId: string): Promise<string[]> {
     const cleared = new Set<string>();
-    await inOpenConversation(host, conversationId, () => clearRecursively(host, conversationId, cleared, true));
+    const isMarked = await inOpenConversation(host, conversationId, () =>
+        clearRecursively(host, conversationId, cleared, true),
+    );
     const aborted = [...cleared];
+    if (isMarked) for (const listener of [...(leadMarkedListeners.get(host) ?? [])]) await listener(conversationId);
     for (const id of aborted) await abortConversation(host, id);
+    if (isMarked) for (const listener of [...(leadStoppedListeners.get(host) ?? [])]) listener(conversationId);
     return aborted;
 }
 

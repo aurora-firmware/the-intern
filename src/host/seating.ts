@@ -65,6 +65,8 @@ export type ConversationMeta = JobLinks & {
     aborted: boolean;
     /** Set when the job is Done; a document written without it reads as not closed, and nothing clears it. */
     closed?: boolean;
+    /** The entry ID a team member's abort of the job's lead marked; a document without it reads as not marked. */
+    stopped?: string;
 };
 export type SeatChange = { seat: Seat; actor: SeatActor; contextMode?: ContextMode; note?: string };
 

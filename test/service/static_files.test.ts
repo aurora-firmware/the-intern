@@ -29,9 +29,9 @@ afterEach(async () => {
     for (const env of envs.splice(0)) await env.dispose();
 });
 
-function get(target: Target, path: string): Promise<Answer> {
+function get(target: Target, path: string, headers: Record<string, string> = {}): Promise<Answer> {
     return new Promise((resolve, reject) => {
-        const call = request({ ...target, method: "GET", path });
+        const call = request({ ...target, method: "GET", path, headers });
         call.once("error", reject);
         call.once("response", (response) => {
             const chunks: Buffer[] = [];
@@ -84,6 +84,12 @@ async function filesIn(env: HermeticEnv): Promise<string> {
     await writeFile(join(root, "assets", "logo.svg"), "<svg/>");
     await writeFile(join(root, "assets", "logo.png"), "png");
     await writeFile(join(root, "assets", "data.json"), "{}");
+    await writeFile(join(root, "page.ts"), "const n: number = 1;\nexport const m = (n as number) + 1;\n");
+    await writeFile(join(root, "broken.ts"), "enum Color {\n    Red,\n}\nexport { Color };\n");
+    await writeFile(join(root, "util.mjs"), "export {};");
+    await writeFile(join(root, "assets", "font.woff2"), "woff");
+    await writeFile(join(root, "assets", "icon.ico"), "ico");
+    await writeFile(join(root, "assets", "licence.txt"), "text");
     await writeFile(join(env.root, "secret.txt"), LEAKED_CONTENT);
     await symlink(join(env.root, "secret.txt"), join(root, "linked.txt"));
     return root;
@@ -99,7 +105,7 @@ describe("static files on the network listener", () => {
         assert.equal(answer.headers.location, "/ui/");
     });
 
-    it("serves the shipped placeholder page at /ui/ naming The Intern", async () => {
+    it("serves the shipped page at /ui/ naming The Intern", async () => {
         const { network } = await startDaemon();
 
         const answer = await get(network, "/ui/");
@@ -158,5 +164,120 @@ describe("static files on the network listener", () => {
 
         assert.equal((await get(socket, "/")).status, 404);
         assert.equal((await get(socket, "/ui/")).status, 404);
+    });
+
+    it("serves .ts files as JavaScript with their types stripped and every line in its place", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const root = await filesIn(env);
+        const { network } = await startDaemon(createStaticFiles(root));
+
+        const answer = await get(network, "/ui/page.ts");
+
+        assert.equal(answer.status, 200);
+        assert.equal(answer.headers["content-type"], "text/javascript; charset=utf-8");
+        assert.ok(!answer.body.includes(": number"), "the annotation is stripped");
+        assert.ok(!answer.body.includes(" as number"), "the assertion is stripped");
+        assert.equal(answer.body.split("\n").length, 3);
+        assert.match(answer.body, /const n\s*=\s*1;/);
+    });
+
+    it("serves the other new content types", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const root = await filesIn(env);
+        const { network } = await startDaemon(createStaticFiles(root));
+        const expected: Record<string, string> = {
+            "/ui/util.mjs": "text/javascript; charset=utf-8",
+            "/ui/assets/font.woff2": "font/woff2",
+            "/ui/assets/icon.ico": "image/x-icon",
+            "/ui/assets/licence.txt": "text/plain; charset=utf-8",
+        };
+
+        for (const [path, contentType] of Object.entries(expected)) {
+            const answer = await get(network, path);
+            assert.equal(answer.status, 200, path);
+            assert.equal(answer.headers["content-type"], contentType, path);
+        }
+    });
+
+    it("serves the four table addresses and answers 404 for any other address outside the folder", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const root = await filesIn(env);
+        const { network } = await startDaemon(createStaticFiles(root));
+
+        for (const path of [
+            "/ui/client/client.ts",
+            "/ui/client/browser_transport.ts",
+            "/ui/vendor/preact.mjs",
+            "/ui/vendor/hooks.mjs",
+        ]) {
+            const answer = await get(network, path);
+            assert.equal(answer.status, 200, path);
+            assert.equal(answer.headers["content-type"], "text/javascript; charset=utf-8", path);
+        }
+        const client = await get(network, "/ui/client/client.ts");
+        assert.match(client.body, /createClient/);
+        assert.ok(!client.body.includes("export type StreamEvent ="), "the types are stripped");
+        for (const path of [
+            "/ui/client/node_transport.ts",
+            "/ui/client/",
+            "/ui/vendor/other.mjs",
+            "/ui/vendor/",
+            "/ui/client/../../src/client/node_transport.ts",
+        ]) {
+            assert.equal((await get(network, path)).status, 404, path);
+        }
+    });
+
+    it("sends no-cache and an ETag, and answers 304 to a matching If-None-Match", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const root = await filesIn(env);
+        const { network } = await startDaemon(createStaticFiles(root));
+
+        for (const path of ["/ui/page.ts", "/ui/assets/logo.png", "/ui/vendor/preact.mjs"]) {
+            const first = await get(network, path);
+            const etag = first.headers.etag;
+            assert.equal(first.headers["cache-control"], "no-cache", path);
+            assert.equal(typeof etag, "string", path);
+
+            const again = await get(network, path, { "if-none-match": String(etag) });
+            assert.equal(again.status, 304, path);
+            assert.equal(again.headers["cache-control"], "no-cache", path);
+            assert.equal(again.headers.etag, etag, path);
+            assert.equal(again.body, "", path);
+
+            const other = await get(network, path, { "if-none-match": '"other"' });
+            assert.equal(other.status, 200, path);
+        }
+    });
+
+    it("answers 500 internal for a .ts file that cannot be stripped", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const root = await filesIn(env);
+        const { network } = await startDaemon(createStaticFiles(root));
+
+        const answer = await get(network, "/ui/broken.ts");
+
+        assert.equal(answer.status, 500);
+        assert.equal(JSON.parse(answer.body).error.code, "internal");
+        assert.equal(answer.headers["cache-control"], "no-cache");
+    });
+
+    it("serves the new stripped text after a .ts file changes", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const root = await filesIn(env);
+        const { network } = await startDaemon(createStaticFiles(root));
+        const before = await get(network, "/ui/page.ts");
+
+        await writeFile(join(root, "page.ts"), "export const changed: string = 'yes';\n");
+        const after = await get(network, "/ui/page.ts");
+
+        assert.match(after.body, /changed/);
+        assert.notEqual(after.headers.etag, before.headers.etag);
     });
 });
