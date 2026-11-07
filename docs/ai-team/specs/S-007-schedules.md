@@ -1,7 +1,7 @@
 ---
 id: S-007
 title: Schedules
-version: '0.2'
+version: '0.3'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-07'
 author: planner
@@ -141,7 +141,7 @@ with no listener change. Each returns S-002's errors. An entry is named by its `
 | `schedules.create` | control | `name`, `cron`, `request`, optional `role`, `model`, `thinkingLevel`, `workspace`, `idempotencyKey` | the new entry; `invalid_input`, `conflict` | REQ-001, REQ-003 |
 | `schedules.change` | control | `name` and the values to change; an optional value can be cleared | the entry; `not_found`, `invalid_input`, `conflict` | REQ-001, REQ-003 |
 | `schedules.remove` | control | `name` | nothing; `not_found`, `conflict` | REQ-003 |
-| `schedules.run` | control | `name`, `idempotencyKey` | the new job; `not_found`, `busy`, `invalid_input` | REQ-008 |
+| `schedules.run` | control | `name`, optional `idempotencyKey` | the new job; `not_found`, `busy`, `invalid_input` | REQ-008 |
 
 A scheduled run in `schedules.runs` carries its short number, fire time, whether it was run on demand, status, and
 resolution with justification once Done. A skipped fire carries its due time, its reason and, for an open scheduled run,
@@ -494,12 +494,13 @@ A repeated call with the same idempotency key SHALL return the original job (S-0
 #### AC-008.1 — Run now starts a scheduled run
 
 - **Given:** an entry with no open scheduled run
-- **When:** a team member runs `bob schedules run <name>` and calls it again with the same key through the operation
+- **When:** a team member calls `schedules.run` over the local socket, and again with the same key; and separately runs
+  `bob schedules run <name>`
 - **Then:** one job `S-n` exists, its origin records the entry, on demand and way in `command line`, and the next due
   time is unchanged; the same call through the network listener records way in `web interface` with the remote address
   and port
 
-**Verification:** test — `test/service/schedule_fires.test.ts`.
+**Verification:** test — `test/service/schedule_fires.test.ts`, `test/service/bob_cli.test.ts`.
 
 #### AC-008.2 — Run now while a scheduled run is open
 
@@ -793,3 +794,4 @@ None. Feature Architecture settled the scheduling library question (`docs/develo
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-11-07 | v0.2. REQ-007: the daemon can't see a sleep, so a due time within a minute of the daemon's next check still fires. REQ-013 and Interfaces: an interrupted tool call settles as an error and isn't repeated, and a same-id call acts once. REQ-001, AC-001.1: a cron that can never be due is refused. REQ-003, AC-003.4: removing a role is refused when an entry names its per-role default workspace, because the next start would otherwise stop. Open Questions closed. | Feature Architecture spec findings, 2026-11-07. No approved journey changes. | S-007's tasks |
+| 2026-11-07 | v0.3. Interfaces and AC-008.1: `schedules.run`'s key is optional, as for `roles.create`, and the command takes none; the same-key repeat is tested through the operation. | Gate 2 review of the task plan. | T-305, T-313 |
