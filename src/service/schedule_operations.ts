@@ -1,6 +1,6 @@
 /**
- * The schedule operations (S-007 REQ-009, REQ-001): `schedules.list` and `schedules.get`, and `schedules.create`, which
- * checks the entry and writes it to the configuration file as one step.
+ * The schedule operations (S-007 REQ-009, REQ-001): `schedules.list` and `schedules.get`, and `schedules.create`,
+ * `schedules.change` and `schedules.remove`, which check the entry and write the configuration file as one step.
  */
 import { isDeepStrictEqual } from "node:util";
 import type { AgentsComponent } from "../agents/agents_component.ts";
@@ -18,6 +18,7 @@ import { defineOperation, type Operation, ServiceError } from "./operations.ts";
 
 const CREATE_SCOPE = "schedules.create";
 type CreateInput = { entry: Record<string, unknown>; idempotencyKey?: string };
+type ChangeInput = { name: string; change: Record<string, unknown> };
 
 export type ScheduleView = ScheduleEntry & { nextDueTime: string };
 
@@ -34,6 +35,24 @@ function parseCreate(raw: unknown): CreateInput {
         throw new Error("idempotencyKey must be a string");
     }
     return idempotencyKey === undefined ? { entry } : { entry, idempotencyKey };
+}
+
+function parseChange(raw: unknown): ChangeInput {
+    const { name } = parseName(raw);
+    const { name: _name, ...change } = raw as Record<string, unknown>;
+    return { name, change };
+}
+
+// A value absent from the change stays; `null` drops the key, so an optional value is cleared and a required one
+// fails the check as missing.
+function mergeChange(entry: ScheduleEntry, change: Record<string, unknown>): Record<string, unknown> {
+    const merged: Record<string, unknown> = { ...entry };
+    for (const [key, value] of Object.entries(change)) {
+        if (value === undefined) continue;
+        if (value === null) delete merged[key];
+        else merged[key] = value;
+    }
+    return merged;
 }
 
 async function mappingRefusals<T>(action: () => Promise<T>): Promise<T> {
@@ -59,6 +78,8 @@ export function scheduleOperations(
         nextDueTime: localTimeText(nextDueTime(parseCron(entry.cron), component.clock.now())),
     });
 
+    const missing = (name: string) => new ServiceError("not_found", `There is no schedule entry named "${name}".`);
+
     const listOperation = defineOperation<ServiceContext, Record<string, never>, { schedules: ScheduleView[] }>({
         name: "schedules.list",
         kind: "read",
@@ -72,7 +93,7 @@ export function scheduleOperations(
         parse: parseName,
         run: async ({ config }, { name }) => {
             const entry = config.current(scheduleSection).find((candidate) => candidate.name === name);
-            if (entry === undefined) throw new ServiceError("not_found", `There is no schedule entry named "${name}".`);
+            if (entry === undefined) throw missing(name);
             return { schedule: view(entry) };
         },
     });
@@ -132,7 +153,46 @@ export function scheduleOperations(
             ),
     });
 
+    const changeOperation = defineOperation<ServiceContext, ChangeInput, { schedule: ScheduleView }>({
+        name: "schedules.change",
+        kind: "control",
+        parse: parseChange,
+        run: ({ config }, { name, change }) =>
+            mappingRefusals(async () => {
+                let changed: ScheduleEntry | undefined;
+                await config.update(scheduleSection, (current) => {
+                    const entry = current.find((candidate) => candidate.name === name);
+                    if (entry === undefined) throw missing(name);
+                    const merged = checkEntry(mergeChange(entry, change));
+                    checkSeat(merged);
+                    changed = merged;
+                    return current.map((candidate) => (candidate === entry ? merged : candidate));
+                });
+                return { schedule: view(changed as ScheduleEntry) };
+            }),
+    });
+
+    const removeOperation = defineOperation<ServiceContext, { name: string }, Record<string, never>>({
+        name: "schedules.remove",
+        kind: "control",
+        parse: parseName,
+        run: ({ config }, { name }) =>
+            mappingRefusals(async () => {
+                await config.update(scheduleSection, (current) => {
+                    if (!current.some((candidate) => candidate.name === name)) throw missing(name);
+                    return current.filter((candidate) => candidate.name !== name);
+                });
+                return {};
+            }),
+    });
+
     // biome-ignore lint/suspicious/noExplicitAny: heterogeneous operations cannot share a narrower type
-    const operations: Operation<ServiceContext, any, any>[] = [listOperation, getOperation, createOperation];
+    const operations: Operation<ServiceContext, any, any>[] = [
+        listOperation,
+        getOperation,
+        createOperation,
+        changeOperation,
+        removeOperation,
+    ];
     return operations;
 }
