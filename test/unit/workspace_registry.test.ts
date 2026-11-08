@@ -106,6 +106,36 @@ describe("createWorkspaceRegistry", () => {
         assert.equal(registry.isRegistered(path), true);
     });
 
+    it("refuses to unregister a folder a reference source names, naming each referrer, and changes nothing", async () => {
+        const registry = await makeRegistry();
+        const folder = await makeFolder("project");
+        await registry.register(folder);
+        registry.addReferenceSource({
+            name: "schedules",
+            referrersOf: (path) => (path === folder ? ["nightly", "weekly"] : []),
+        });
+        const before = await fileText();
+        await assert.rejects(registry.unregister(folder), (error: unknown) => {
+            assert.ok(error instanceof WorkspaceRefusedError);
+            assert.equal(error.path, folder);
+            assert.match(error.reason, /schedules: nightly/);
+            assert.match(error.reason, /schedules: weekly/);
+            return true;
+        });
+        assert.equal(registry.isRegistered(folder), true);
+        assert.equal(await fileText(), before);
+    });
+
+    it("unregisters a folder that no reference source names", async () => {
+        const registry = await makeRegistry();
+        const folder = await makeFolder("project");
+        const other = await makeFolder("other");
+        await registry.register(folder);
+        registry.addReferenceSource({ name: "schedules", referrersOf: (path) => (path === other ? ["nightly"] : []) });
+        await registry.unregister(folder);
+        assert.equal(registry.isRegistered(folder), false);
+    });
+
     it("removes an unregistered folder from the file and reports it not registered", async () => {
         const registry = await makeRegistry();
         const folder = await makeFolder("project");

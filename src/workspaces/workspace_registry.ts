@@ -4,6 +4,9 @@ import { checkWorkspaceFolder, ensureRoleWorkspace } from "./workspace_folder.ts
 
 export type WorkspaceListing = { path: string; kind: "registered" | "role_default"; role?: string };
 
+/** Something that names registered workspaces, such as a schedule entry. `referrersOf` names each one that names `path`. */
+export type WorkspaceReferenceSource = { name: string; referrersOf(path: string): string[] };
+
 export type WorkspaceRegistry = {
     list(): WorkspaceListing[];
     isRegistered(path: string): boolean;
@@ -11,6 +14,7 @@ export type WorkspaceRegistry = {
     unregister(path: string): Promise<void>;
     ensureRoleDefault(role: string): Promise<string>;
     checkConfigured(): Promise<void>;
+    addReferenceSource(source: WorkspaceReferenceSource): void;
 };
 
 export type WorkspaceRegistryOptions = {
@@ -36,6 +40,7 @@ export function createWorkspaceRegistry(options: WorkspaceRegistryOptions): Work
     const { config, dataDir, account, defaultWorkspaceUsers } = options;
     // Per-role default workspaces are never written to the file, so they are tracked here, path to role.
     const roleDefaults = new Map<string, string>();
+    const referenceSources: WorkspaceReferenceSource[] = [];
 
     const registered = (): string[] => config.current(workspacesSection).registered;
     const isRegistered = (path: string): boolean => registered().includes(path) || roleDefaults.has(path);
@@ -61,6 +66,12 @@ export function createWorkspaceRegistry(options: WorkspaceRegistryOptions): Work
             if (users.length > 0) {
                 throw new WorkspaceRefusedError(path, `it is the default workspace of the roles ${users.join(", ")}`);
             }
+            const referrers = referenceSources.flatMap((source) =>
+                source.referrersOf(path).map((referrer) => `${source.name}: ${referrer}`),
+            );
+            if (referrers.length > 0) {
+                throw new WorkspaceRefusedError(path, `it is named by ${referrers.join(", ")}`);
+            }
             if (!registered().includes(path)) return;
             await config.change(workspacesSection, { registered: registered().filter((entry) => entry !== path) });
         },
@@ -71,6 +82,9 @@ export function createWorkspaceRegistry(options: WorkspaceRegistryOptions): Work
         },
         async checkConfigured() {
             for (const path of registered()) await checkWorkspaceFolder(path, account);
+        },
+        addReferenceSource(source) {
+            referenceSources.push(source);
         },
     };
 }
