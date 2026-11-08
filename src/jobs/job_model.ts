@@ -13,9 +13,12 @@ export type JobAuthor =
     | { kind: "team_member"; wayIn: string; observed?: ObservedDetails }
     | { kind: "daemon" };
 
+/** How a team member started a scheduled job on demand; recorded in the job's origin only. */
+export type JobOriginOnDemand = { wayIn: string; observed?: ObservedDetails; frontDesk?: string };
+
 export type JobOrigin =
     | { kind: "request"; wayIn: string; observed?: ObservedDetails; frontDesk?: string }
-    | { kind: "schedule"; entry: string; fireTime: string }
+    | { kind: "schedule"; entry: string; fireTime: string; onDemand?: JobOriginOnDemand }
     | { kind: "follow_up"; jobId: string; conversationId: string };
 
 const REQUEST_LETTERS: Readonly<Record<string, Letter>> = { "command line": "C", "web interface": "W", email: "E" };
