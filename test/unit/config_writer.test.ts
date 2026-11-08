@@ -30,7 +30,19 @@ const labelSection = defineConfigSection<{ label: string }>({
     serialize: (value) => ({ label: value.label }),
 });
 
-const sections = [limitsSection, labelSection];
+type Entry = { id: string };
+
+const entriesSection = defineConfigSection<Entry[]>({
+    name: "entry",
+    defaults: () => [],
+    parse(table) {
+        if (!Array.isArray(table)) throw new ConfigValueError("entry", "must be an array of tables");
+        return table.map((item) => ({ id: String((item as Entry).id) }));
+    },
+    serialize: (value) => value.map((entry) => ({ id: entry.id })),
+});
+
+const sections = [limitsSection, labelSection, entriesSection];
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
@@ -217,5 +229,60 @@ describe("createConfigStore", () => {
 
         assert.deepEqual(reloaded.values.get("limits"), { max: 5 });
         assert.deepEqual(reloaded.values.get("label"), { label: "x" });
+    });
+
+    it("writes an array section as [[name]] sections that loadConfig reads back to the same value", async () => {
+        const store = await openStore();
+        await store.change(entriesSection, [{ id: "a" }, { id: "b" }]);
+
+        assert.equal(await readFile(file, "utf8"), '[[entry]]\nid = "a"\n\n[[entry]]\nid = "b"\n');
+        const reloaded = await loadConfig(file, sections);
+        assert.deepEqual(reloaded.values.get("entry"), [{ id: "a" }, { id: "b" }]);
+    });
+
+    it("writes nothing for an array section that equals its default", async () => {
+        const store = await openStore();
+        await store.change(entriesSection, [{ id: "a" }]);
+        await store.change(entriesSection, []);
+        assert.doesNotMatch(await readFile(file, "utf8"), /entry/);
+    });
+
+    it("applies concurrent updates in turn, each seeing the result of the one before", async () => {
+        const store = await openStore();
+        await Promise.all([
+            store.update(entriesSection, async (current) => [...current, { id: "a" }]),
+            store.update(entriesSection, (current) => [...current, { id: "b" }]),
+        ]);
+        assert.deepEqual(store.current(entriesSection), [{ id: "a" }, { id: "b" }]);
+        assert.deepEqual((await loadConfig(file, sections)).values.get("entry"), [{ id: "a" }, { id: "b" }]);
+    });
+
+    it("rejects an update with conflict and leaves the file as it is when the file changed on disk", async () => {
+        const store = await openStore();
+        await writeFile(file, "[limits]\nmax = 9\n");
+        await assert.rejects(
+            store.update(entriesSection, (current) => [...current, { id: "a" }]),
+            (error) => error instanceof ConfigChangeRefused && error.kind === "conflict",
+        );
+        assert.equal(await readFile(file, "utf8"), "[limits]\nmax = 9\n");
+    });
+
+    it("rejects with the error a throwing update function raised and leaves the file and value unchanged", async () => {
+        const store = await openStore();
+        await store.update(entriesSection, () => [{ id: "a" }]);
+        const before = await readFile(file, "utf8");
+        const boom = new Error("boom");
+
+        await assert.rejects(
+            store.update(entriesSection, () => {
+                throw boom;
+            }),
+            (error) => error === boom,
+        );
+
+        assert.equal(await readFile(file, "utf8"), before);
+        assert.deepEqual(store.current(entriesSection), [{ id: "a" }]);
+        await store.update(entriesSection, (current) => [...current, { id: "b" }]);
+        assert.deepEqual(store.current(entriesSection), [{ id: "a" }, { id: "b" }]);
     });
 });
