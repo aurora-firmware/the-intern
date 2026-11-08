@@ -46,7 +46,7 @@ accepted ADRs win over this document; when they disagree, fix this document. The
 - **pi-durable sits behind a narrow host module plus the-intern's own extensions** (ADR-001). Nothing else imports
   pi-durable. The API changes between releases; this keeps an upgrade to a few files.
 - **Every job source ends in the same service operation.** A way in or a job source (a team member, a schedule, a
-  trigger, a follow-up) submits through the service layer. Knowledge of one source stays in that source; the core
+  follow-up) submits through the service layer. Knowledge of one source stays in that source; the core
   never learns source names.
 - **One source of truth per fact.** Runtime state lives in the one database file. Conversations, memos and the
   daemon's own facts about a conversation are pi-durable documents. Jobs live in the job store's `intern_` tables,
