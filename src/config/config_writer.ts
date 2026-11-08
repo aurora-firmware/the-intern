@@ -32,6 +32,7 @@ export class ConfigChangeRefused extends Error {
 export type ConfigStore = {
     current<T>(section: ConfigSection<T>): T;
     change<T>(section: ConfigSection<T>, next: T): Promise<void>;
+    update<T>(section: ConfigSection<T>, change: (current: T) => T | Promise<T>): Promise<void>;
     onChange(listener: (change: { section: string }) => void): () => void;
 };
 
@@ -124,12 +125,19 @@ export function createConfigStore(
         notifyListeners(section.name);
     }
 
+    function enqueue(job: () => Promise<void>): Promise<void> {
+        const result = queue.then(job);
+        queue = result.catch(() => undefined);
+        return result;
+    }
+
     return {
         current: <T>(section: ConfigSection<T>) => values.get(section.name) as T,
         change(section, next) {
-            const result = queue.then(() => applyChange(section, next));
-            queue = result.catch(() => undefined);
-            return result;
+            return enqueue(() => applyChange(section, next));
+        },
+        update(section, change) {
+            return enqueue(async () => applyChange(section, await change(values.get(section.name) as never)));
         },
         onChange(listener) {
             listeners.add(listener);

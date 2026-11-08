@@ -8,7 +8,7 @@ export type ConfigSection<T> = {
     name: string;
     defaults(): T;
     parse(table: unknown): T;
-    serialize(value: T): Record<string, unknown>;
+    serialize(value: T): Record<string, unknown> | Record<string, unknown>[];
 };
 
 export type LoadedConfig = {
