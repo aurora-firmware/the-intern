@@ -126,6 +126,11 @@ export type StartDaemonOptions = {
     fixedPort?: number;
     /** With `networkListener`: keeps the component and writes no `[network]` section, so it opens no port. */
     omitNetworkSection?: boolean;
+    /**
+     * The time (an ISO instant) the schedules' test clock starts at. With it, the child's operation `test.setClock`
+     * moves the clock forward or back; without it, the real clock runs.
+     */
+    scheduleClock?: string;
 };
 
 export type DaemonProcess = {

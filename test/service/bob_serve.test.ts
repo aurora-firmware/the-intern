@@ -3,6 +3,9 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { createClient } from "../../src/client/client.ts";
+import { nodeTransport } from "../../src/client/node_transport.ts";
+import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { guardProcess } from "../support/process_guard.ts";
 
@@ -12,8 +15,13 @@ const USAGE_EXIT_STATUS = 2;
 
 const envs: HermeticEnv[] = [];
 const children: ChildProcess[] = [];
+const daemons: DaemonProcess[] = [];
 
 afterEach(async () => {
+    for (const daemon of daemons.splice(0)) {
+        daemon.kill9();
+        await daemon.exited;
+    }
     for (const child of children.splice(0)) child.kill("SIGKILL");
     for (const env of envs.splice(0)) await env.dispose();
 });
@@ -144,5 +152,62 @@ describe("bob serve", () => {
 
         assert.ok(!quiet.stderr().includes(" DEBUG "), quiet.stderr());
         assert.ok(verbose.stderr().includes(" DEBUG "), verbose.stderr());
+    });
+
+    describe("schedules", () => {
+        const NIGHTLY = '[[schedule]]\nname = "nightly"\ncron = "*/15 * * * *"\nrequest = "Tidy up"\n';
+
+        type Listed = { schedules: { name: string; nextDueTime: string }[] };
+
+        it("answers schedules.list over the local socket with the entry of a [[schedule]] section", async () => {
+            const env = await hermetic();
+            await writeFile(join(env.configDir, "config.toml"), NIGHTLY);
+            const serve = run(["serve", ...directoryFlags(env)], env);
+            await serve.untilStderr(" ready ");
+
+            const client = createClient(nodeTransport({ socketPath: join(env.runtimeDir, "bob.sock") }));
+            const listed = (await client.invoke("schedules.list", {})) as Listed;
+
+            assert.deepEqual(
+                listed.schedules.map((schedule) => schedule.name),
+                ["nightly"],
+            );
+            serve.signal("SIGTERM");
+            await serve.exit;
+        });
+
+        it("exits non-zero naming the file, the entry and the reason when a [[schedule]] section holds an unknown key", async () => {
+            const env = await hermetic();
+            const configFile = join(env.configDir, "config.toml");
+            await writeFile(configFile, `${NIGHTLY}colour = "red"\n`);
+            const serve = run(["serve", ...directoryFlags(env)], env);
+
+            const status = await serve.exit;
+
+            assert.notEqual(status, 0);
+            for (const text of [configFile, "nightly", "is not a schedule setting"]) {
+                assert.ok(serve.stderr().includes(text), `${text} missing from: ${serve.stderr()}`);
+            }
+        });
+
+        it("computes next due times from the scheduleClock and moves them with test.setClock forward and back", async () => {
+            const env = await hermetic();
+            await writeFile(join(env.configDir, "config.toml"), NIGHTLY);
+            const daemon = startDaemon({ hermetic: env, script: "echo", scheduleClock: "2026-03-10T10:07:00.000Z" });
+            daemons.push(daemon);
+            await daemon.ready;
+            const nextDue = async () =>
+                Date.parse(((await daemon.invoke("schedules.list", {})) as Listed).schedules[0]?.nextDueTime ?? "");
+
+            const first = await nextDue();
+            await daemon.invoke("test.setClock", { time: "2026-03-10T12:31:00.000Z" });
+            const forward = await nextDue();
+            await daemon.invoke("test.setClock", { time: "2026-03-10T08:01:00.000Z" });
+            const back = await nextDue();
+
+            assert.equal(first, Date.parse("2026-03-10T10:15:00.000Z"));
+            assert.equal(forward, Date.parse("2026-03-10T12:45:00.000Z"));
+            assert.equal(back, Date.parse("2026-03-10T08:15:00.000Z"));
+        });
     });
 });
