@@ -19,7 +19,7 @@ import {
     type Resolution,
 } from "./job_model.ts";
 
-export const JOB_SCHEMA_VERSION = 2;
+export const JOB_SCHEMA_VERSION = 3;
 
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 500;
@@ -62,6 +62,17 @@ export class JobRefusedError extends Error {
     }
 }
 
+/** A start of a schedule entry refused because a job of that entry is still To do or In progress (S-007 REQ-006). */
+export class OpenScheduledRunError extends Error {
+    readonly openRun: string;
+
+    constructor(openRun: string) {
+        super(`A job of this schedule entry is still open: ${openRun}.`);
+        this.name = "OpenScheduledRunError";
+        this.openRun = openRun;
+    }
+}
+
 export type Job = {
     id: string;
     number: string;
@@ -88,6 +99,8 @@ export type NewJob = {
     idempotencyKey?: string;
     /** A job to relate the new one to, written in the insert's own transaction. */
     relatedTo?: string;
+    /** The schedule entry that fires the job and the UTC time it fired. Refused while a job of the entry is open. */
+    schedule?: { entry: string; firedAt: string };
     /** Who authors that Related link in the history. The daemon when omitted. */
     author?: JobAuthor;
     /** The role, model, thinking level and workspace overrides and the seat actor the lead starts with. Opaque here. */
@@ -98,6 +111,8 @@ export type JobListFilter = {
     status?: JobStatus;
     letter?: Letter;
     relatedTo?: string;
+    /** Only the jobs of this schedule entry. */
+    schedule?: string;
     limit?: number;
     cursor?: string;
 };
@@ -205,6 +220,19 @@ export const JOB_MIGRATIONS: readonly string[] = [
     CREATE INDEX intern_related_by_b ON intern_related (job_b);
     `,
     "ALTER TABLE intern_jobs ADD COLUMN blocked_after_entry TEXT;",
+    `
+    ALTER TABLE intern_jobs ADD COLUMN schedule_entry TEXT;
+    ALTER TABLE intern_jobs ADD COLUMN schedule_fired_at TEXT;
+    CREATE INDEX intern_jobs_by_schedule ON intern_jobs (schedule_entry, schedule_fired_at);
+    CREATE TABLE intern_schedule_skips (
+        entry TEXT NOT NULL,
+        due_at TEXT NOT NULL,
+        due_time TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        open_run TEXT,
+        PRIMARY KEY (entry, due_at)
+    );
+    `,
 ];
 
 if (JOB_MIGRATIONS.length !== JOB_SCHEMA_VERSION) throw new Error("JOB_SCHEMA_VERSION and MIGRATIONS are out of step");
@@ -362,6 +390,10 @@ async function listConditions(
         where.push(RELATED_TO_SQL);
         params.push(id, id);
     }
+    if (filter.schedule !== undefined) {
+        where.push("j.schedule_entry = ?");
+        params.push(filter.schedule);
+    }
     if (filter.cursor !== undefined) {
         const cursor = decodeCursor(filter.cursor);
         where.push("(j.created_at < ? OR (j.created_at = ? AND j.rowid < ?))");
@@ -403,6 +435,14 @@ async function allocateNumber(tx: HostSqlExecutor, letter: Letter): Promise<numb
 
 type Inserted = { job: Job; created: boolean; changes: JobChange[] };
 
+async function refuseOpenScheduledRun(tx: HostSqlExecutor, entry: string): Promise<void> {
+    const open = await tx.get<{ letter: Letter; n: number }>(
+        "SELECT letter, n FROM intern_jobs WHERE schedule_entry = ? AND status IN ('to_do', 'in_progress') LIMIT 1",
+        entry,
+    );
+    if (open) throw new OpenScheduledRunError(formatNumber(open.letter, open.n));
+}
+
 async function insertIn(tx: HostSqlExecutor, input: NewJob): Promise<Inserted> {
     if (input.idempotencyKey !== undefined) {
         const existing = await tx.get<JobRow>(
@@ -411,13 +451,14 @@ async function insertIn(tx: HostSqlExecutor, input: NewJob): Promise<Inserted> {
         );
         if (existing) return { job: await toJob(tx, existing), created: false, changes: [] };
     }
+    if (input.schedule !== undefined) await refuseOpenScheduledRun(tx, input.schedule.entry);
     const n = await allocateNumber(tx, input.letter);
     const id = randomUUID();
     const now = new Date().toISOString();
     await tx.run(
         `INSERT INTO intern_jobs (id, letter, n, title, description, definition_of_done, status, request_text, origin,
-            stated_by, lead_start, idempotency_key, created_at, updated_at)
-         VALUES (?, ?, ?, ?, '', '', 'to_do', ?, ?, ?, ?, ?, ?, ?)`,
+            stated_by, lead_start, idempotency_key, created_at, updated_at, schedule_entry, schedule_fired_at)
+         VALUES (?, ?, ?, ?, '', '', 'to_do', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id,
         input.letter,
         n,
@@ -429,6 +470,8 @@ async function insertIn(tx: HostSqlExecutor, input: NewJob): Promise<Inserted> {
         input.idempotencyKey ?? null,
         now,
         now,
+        input.schedule?.entry ?? null,
+        input.schedule?.firedAt ?? null,
     );
     const changes: JobChange[] = [];
     if (input.relatedTo !== undefined) {
@@ -702,7 +745,13 @@ export function createJobStore(db: HostDatabase, options: JobStoreOptions = {}):
         try {
             return await db.transaction(body);
         } catch (error) {
-            if (!(error instanceof JobRefusedError || error instanceof JobNotFoundError))
+            if (
+                !(
+                    error instanceof JobRefusedError ||
+                    error instanceof JobNotFoundError ||
+                    error instanceof OpenScheduledRunError
+                )
+            )
                 options.onWriteFailure?.(error);
             throw error;
         }
