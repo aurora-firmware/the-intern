@@ -11,7 +11,12 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import { createSeatedConversation, readConversationMeta, SEAT_RECORD_KIND } from "../../src/host/seating.ts";
 import { createJobsComponent, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import { LEAD_DUTY } from "../../src/prompt/role_prompt.ts";
-import { type LeadStart, startLeadConversation } from "../../src/service/job_operations.ts";
+import {
+    type LeadStart,
+    MAX_KEY_LENGTH,
+    ScheduledRunBusyError,
+    startLeadConversation,
+} from "../../src/service/job_operations.ts";
 import { type Caller, ServiceError } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -21,6 +26,7 @@ const SETTLE_MS = 400;
 const quietLogger = createLogger({ stream: { write: () => true } });
 const caller: Caller = { actor: { kind: "team_member", wayIn: "cli" } };
 const cliCaller: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
+const scheduleOrigin = { kind: "schedule", entry: "nightly", fireTime: "2026-10-31T02:00:00Z" } as const;
 const requestOrigin = { kind: "request", wayIn: "cli" } as const;
 
 const envs: HermeticEnv[] = [];
@@ -403,22 +409,92 @@ describe("jobs.create", () => {
         assert.equal((await started.create({ text }, cliCaller)).number, "C-2");
     });
 
-    it("refuses an override named by a job source or an agent, using no number", async () => {
+    it("refuses an override named by an agent, using no number", async () => {
         const started = await start();
         const parent = await started.create({ text }, cliCaller);
         const agent: Caller = { actor: { kind: "agent", conversationId: parent.leadConversation as string } };
+        const before = await started.conversationCount();
+
+        assert.equal(await refusalCode(started.create({ text, model: "x" }, agent)), "invalid_input");
+
+        assert.equal(await started.conversationCount(), before);
+        assert.equal((await started.create({ text }, agent)).number, "A-1");
+    });
+
+    it("seats a scheduled job's lead with the role, model, thinking level and workspace the job source names", async () => {
+        const started = await start();
+        const workspace = await started.folder("scheduled");
         const source: Caller = { actor: { kind: "job_source", source: "s" } };
-        const schedule = { kind: "schedule", entry: "nightly", fireTime: "2026-10-31T02:00:00Z" };
+        const overrides = { model: `${started.provider}/model-two`, thinkingLevel: "low", workspace };
+
+        const job = await started.create({ text, role: "gp", ...overrides, origin: scheduleOrigin }, source);
+
+        const meta = await readConversationMeta(started.ctx.host, job.leadConversation as string);
+        assert.equal(meta?.seat.role, "gp");
+        assert.equal(meta?.seat.thinkingLevel, "low");
+        assert.equal(meta?.seat.workspace, workspace);
+        const [record] = (await started.seatRecords(job.leadConversation as string)) as { actor: unknown }[];
+        assert.deepEqual(record?.actor, { kind: "job_source", source: "s" });
+    });
+
+    it("records a scheduled job's on-demand details in the job's origin and leaves them out of the conversation's", async () => {
+        const started = await start();
+        const source: Caller = { actor: { kind: "job_source", source: "s" } };
+        const onDemand = { wayIn: "email", observed: { messageId: "<m@x>", sender: "ana@example.org" } };
+
+        const job = await started.create({ text, origin: { ...scheduleOrigin, onDemand } }, source);
+
+        assert.deepEqual(job.request.origin, { ...scheduleOrigin, onDemand });
+        const meta = await readConversationMeta(started.ctx.host, job.leadConversation as string);
+        assert.deepEqual(meta?.origin, scheduleOrigin);
+    });
+
+    it("refuses a team member's or an agent's schedule origin, creating nothing", async () => {
+        const started = await start();
+        const parent = await started.create({ text }, cliCaller);
+        const agent: Caller = { actor: { kind: "agent", conversationId: parent.leadConversation as string } };
         const before = await started.conversationCount();
 
         const refused = [
-            started.create({ text, thinkingLevel: "low", origin: schedule }, source),
-            started.create({ text, model: "x" }, agent),
+            started.create({ text, origin: scheduleOrigin }, cliCaller),
+            started.create({ text, origin: scheduleOrigin }, agent),
         ];
 
         for (const call of refused) assert.equal(await refusalCode(call), "invalid_input");
         assert.equal(await started.conversationCount(), before);
-        assert.equal((await started.create({ text, origin: schedule }, source)).number, "S-1");
+        assert.equal((await started.create({ text }, cliCaller)).number, "C-2");
+    });
+
+    it("refuses a second start of a schedule entry while its job is open with busy naming the number, using no number", async () => {
+        const started = await start();
+        const source: Caller = { actor: { kind: "job_source", source: "s" } };
+        const first = await started.create({ text, origin: scheduleOrigin }, source);
+        const before = await started.conversationCount();
+        const again = { ...scheduleOrigin, fireTime: "2026-11-01T02:00:00Z" };
+
+        const error = await started.create({ text, origin: again }, source).then(
+            () => undefined,
+            (thrown: unknown) => thrown,
+        );
+
+        assert.ok(error instanceof ScheduledRunBusyError);
+        assert.equal(error.code, "busy");
+        assert.equal(error.openRun, first.number);
+        assert.match(error.message, new RegExp(first.number));
+        assert.equal(await started.conversationCount(), before);
+        const other = { ...again, entry: "weekly" };
+        assert.equal((await started.create({ text, origin: other }, source)).number, "S-2");
+    });
+
+    it("accepts a job source's idempotency key longer than a caller's limit", async () => {
+        const started = await start();
+        const source: Caller = { actor: { kind: "job_source", source: "s" } };
+        const idempotencyKey = "k".repeat(MAX_KEY_LENGTH + 20);
+
+        const job = await started.create({ text, idempotencyKey, origin: scheduleOrigin }, source);
+
+        assert.equal(job.number, "S-1");
+        assert.equal(await refusalCode(started.create({ text, idempotencyKey }, cliCaller)), "invalid_input");
     });
 
     it("refuses a job source naming no origin, a request or a follow-up, using no number", async () => {

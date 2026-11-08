@@ -10,8 +10,8 @@ import { submitInput } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { ConversationClosedError, inJobSection, JobDoneError, refuseIfJobDone } from "../host/job_section.ts";
 import { createSeatedConversation, type Origin, readConversationMeta, type SeatActor } from "../host/seating.ts";
-import { type JobAuthor, type JobOrigin, letterFor } from "../jobs/job_model.ts";
-import { type Job, JobNotFoundError, JobRefusedError } from "../jobs/job_store.ts";
+import { type JobAuthor, type JobOrigin, type JobOriginOnDemand, letterFor } from "../jobs/job_model.ts";
+import { type Job, JobNotFoundError, JobRefusedError, OpenScheduledRunError } from "../jobs/job_store.ts";
 import type { JobsComponentOptions } from "../jobs/jobs_component.ts";
 import { LEAD_DUTY } from "../prompt/role_prompt.ts";
 import { RoleRefusedError } from "../roles/role_catalog.ts";
@@ -21,7 +21,7 @@ import { type Caller, defineOperation, ServiceError } from "./operations.ts";
 import { seatActorFor } from "./seat_operations.ts";
 
 type LeadOrigin = Exclude<Origin, { kind: "invocation" | "front_desk" }>;
-type SourceOrigin = Extract<LeadOrigin, { kind: "schedule" }>;
+type SourceOrigin = Extract<JobOrigin, { kind: "schedule" }>;
 type Overrides = { model?: string; thinkingLevel?: string; workspace?: string };
 type StartLeadResult = { conversationId: string; created: boolean };
 
@@ -45,13 +45,22 @@ function requireString(record: Record<string, unknown>, field: string): string {
     return value;
 }
 
+function parseOnDemand(raw: unknown): JobOriginOnDemand {
+    const record = asRecord(raw, "origin.onDemand");
+    const onDemand: JobOriginOnDemand = { wayIn: requireString(record, "wayIn") };
+    if (record.observed !== undefined) onDemand.observed = asRecord(record.observed, "origin.onDemand.observed");
+    if (record.frontDesk !== undefined) onDemand.frontDesk = requireString(record, "frontDesk");
+    return onDemand;
+}
+
 function parseOrigin(raw: unknown): SourceOrigin {
     const record = asRecord(raw, "origin");
     const kind = record.kind as LeadOrigin["kind"];
     const fields = ORIGIN_FIELDS[kind];
     if (fields === undefined) throw new Error(`origin.kind must be one of ${Object.keys(ORIGIN_FIELDS).join(", ")}`);
-    const origin: Record<string, string> = { kind };
+    const origin: Record<string, unknown> = { kind };
     for (const field of fields) origin[field] = requireString(record, field);
+    if (kind === "schedule" && record.onDemand !== undefined) origin.onDemand = parseOnDemand(record.onDemand);
     return origin as SourceOrigin;
 }
 
@@ -137,6 +146,17 @@ export async function startLeadConversation(
     return result;
 }
 
+/** A start of a schedule entry refused because a job of that entry is still open (S-007 REQ-006). */
+export class ScheduledRunBusyError extends ServiceError {
+    readonly openRun: string;
+
+    constructor(openRun: string) {
+        super("busy", `A job of this schedule entry is still open: ${openRun}.`);
+        this.name = "ScheduledRunBusyError";
+        this.openRun = openRun;
+    }
+}
+
 export type JobView = Job & { leadConversation?: string };
 
 export type CreateJobRequest = {
@@ -153,7 +173,7 @@ export type CreateJobRequest = {
     related?: boolean;
 };
 
-const MAX_KEY_LENGTH = 200;
+export const MAX_KEY_LENGTH = 200;
 const CREATE_STRING_FIELDS = [
     "title",
     "statedBy",
@@ -233,6 +253,7 @@ async function describeCaller(host: HarnessHost, request: CreateJobRequest, call
 function storeRefusal(error: unknown): unknown {
     if (error instanceof JobRefusedError) return new ServiceError(error.code, error.message);
     if (error instanceof JobNotFoundError) return new ServiceError("not_found", error.message);
+    if (error instanceof OpenScheduledRunError) return new ScheduledRunBusyError(error.openRun);
     return error;
 }
 
@@ -248,7 +269,7 @@ export async function leadConversationOf(host: HarnessHost, jobId: string): Prom
 function leadOrigin(origin: JobOrigin): Origin {
     if (origin.kind === "request") return { kind: "request", wayIn: origin.wayIn };
     if (origin.kind === "follow_up") return { kind: "follow_up", conversationId: origin.conversationId };
-    return origin;
+    return { kind: "schedule", entry: origin.entry, fireTime: origin.fireTime };
 }
 
 type StoredLeadStart = { role?: string; overrides: Overrides; actor: SeatActor };
@@ -287,18 +308,17 @@ function checkBeforeWrite(
             "A job needs a way in with a letter: command line, web interface or email",
         );
     }
-    if (request.idempotencyKey !== undefined && request.idempotencyKey.length > MAX_KEY_LENGTH) {
+    // A job source's key carries a prefix its caller already checked against MAX_KEY_LENGTH.
+    const isJobSource = origin.kind === "schedule";
+    if (!isJobSource && request.idempotencyKey !== undefined && request.idempotencyKey.length > MAX_KEY_LENGTH) {
         throw new ServiceError("invalid_input", `idempotencyKey must have 1 to ${MAX_KEY_LENGTH} characters`);
     }
     const overrides: Overrides = {};
     for (const field of OVERRIDE_FIELDS) {
         if (request[field] !== undefined) overrides[field] = request[field];
     }
-    if (origin.kind !== "request" && Object.keys(overrides).length > 0) {
-        throw new ServiceError(
-            "invalid_input",
-            `A ${origin.kind} job source cannot name a model, thinking level or workspace`,
-        );
+    if (origin.kind === "follow_up" && Object.keys(overrides).length > 0) {
+        throw new ServiceError("invalid_input", "A follow-up cannot name a model, thinking level or workspace");
     }
     try {
         options.agents.runtime().catalog.seatFor(request.role ?? DEFAULT_LEAD_ROLE, overrides);
@@ -330,6 +350,7 @@ export async function createJob(
             letter,
             requestText: request.text,
             origin,
+            ...(origin.kind === "schedule" && { schedule: { entry: origin.entry, firedAt: origin.fireTime } }),
             ...(request.title !== undefined && { title: request.title }),
             ...(request.statedBy !== undefined && { statedBy: request.statedBy }),
             ...(request.idempotencyKey !== undefined && { idempotencyKey: request.idempotencyKey }),
