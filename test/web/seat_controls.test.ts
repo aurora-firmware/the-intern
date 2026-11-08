@@ -6,6 +6,7 @@ import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts"
 import { startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
 const WAIT_MS = 30_000;
+const ATTEMPT_MS = 5_000;
 const POLL_MS = 100;
 const TEST_TIMEOUT_MS = 120_000;
 const NEW_ROLE = "gp";
@@ -65,20 +66,41 @@ async function startRig(script: FakeScript): Promise<Rig> {
 const sectionOf = (page: Page, rig: Rig) => page.locator(`main details.activity[data-conversation="${rig.lead}"]`);
 const settingsOf = (page: Page, rig: Rig) => sectionOf(page, rig).locator(".conversation-settings");
 
+/**
+ * Opens the settings and waits for the seat form. A failed read of the choices leaves the form out until the area is
+ * reopened (S-006), so an attempt that sees no form closes and reopens the area.
+ */
 async function openSettings(page: Page, rig: Rig): Promise<void> {
     await page.goto(pageUrl(rig.port, `/ui/#/jobs/${rig.job.number}`));
     const settings = settingsOf(page, rig);
-    await settings.locator("> summary").click({ timeout: WAIT_MS });
-    await settings.locator(".seat-role option", { hasText: NEW_ROLE }).waitFor({ state: "attached", timeout: WAIT_MS });
+    const summary = settings.locator("> summary");
+    const option = settings.locator(".seat-role option", { hasText: NEW_ROLE });
+    const deadline = Date.now() + WAIT_MS;
+    await summary.click({ timeout: WAIT_MS });
+    for (;;) {
+        const remaining = deadline - Date.now();
+        try {
+            await option.waitFor({ state: "attached", timeout: Math.max(1, Math.min(ATTEMPT_MS, remaining)) });
+            return;
+        } catch (error) {
+            if (remaining <= ATTEMPT_MS) throw error;
+        }
+        await summary.click({ timeout: WAIT_MS });
+        await summary.click({ timeout: WAIT_MS });
+    }
 }
 
 const countOf = async (rig: Rig, kind: string) =>
     (await entriesOf(rig.daemon, rig.lead)).filter((entry) => entry.kind === kind).length;
 
-async function openPage(t: TestContext, options: { script?: FakeScript; isProxied?: boolean } = {}) {
+async function openPage(
+    t: TestContext,
+    options: { script?: FakeScript; isProxied?: boolean; unavailableOnce?: string } = {},
+) {
     const rig = await startRig(options.script ?? "echo");
-    const proxy = options.isProxied ? await startWebProxy() : undefined;
+    const proxy = options.isProxied || options.unavailableOnce !== undefined ? await startWebProxy() : undefined;
     if (proxy !== undefined) proxies.push(proxy);
+    if (options.unavailableOnce !== undefined) proxy?.forceUnavailable(options.unavailableOnce);
     const browser = await launchBrowser(t, "chrome", proxy && { proxyPort: proxy.port });
     if (browser === undefined) return undefined;
     const page = await browser.newPage();
@@ -87,6 +109,14 @@ async function openPage(t: TestContext, options: { script?: FakeScript; isProxie
 }
 
 describe("compact, reset and change seat on the Job page in chrome", () => {
+    it("offers the seat form after one failed read of the choices", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const opened = await openPage(t, { unavailableOnce: "models.list" });
+        if (opened === undefined) return;
+        const { rig, page } = opened;
+
+        t.assert.equal(await settingsOf(page, rig).locator(".seat-role option", { hasText: NEW_ROLE }).count(), 1);
+    });
+
     it("shows a new seat in the section's label and as an entry, with no reload", {
         timeout: TEST_TIMEOUT_MS,
     }, async (t) => {
@@ -155,10 +185,12 @@ describe("compact, reset and change seat on the Job page in chrome", () => {
 
         proxy?.forceUnavailable("conversations.compact");
         await settings.locator(".compact-run").click();
+        const release = proxy?.holdUnavailable("daemon.status");
 
         await page.waitForSelector(BANNER, { timeout: WAIT_MS });
         for (const control of [".compact-run", ".reset-open", ".seat-change"]) {
             t.assert.equal(await settings.locator(control).isDisabled(), true, control);
         }
+        release?.();
     });
 });

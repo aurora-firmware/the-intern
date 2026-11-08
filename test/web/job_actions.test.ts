@@ -188,6 +188,7 @@ describe("editing, finishing and relating a job from its page in chrome", () => 
 
         proxy.forceUnavailable("jobs.update");
         await page.click(`${ACTIONS} .job-edit button`);
+        const release = proxy.holdUnavailable("daemon.status");
 
         await page.waitForSelector(BANNER, { timeout: WAIT_MS });
         await waitFor(page, `document.querySelectorAll(${JSON.stringify(`${ACTIONS} button`)}).length > 0`);
@@ -196,5 +197,6 @@ describe("editing, finishing and relating a job from its page in chrome", () => 
             `[...document.querySelectorAll(${JSON.stringify(`${ACTIONS} button`)})].every((button) => button.disabled)`,
         );
         t.assert.equal(await page.locator(".refusal").count(), 0);
+        release();
     });
 });
