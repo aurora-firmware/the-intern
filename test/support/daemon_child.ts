@@ -27,10 +27,12 @@ import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts"
 import { createNetworkListenerComponent, type NetworkListenerComponent } from "../../src/listeners/network_listener.ts";
 import { networkSection } from "../../src/listeners/network_section.ts";
 import type { InternModels } from "../../src/models/model_runtime.ts";
+import { createSchedulesComponent } from "../../src/schedules/schedules_component.ts";
 import { createJob, type JobView } from "../../src/service/job_operations.ts";
 import { type Caller, defineOperation, ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
 import { NETWORK_STATE_OPERATION, RESUME_MARKER, type StartDaemonOptions } from "./daemon_process.ts";
 import { createFakeModel, type FakeReply, type FakeTranscript } from "./fake_model.ts";
+import { createTestClock, type TestClock } from "./schedule_rig.ts";
 import { createTestOperations, type StorageSwitch } from "./test_operations.ts";
 
 const TEAM_MEMBER: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
@@ -488,6 +490,21 @@ function submissionStateOperation() {
     });
 }
 
+/** Moves the schedules' test clock to a time, forward or back. */
+function setClockOperation(clock: TestClock) {
+    return defineOperation<ServiceContext, { time: string }, Record<string, never>>({
+        name: "test.setClock",
+        kind: "control",
+        parse: (raw) => raw as { time: string },
+        async run(_ctx, { time }) {
+            const moved = new Date(time);
+            if (Number.isNaN(moved.getTime())) throw new Error(`test.setClock needs an ISO time, got ${time}`);
+            clock.set(moved);
+            return {};
+        },
+    });
+}
+
 type NetworkState = { hasStarted: boolean; port?: number };
 
 /** The network listener, noting that its start hook ran. */
@@ -601,12 +618,20 @@ async function main(): Promise<void> {
         logger,
         ...(switches.deskCrashAt !== undefined && { afterCreate: killingDeskAt(switches.deskCrashAt) }),
     });
+    const testClock =
+        switches.scheduleClock === undefined ? undefined : createTestClock(new Date(switches.scheduleClock));
+    const schedules = await createSchedulesComponent({
+        agents,
+        jobs,
+        logger,
+        ...(testClock && { clock: testClock }),
+    });
     const daemon = runDaemon({
         flags,
         env: process.env,
         homeDir: process.env.HOME ?? "",
         logger,
-        sections: [...agents.sections, networkSection],
+        sections: [...agents.sections, ...schedules.sections, networkSection],
         // The jobs and desk components and the local socket follow the agents component, as in `src/cli/bob.ts`.
         components: [
             // First, so its hook runs in the tick that resumes the host, before any model request can start.
@@ -619,6 +644,7 @@ async function main(): Promise<void> {
             ...(switches.killAfterResume ? [killAfterResumeComponent()] : []),
             jobs.component,
             desk.component,
+            schedules.component,
             createLocalSocketComponent(),
             ...(network ? [network.component] : []),
             ...createComponents(switches, hold.promise),
@@ -627,6 +653,8 @@ async function main(): Promise<void> {
             ...agents.operations,
             ...jobs.operations,
             ...desk.operations,
+            ...schedules.operations,
+            ...(testClock ? [setClockOperation(testClock)] : []),
             blockJobOperation(jobs),
             createJobCancelledBeforeLeadOperation(jobs),
             cancelJobsThenKillOperation(jobs),
