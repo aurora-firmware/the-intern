@@ -200,9 +200,11 @@ describe("stopping and redirecting a conversation from the Job page in chrome", 
 
         proxy.forceUnavailable("conversations.get");
         await controls.locator(STOP_CONFIRM).click();
+        const release = proxy.holdUnavailable("daemon.status");
         await page.waitForSelector(BANNER, { timeout: WAIT_MS });
         t.assert.equal(await controls.locator(REDIRECT_BOX).count(), 0);
         t.assert.equal(await controls.locator(STOP_OPEN).count(), 0);
+        release();
     });
 
     it("holds Redirect words for a parked lead, starts no run, and shows the words once when it continues", {
@@ -309,12 +311,14 @@ describe("stopping and redirecting a conversation from the Job page in chrome", 
 
         proxy.forceUnavailable("conversations.submit");
         await page.click(`main ${REDIRECT_SEND}`);
+        const release = proxy.holdUnavailable("daemon.status");
 
         await page.waitForSelector(BANNER, { timeout: WAIT_MS });
         t.assert.equal(await controls.locator(STOP_OPEN).isDisabled(), true);
         t.assert.equal(await controls.locator(REDIRECT_SEND).isDisabled(), true);
         t.assert.equal(await controls.locator(REDIRECT_BOX).isDisabled(), true);
         t.assert.equal(await page.inputValue(`main ${REDIRECT_BOX}`), WORDS);
+        release();
         rig.daemon.releaseRuns();
     });
 });

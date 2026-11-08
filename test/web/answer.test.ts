@@ -175,11 +175,13 @@ describe("answering a Blocked job from its page in chrome", () => {
 
         proxy.forceUnavailable("jobs.resume");
         await page.click(SEND);
+        const release = proxy.holdUnavailable("daemon.status");
 
         await page.waitForSelector(BANNER, { timeout: WAIT_MS });
         await waitFor(page, `document.querySelector(${JSON.stringify(SEND)})?.disabled === true`);
         t.assert.equal(await page.locator(".refusal").count(), 0);
         t.assert.equal(await page.inputValue(BOX), "blue");
         t.assert.doesNotMatch(await leadEntriesText(daemon, lead), /blue/);
+        release();
     });
 });
