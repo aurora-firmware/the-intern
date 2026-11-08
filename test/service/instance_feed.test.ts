@@ -23,7 +23,14 @@ import { type HarnessHost, hostDatabase, internalHarness, openHarnessHost } from
 import { continueParked, parkConversation } from "../../src/host/invocation.ts";
 import { changeSeat, createSeatedConversation, SEAT_RECORD_KIND, type SeatActor } from "../../src/host/seating.ts";
 import type { JobAuthor } from "../../src/jobs/job_model.ts";
-import { createJobStore, type Job, type JobStore, migrateJobStore, type NewJob } from "../../src/jobs/job_store.ts";
+import {
+    createJobStore,
+    type Job,
+    type JobStore,
+    migrateJobStore,
+    type NewJob,
+    type ScheduleSkip,
+} from "../../src/jobs/job_store.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 import { feedOperations } from "../../src/service/feed_operations.ts";
 import { type Caller, ServiceError } from "../../src/service/operations.ts";
@@ -590,6 +597,64 @@ describe("the instance snapshot's jobs that exist when the feed opens", () => {
 
         assert.ok(late, "a job was committed during the read");
         assert.deepEqual(subscription.snapshot.jobs.map((job) => job.title).sort(), ["Before", "During"]);
+        subscription.close();
+    });
+});
+
+describe("the instance feed's schedule fire skipped delta", () => {
+    const skip = (overrides: Partial<ScheduleSkip> = {}): ScheduleSkip => ({
+        entry: "daily",
+        dueAt: "2026-11-08T08:00:00.000Z",
+        dueTime: "2026-11-08 08:00",
+        reason: "S-1 is still open",
+        openRun: "S-1",
+        ...overrides,
+    });
+
+    it("publishes the entry, due time, reason and open run when a skip is written", async () => {
+        const fixture = await openFixture();
+        const subscription = (await fixture.open()).subscribe();
+
+        await fixture.jobStore.recordSkip(skip());
+
+        const deltas = await collectUntil(subscription, (all) => all.length >= 1);
+        assert.deepEqual(deltas, [
+            {
+                type: "schedule_fire_skipped",
+                entry: "daily",
+                dueTime: "2026-11-08 08:00",
+                reason: "S-1 is still open",
+                openRun: "S-1",
+                seq: 1,
+            },
+        ]);
+        subscription.close();
+    });
+
+    it("leaves out the open run when the skip has none", async () => {
+        const fixture = await openFixture();
+        const subscription = (await fixture.open()).subscribe();
+
+        await fixture.jobStore.recordSkip(skip({ openRun: null, reason: "the folder is gone" }));
+
+        const [delta] = await collectUntil(subscription, (all) => all.length >= 1);
+        assert.ok(delta && !("openRun" in delta));
+        subscription.close();
+    });
+
+    it("publishes nothing when the skip row already exists", async () => {
+        const fixture = await openFixture();
+        await fixture.jobStore.recordSkip(skip());
+        const subscription = (await fixture.open()).subscribe();
+
+        await fixture.jobStore.recordSkip(skip({ reason: "a different reason" }));
+        await fixture.config.change(labelSection, { label: "marker" });
+
+        const deltas = await collectUntil(subscription, (all) => all.some((d) => d.type === "settings_changed"));
+        assert.deepEqual(
+            deltas.map((delta) => delta.type),
+            ["settings_changed"],
+        );
         subscription.close();
     });
 });

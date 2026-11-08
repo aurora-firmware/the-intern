@@ -35,6 +35,7 @@ export type InstanceDelta = { seq: number } & (
     | { type: "job_status_changed"; number: string; old: JobStatus; new: JobStatus; blockedReason?: string }
     | { type: "job_done"; number: string; resolution: Extract<JobChange, { type: "job_done" }>["resolution"] }
     | { type: "job_related_changed"; numbers: [string, string] }
+    | { type: "schedule_fire_skipped"; entry: string; dueTime: string; reason: string; openRun?: string }
 );
 
 export type InstanceFeed = {
@@ -166,6 +167,17 @@ export async function createInstanceFeed(options: {
             case "related_changed":
                 publish({ type: "job_related_changed", numbers: change.numbers });
                 return;
+            case "schedule_fire_skipped": {
+                const { entry, dueTime, reason, openRun } = change.skip;
+                publish({
+                    type: "schedule_fire_skipped",
+                    entry,
+                    dueTime,
+                    reason,
+                    ...(openRun !== null && { openRun }),
+                });
+                return;
+            }
         }
     }
     const earlyJobChanges: JobChange[] = [];
