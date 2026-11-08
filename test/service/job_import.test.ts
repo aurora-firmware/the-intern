@@ -193,6 +193,29 @@ describe("the import step", () => {
         assert.equal(next.number, `${letter}-3`);
     });
 
+    it("migrates an imported version 2 file to the current version at its next start, with its jobs intact", async () => {
+        const { file, jobs } = await exportedFile();
+        const older = new DatabaseSync(file);
+        older.exec("DROP INDEX intern_jobs_by_schedule");
+        older.exec("DROP TABLE intern_schedule_skips");
+        older.exec("ALTER TABLE intern_jobs DROP COLUMN schedule_entry");
+        older.exec("ALTER TABLE intern_jobs DROP COLUMN schedule_fired_at");
+        older.exec("UPDATE intern_schema SET version = 2");
+        older.close();
+        const target = await newEnv();
+
+        await importDatabase({ stateDir: target.stateDir, file });
+        const instance = await startInstance(target);
+
+        const listed = await instance.invoke<{ jobs: Job[] }>("jobs.list", {});
+        assert.deepEqual(listed.jobs.map((job) => job.number).sort(), jobs.map((job) => job.number).sort());
+        await instance.stop();
+        const migrated = new DatabaseSync(join(target.stateDir, DATABASE_NAME), { readOnly: true });
+        const row = migrated.prepare("SELECT version FROM intern_schema WHERE id = 1").get() as { version: number };
+        migrated.close();
+        assert.equal(row.version, JOB_SCHEMA_VERSION);
+    });
+
     it("creates the imported database owner-only and leaves nothing else behind", async () => {
         const { file } = await exportedFile();
         const target = await newEnv();

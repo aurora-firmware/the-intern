@@ -13,6 +13,7 @@ import {
     JobSchemaTooNewError,
     migrateJobStore,
     type NewJob,
+    OpenScheduledRunError,
     readJobSchemaVersion,
 } from "../../src/jobs/job_store.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
@@ -85,7 +86,7 @@ describe("job store schema", () => {
 });
 
 describe("job store migration 2", () => {
-    it("brings a version 1 file to version 2 with blockedAfterEntry null and other columns unchanged", async () => {
+    it("brings a version 1 file to the current version with blockedAfterEntry null and other columns unchanged", async () => {
         const db = await openDb();
         await db.exec(JOB_MIGRATIONS[0] as string);
         await db.run("INSERT INTO intern_schema (id, version) VALUES (1, 1)");
@@ -100,17 +101,123 @@ describe("job store migration 2", () => {
 
         await migrateJobStore(db);
 
-        assert.equal(await readJobSchemaVersion(db), 2);
+        assert.equal(await readJobSchemaVersion(db), JOB_SCHEMA_VERSION);
         const after = await db.all<Record<string, unknown>>("SELECT * FROM intern_jobs ORDER BY id");
         assert.deepEqual(
             after.map((row) => row.blocked_after_entry),
             [null, null],
         );
         assert.deepEqual(
-            after.map(({ blocked_after_entry: _column, ...rest }) => ({ ...rest })),
+            after.map(({ blocked_after_entry: _a, schedule_entry: _b, schedule_fired_at: _c, ...rest }) => ({
+                ...rest,
+            })),
             before,
         );
         assert.equal(await createJobStore(db).blockedAfterEntryOf("id-1"), null);
+    });
+});
+
+const scheduled = (entry: string, extra: Partial<NewJob> = {}): NewJob =>
+    newJob("S", { schedule: { entry, firedAt: "2026-11-08T08:00:00.000Z" }, ...extra });
+
+describe("job store schedule runs", () => {
+    it("is at schema version 3", () => {
+        assert.equal(JOB_SCHEMA_VERSION, 3);
+    });
+
+    it("refuses a second run of an entry while its job is To do, naming it, and uses no number", async () => {
+        const { db, store } = await openMigrated();
+        const first = (await store.insertJob(scheduled("daily"))).job;
+        await assert.rejects(store.insertJob(scheduled("daily")), (error: Error) => {
+            assert.ok(error instanceof OpenScheduledRunError);
+            assert.equal(error.openRun, first.number);
+            return true;
+        });
+        const counter = await db.get<{ last_value: number }>(
+            "SELECT last_value FROM intern_counters WHERE letter = 'S'",
+        );
+        assert.equal(counter?.last_value, 1);
+    });
+
+    it("refuses while the job is In progress and does not call onWriteFailure", async () => {
+        const db = await openDb();
+        await migrateJobStore(db);
+        const failures: unknown[] = [];
+        const store = createJobStore(db, { onWriteFailure: (error) => failures.push(error) });
+        const first = (await store.insertJob(scheduled("daily"))).job;
+        await db.run("UPDATE intern_jobs SET status = 'in_progress' WHERE id = ?", first.id);
+        await assert.rejects(store.insertJob(scheduled("daily")), OpenScheduledRunError);
+        assert.deepEqual(failures, []);
+    });
+
+    it("inserts a new job while every job of the entry is Blocked or Done", async () => {
+        const { db, store } = await openMigrated();
+        const first = (await store.insertJob(scheduled("daily"))).job;
+        await db.run("UPDATE intern_jobs SET status = 'blocked' WHERE id = ?", first.id);
+        const second = (await store.insertJob(scheduled("daily"))).job;
+        await db.run("UPDATE intern_jobs SET status = 'done' WHERE id = ?", second.id);
+        const third = await store.insertJob(scheduled("daily"));
+        assert.equal(third.created, true);
+        assert.deepEqual(numbersOf([first, second, third.job]), ["S-1", "S-2", "S-3"]);
+    });
+
+    it("does not count the open job of another entry", async () => {
+        const { store } = await openMigrated();
+        await store.insertJob(scheduled("daily"));
+        assert.equal((await store.insertJob(scheduled("weekly"))).created, true);
+    });
+
+    it("counts earlier runs of a name whose entry was removed, because the check reads jobs", async () => {
+        const { store } = await openMigrated();
+        await store.insertJob(scheduled("gone"));
+        await assert.rejects(store.insertJob(scheduled("gone")), OpenScheduledRunError);
+    });
+
+    it("returns the original job for a repeated key while it is open, without a refusal", async () => {
+        const { store } = await openMigrated();
+        const first = await store.insertJob(scheduled("daily", { idempotencyKey: "fire-1" }));
+        const again = await store.insertJob(scheduled("daily", { idempotencyKey: "fire-1" }));
+        assert.equal(again.created, false);
+        assert.equal(again.job.id, first.job.id);
+    });
+
+    it("creates one job and refuses the other when two starts of an entry run at once", async () => {
+        const { store } = await openMigrated();
+        const results = await Promise.allSettled([
+            store.insertJob(scheduled("daily")),
+            store.insertJob(scheduled("daily")),
+        ]);
+        assert.deepEqual(results.map((result) => result.status).sort(), ["fulfilled", "rejected"]);
+        const refused = results.find((result) => result.status === "rejected");
+        assert.ok(refused?.status === "rejected" && refused.reason instanceof OpenScheduledRunError);
+        assert.equal((await store.listJobs({ schedule: "daily" })).jobs.length, 1);
+    });
+
+    it("lists only the jobs of the named entry", async () => {
+        const { store } = await openMigrated();
+        const daily = (await store.insertJob(scheduled("daily"))).job;
+        await store.insertJob(scheduled("weekly"));
+        await store.insertJob(newJob("C"));
+        assert.deepEqual(numbersOf((await store.listJobs({ schedule: "daily" })).jobs), [daily.number]);
+    });
+
+    it("migrates a version 2 file to version 3 with its jobs intact", async () => {
+        const db = await openDb();
+        await db.exec(JOB_MIGRATIONS[0] as string);
+        await db.exec(JOB_MIGRATIONS[1] as string);
+        await db.run("INSERT INTO intern_schema (id, version) VALUES (1, 2)");
+        await db.run(
+            "INSERT INTO intern_jobs (id, letter, n, title, description, definition_of_done, status, request_text, " +
+                "origin, lead_start, created_at, updated_at) VALUES ('id-1', 'C', 1, 't', 'd', 'x', 'to_do', 'r', " +
+                "'{}', '{}', 'c', 'u')",
+        );
+        await migrateJobStore(db);
+        assert.equal(await readJobSchemaVersion(db), 3);
+        const store = createJobStore(db);
+        assert.deepEqual(numbersOf((await store.listJobs({})).jobs), ["C-1"]);
+        assert.deepEqual((await store.listJobs({ schedule: "daily" })).jobs, []);
+        const skips = await db.all("SELECT entry, due_at, due_time, reason, open_run FROM intern_schedule_skips");
+        assert.deepEqual(skips, []);
     });
 });
 
