@@ -279,6 +279,7 @@ describe("schedules.change", () => {
             [{ request: null }, "request"],
             [{ cron: "not cron" }, "cron"],
             [{ name: "nightly", colour: "red" }, "colour"],
+            [{ colour: null }, "colour"],
         ] as const) {
             await assert.rejects(
                 () => rig.invoke("schedules.change", { name: "nightly", ...change }),
