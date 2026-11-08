@@ -54,6 +54,33 @@ export async function createSchedulesComponent(options: SchedulesComponentOption
 
     const component: DaemonComponent = {
         name: "schedules",
+        async checkModels(ctx) {
+            const { catalog, workspaces } = agents.runtime();
+            const entries = () => ctx.config.current(scheduleSection);
+            catalog.addReferenceSource({
+                name: "schedules",
+                referrersOf: (role) => {
+                    const defaults = workspaces
+                        .list()
+                        .filter((listing) => listing.kind === "role_default" && listing.role === role)
+                        .map((listing) => listing.path);
+                    return entries()
+                        .filter(
+                            (entry) =>
+                                entry.role === role ||
+                                (entry.workspace !== undefined && defaults.includes(entry.workspace)),
+                        )
+                        .map((entry) => entry.name);
+                },
+            });
+            workspaces.addReferenceSource({
+                name: "schedules",
+                referrersOf: (path) =>
+                    entries()
+                        .filter((entry) => entry.workspace === path)
+                        .map((entry) => entry.name),
+            });
+        },
         async ensureWorkspaces(ctx) {
             const { catalog, workspaces } = agents.runtime();
             for (const entry of ctx.config.current(scheduleSection)) {

@@ -1,6 +1,6 @@
 /** Schedule entries at startup and their read operations (S-007 REQ-002, REQ-009: AC-002.1 to AC-002.3). */
 import assert from "node:assert/strict";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { localTimeText } from "../../src/schedules/schedule_time.ts";
@@ -371,5 +371,96 @@ describe("schedules.remove", () => {
         const edited = await readConfig(rig);
         await assert.rejects(() => rig.invoke("schedules.remove", { name: "nightly" }), isRefusal("conflict", file));
         assert.equal(await readConfig(rig), edited);
+    });
+});
+
+describe("the holds on roles and workspaces an entry names", () => {
+    const reviewer = { name: "reviewer", instructions: "Review the work.", tools: ["read"], skills: [] };
+    type Roles = { roles: { name: string }[] };
+    type Workspaces = { workspaces: { path: string; kind: string; role?: string }[] };
+
+    const hasRole = async (rig: ScheduleRig, name: string): Promise<boolean> =>
+        ((await rig.invoke("roles.list")) as Roles).roles.some((role) => role.name === name);
+
+    const makeFolder = async (rig: ScheduleRig, name: string): Promise<string> => {
+        const path = join(rig.env.root, name);
+        await mkdir(path);
+        await chmod(path, 0o700);
+        await rig.invoke("workspaces.register", { path });
+        return path;
+    };
+
+    const defaultWorkspaceOf = async (rig: ScheduleRig, role: string): Promise<string> => {
+        const listed = (await rig.invoke("workspaces.list")) as Workspaces;
+        const found = listed.workspaces.find((entry) => entry.kind === "role_default" && entry.role === role);
+        assert.ok(found, `${role} has a per-role default workspace`);
+        return found.path;
+    };
+
+    it("refuses removing a role an entry names, naming the entry, and changes nothing (AC-1)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await rigWith("");
+        await rig.invoke("roles.create", reviewer);
+        await rig.invoke("schedules.create", { name: "nightly", cron: "0 2 * * *", request: "Go.", role: "reviewer" });
+        const before = await readConfig(rig);
+        await assert.rejects(() => rig.invoke("roles.remove", { name: "reviewer" }), isRefusal("conflict", "nightly"));
+        assert.equal(await hasRole(rig, "reviewer"), true);
+        assert.equal(await readConfig(rig), before);
+    });
+
+    it("refuses unregistering a workspace an entry names, naming the entry, and changes nothing (AC-2)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await rigWith("");
+        const path = await makeFolder(rig, "project");
+        await rig.invoke("schedules.create", { name: "nightly", cron: "0 2 * * *", request: "Go.", workspace: path });
+        const before = await readConfig(rig);
+        await assert.rejects(() => rig.invoke("workspaces.unregister", { path }), isRefusal("conflict", "nightly"));
+        const listed = (await rig.invoke("workspaces.list")) as Workspaces;
+        assert.ok(listed.workspaces.some((entry) => entry.path === path));
+        assert.equal(await readConfig(rig), before);
+    });
+
+    it("refuses removing a role whose per-role default workspace an entry names (AC-3)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await rigWith("");
+        await rig.invoke("roles.create", reviewer);
+        const path = await defaultWorkspaceOf(rig, "reviewer");
+        await rig.invoke("schedules.create", { name: "nightly", cron: "0 2 * * *", request: "Go.", workspace: path });
+        const before = await readConfig(rig);
+        await assert.rejects(() => rig.invoke("roles.remove", { name: "reviewer" }), isRefusal("conflict", "nightly"));
+        assert.equal(await hasRole(rig, "reviewer"), true);
+        assert.equal(await readConfig(rig), before);
+    });
+
+    it("removes a role whose set default workspace an entry names, and keeps the entry (AC-4)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await rigWith("");
+        const path = await makeFolder(rig, "project");
+        await rig.invoke("roles.create", { ...reviewer, workspace: path });
+        await rig.invoke("schedules.create", { name: "nightly", cron: "0 2 * * *", request: "Go.", workspace: path });
+        await rig.invoke("roles.remove", { name: "reviewer" });
+        assert.equal(await hasRole(rig, "reviewer"), false);
+        const listed = (await rig.invoke("schedules.list")) as Listed;
+        assert.deepEqual(
+            listed.schedules.map((entry) => entry.name),
+            ["nightly"],
+        );
+    });
+
+    it("removes a role and unregisters a workspace that no entry names (AC-5)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await rigWith(entryToml());
+        const path = await makeFolder(rig, "project");
+        await rig.invoke("roles.create", reviewer);
+        await rig.invoke("roles.remove", { name: "reviewer" });
+        assert.equal(await hasRole(rig, "reviewer"), false);
+        await rig.invoke("workspaces.unregister", { path });
+        const listed = (await rig.invoke("workspaces.list")) as Workspaces;
+        assert.ok(!listed.workspaces.some((entry) => entry.path === path));
     });
 });
