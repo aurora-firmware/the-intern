@@ -79,6 +79,6 @@ export async function createSchedulesComponent(options: SchedulesComponentOption
         operations: [],
         clock: options.clock ?? realClock,
     };
-    schedules.operations.push(...scheduleOperations(schedules));
+    schedules.operations.push(...scheduleOperations(schedules, agents));
     return schedules;
 }

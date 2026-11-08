@@ -48,7 +48,7 @@ async function assertNoJob(rig: ScheduleRig): Promise<void> {
 
 describe("schedule entries at startup", () => {
     it("lists a hand-written entry with its next due time (AC-002.1)", { timeout: TEST_TIMEOUT_MS }, async () => {
-        const rig = await rigWith(entryToml('role = "bob"\nthinking_level = "low"\n'));
+        const rig = await rigWith(entryToml('role = "bob"\nthinking_level = "off"\n'));
         const listed = (await rig.invoke("schedules.list")) as Listed;
         assert.equal(listed.schedules.length, 1);
         assert.equal(listed.schedules[0]?.name, "nightly");
@@ -111,10 +111,7 @@ const readConfig = (rig: ScheduleRig): Promise<string> => readFile(join(rig.env.
 const isRefusal =
     (code: string, ...mentions: string[]) =>
     (error: unknown) =>
-        error instanceof ServiceError &&
-        error.code === code &&
-        mentions.every((text) => error.message.includes(text)) &&
-        true;
+        error instanceof ServiceError && error.code === code && mentions.every((text) => error.message.includes(text));
 
 describe("schedules.create", () => {
     const refusals: [string, Record<string, unknown>, string][] = [
@@ -172,19 +169,19 @@ describe("schedules.create", () => {
     }, async () => {
         const rig = await rigWith(entryToml());
         const subscription = (await rig.invoke("feed.subscribe", { scope: "instance" })) as {
-            next(): Promise<{ done: boolean; value: { type: string; section?: string } }>;
+            next(): Promise<{ delta?: { type: string; section?: string } }>;
         };
-        const created = (await rig.invoke("schedules.create", { ...validEntry, thinkingLevel: "low" })) as {
+        const created = (await rig.invoke("schedules.create", { ...validEntry, thinkingLevel: "off" })) as {
             schedule: Listed["schedules"][number];
         };
         assert.equal(created.schedule.name, "weekly");
         assert.equal(created.schedule.nextDueTime, localTimeText(new Date(2026, 10, 9, 3, 0)));
         const file = join(rig.env.configDir, CONFIG_FILE);
-        assert.match(await readConfig(rig), /name = "weekly"[\s\S]*thinking_level = "low"/);
+        assert.match(await readConfig(rig), /name = "weekly"[\s\S]*thinking_level = "off"/);
         assert.equal((await stat(file)).mode & 0o777, 0o600);
-        const delta = await subscription.next();
+        const { delta } = await subscription.next();
         assert.deepEqual(
-            { type: delta.value.type, section: delta.value.section },
+            { type: delta?.type, section: delta?.section },
             { type: "settings_changed", section: "schedule" },
         );
     });
