@@ -18,6 +18,15 @@ import {
     parseJobRef,
     type Resolution,
 } from "./job_model.ts";
+import {
+    insertSkip,
+    newestJobId,
+    readScheduleRuns,
+    type ScheduleRunItem,
+    type ScheduleSkip,
+} from "./schedule_history.ts";
+
+export type { ScheduleRunItem, ScheduleSkip };
 
 export const JOB_SCHEMA_VERSION = 3;
 
@@ -127,7 +136,8 @@ export type JobChange =
     | { type: "worklog_added"; number: string; entry: WorklogEntry }
     | { type: "status_changed"; number: string; old: JobStatus; new: JobStatus; blockedReason?: string }
     | { type: "job_done"; number: string; resolution: Resolution }
-    | { type: "related_changed"; numbers: [string, string] };
+    | { type: "related_changed"; numbers: [string, string] }
+    | { type: "schedule_fire_skipped"; skip: ScheduleSkip };
 
 export type JobStore = {
     insertJob(input: NewJob): Promise<{ job: Job; created: boolean }>;
@@ -143,6 +153,12 @@ export type JobStore = {
     relate(a: string, b: string, author: JobAuthor): Promise<{ a: Job; b: Job }>;
     unrelate(a: string, b: string, author: JobAuthor): Promise<{ a: Job; b: Job }>;
     applyAction(ref: string, action: JobAction, input: ActionInput, author: JobAuthor): Promise<Job>;
+    /** Writes a skipped fire and reports it, unless the entry already has one for that due time (S-007 REQ-016). */
+    recordSkip(skip: ScheduleSkip): Promise<void>;
+    /** The entry's jobs and skipped fires, newest first, a run before a skip at the same minute (S-007 REQ-009). */
+    listScheduleRuns(entry: string, page: EntryPage): Promise<{ items: ScheduleRunItem[]; cursor?: string }>;
+    /** The entry's newest job, or undefined when it has none. */
+    latestScheduledRun(entry: string): Promise<Job | undefined>;
     /** Appends one `repair` history entry by the daemon. Reports no change. */
     recordRepair(ref: string, repair: { rule: 1 | 2 | 3 | 4; did: string }): Promise<void>;
     /** Reports each change after its transaction commits. Returns the function that removes the listener. */
@@ -799,6 +815,19 @@ export function createJobStore(db: HostDatabase, options: JobStoreOptions = {}):
                 page,
                 toHistoryEntry,
             ),
+        async recordSkip(skip) {
+            const wrote = await transact((tx) => insertSkip(tx, skip));
+            if (wrote) report({ type: "schedule_fire_skipped", skip });
+        },
+        async listScheduleRuns(entry, page) {
+            return readScheduleRuns(db, entry, { limit: checkLimit(page.limit), cursor: page.cursor }, async (id) =>
+                toJob(db, await findRow(db, id)),
+            );
+        },
+        async latestScheduledRun(entry) {
+            const id = await newestJobId(db, entry);
+            return id === undefined ? undefined : toJob(db, await findRow(db, id));
+        },
         relate: (a, b, author) => write((tx) => setLinkByRef(tx, a, b, true, author)),
         unrelate: (a, b, author) => write((tx) => setLinkByRef(tx, a, b, false, author)),
         applyAction: (ref, action, input, author) => write((tx) => applyActionIn(tx, ref, action, input, author)),
