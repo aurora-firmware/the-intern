@@ -222,3 +222,153 @@ describe("schedules.create", () => {
         assert.match(await readConfig(rig), /name = "one"[\s\S]*name = "two"|name = "two"[\s\S]*name = "one"/);
     });
 });
+
+const FAKE_MODEL = "faux/faux-1";
+const GONE_MODEL = "nowhere/missing-model";
+
+type Changed = { schedule: Listed["schedules"][number] & Record<string, unknown> };
+
+describe("schedules.change", () => {
+    it("moves the next due time, writes the file and keeps it after a restart (AC-1)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await rigWith(entryToml());
+        const changed = (await rig.invoke("schedules.change", { name: "nightly", cron: "0 3 * * *" })) as Changed;
+        const at3 = localTimeText(new Date(2026, 10, 8, 3, 0));
+        assert.equal(changed.schedule.nextDueTime, at3);
+        assert.match(await readConfig(rig), /cron = "0 3 \* \* \*"/);
+        assert.doesNotMatch(await readConfig(rig), /0 2 \* \* \*/);
+        await rig.restart();
+        const got = (await rig.invoke("schedules.get", { name: "nightly" })) as Changed;
+        assert.equal(got.schedule.nextDueTime, at3);
+    });
+
+    it("clears a value given null and leaves the values absent from the input (AC-2)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await rigWith(entryToml(`role = "bob"\nmodel = "${FAKE_MODEL}"\nthinking_level = "off"\n`));
+        const { schedule } = (await rig.invoke("schedules.change", { name: "nightly", role: null })) as Changed;
+        assert.equal("role" in schedule, false);
+        assert.equal(schedule.model, FAKE_MODEL);
+        assert.equal(schedule.thinkingLevel, "off");
+        assert.equal(schedule.request, "Check the backups.");
+        const text = await readConfig(rig);
+        assert.doesNotMatch(text, /role =/);
+        assert.match(text, /thinking_level = "off"/);
+    });
+
+    it("clears the model, thinking level and workspace given null (AC-2)", { timeout: TEST_TIMEOUT_MS }, async () => {
+        const rig = await rigWith(entryToml(`model = "${FAKE_MODEL}"\nthinking_level = "off"\n`));
+        const { schedule } = (await rig.invoke("schedules.change", {
+            name: "nightly",
+            model: null,
+            thinkingLevel: null,
+            workspace: null,
+        })) as Changed;
+        assert.deepEqual(Object.keys(schedule).sort(), ["cron", "name", "nextDueTime", "request"]);
+        assert.doesNotMatch(await readConfig(rig), /model =|thinking_level =/);
+    });
+
+    it("refuses clearing the cron or the request, and a changed name, leaving the file unchanged (AC-2)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await rigWith(entryToml());
+        const before = await readConfig(rig);
+        for (const [change, key] of [
+            [{ cron: null }, "cron"],
+            [{ request: null }, "request"],
+            [{ cron: "not cron" }, "cron"],
+            [{ name: "nightly", colour: "red" }, "colour"],
+        ] as const) {
+            await assert.rejects(
+                () => rig.invoke("schedules.change", { name: "nightly", ...change }),
+                isRefusal("invalid_input", key),
+            );
+        }
+        assert.equal(await readConfig(rig), before);
+    });
+
+    it("refuses a change that leaves a gone model, naming the model (AC-3)", { timeout: TEST_TIMEOUT_MS }, async () => {
+        const rig = await rigWith(entryToml(`model = "${GONE_MODEL}"\n`));
+        const before = await readConfig(rig);
+        await assert.rejects(
+            () => rig.invoke("schedules.change", { name: "nightly", cron: "0 3 * * *" }),
+            isRefusal("invalid_input", "model", GONE_MODEL),
+        );
+        assert.equal(await readConfig(rig), before);
+    });
+
+    it("accepts a change that sets another model or clears the gone one (AC-3)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await rigWith(
+            entryToml(`model = "${GONE_MODEL}"\n`, "one") + entryToml(`model = "${GONE_MODEL}"\n`, "two"),
+        );
+        const set = (await rig.invoke("schedules.change", { name: "one", model: FAKE_MODEL })) as Changed;
+        assert.equal(set.schedule.model, FAKE_MODEL);
+        const cleared = (await rig.invoke("schedules.change", { name: "two", model: null })) as Changed;
+        assert.equal("model" in cleared.schedule, false);
+    });
+
+    it("refuses an unknown name not_found, naming it (AC-4)", { timeout: TEST_TIMEOUT_MS }, async () => {
+        const rig = await rigWith(entryToml());
+        const before = await readConfig(rig);
+        await assert.rejects(
+            () => rig.invoke("schedules.change", { name: "missing", cron: "0 3 * * *" }),
+            isRefusal("not_found", "missing"),
+        );
+        assert.equal(await readConfig(rig), before);
+    });
+
+    it("refuses with conflict naming the file after a hand edit, keeping the edit (AC-5)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await rigWith(entryToml());
+        const file = join(rig.env.configDir, CONFIG_FILE);
+        await writeFile(file, `${entryToml()}# edited by hand\n`);
+        const edited = await readConfig(rig);
+        await assert.rejects(
+            () => rig.invoke("schedules.change", { name: "nightly", cron: "0 3 * * *" }),
+            isRefusal("conflict", file),
+        );
+        assert.equal(await readConfig(rig), edited);
+    });
+});
+
+describe("schedules.remove", () => {
+    it("filters the entry out of the file and the list, and keeps the others (AC-4)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await rigWith(entryToml("", "one") + entryToml("", "two"));
+        const removed = await rig.invoke("schedules.remove", { name: "one" });
+        assert.deepEqual(removed, {});
+        const listed = (await rig.invoke("schedules.list")) as Listed;
+        assert.deepEqual(
+            listed.schedules.map((entry) => entry.name),
+            ["two"],
+        );
+        assert.doesNotMatch(await readConfig(rig), /name = "one"/);
+        assert.match(await readConfig(rig), /name = "two"/);
+    });
+
+    it("refuses an unknown name not_found, naming it (AC-4)", { timeout: TEST_TIMEOUT_MS }, async () => {
+        const rig = await rigWith(entryToml());
+        const before = await readConfig(rig);
+        await assert.rejects(
+            () => rig.invoke("schedules.remove", { name: "missing" }),
+            isRefusal("not_found", "missing"),
+        );
+        assert.equal(await readConfig(rig), before);
+    });
+
+    it("refuses with conflict naming the file after a hand edit, keeping the edit (AC-5)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await rigWith(entryToml());
+        const file = join(rig.env.configDir, CONFIG_FILE);
+        await writeFile(file, `${entryToml()}# edited by hand\n`);
+        const edited = await readConfig(rig);
+        await assert.rejects(() => rig.invoke("schedules.remove", { name: "nightly" }), isRefusal("conflict", file));
+        assert.equal(await readConfig(rig), edited);
+    });
+});
