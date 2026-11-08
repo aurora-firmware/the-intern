@@ -16,6 +16,7 @@ import { localTimeText, nextDueTime, parseCron } from "../schedules/schedule_tim
 import type { SchedulesComponent } from "../schedules/schedules_component.ts";
 import { defineOperation, type Operation, ServiceError } from "./operations.ts";
 
+const CLEARABLE_KEYS = ["role", "model", "thinkingLevel", "workspace"];
 const CREATE_SCOPE = "schedules.create";
 type CreateInput = { entry: Record<string, unknown>; idempotencyKey?: string };
 type ChangeInput = { name: string; change: Record<string, unknown> };
@@ -43,13 +44,13 @@ function parseChange(raw: unknown): ChangeInput {
     return { name, change };
 }
 
-// A value absent from the change stays; `null` drops the key, so an optional value is cleared and a required one
-// fails the check as missing.
+// A value absent from the change stays; `null` clears an optional value. For any other key `null` stays in the merge,
+// so the check refuses a required value as not text and an unknown key as not a schedule setting.
 function mergeChange(entry: ScheduleEntry, change: Record<string, unknown>): Record<string, unknown> {
     const merged: Record<string, unknown> = { ...entry };
     for (const [key, value] of Object.entries(change)) {
         if (value === undefined) continue;
-        if (value === null) delete merged[key];
+        if (value === null && CLEARABLE_KEYS.includes(key)) delete merged[key];
         else merged[key] = value;
     }
     return merged;
