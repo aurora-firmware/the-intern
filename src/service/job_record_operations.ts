@@ -27,7 +27,14 @@ export const STORE_PAGE_SIZE = 500;
 
 type JobDetail = Job & { leadConversation?: string; worklog: WorklogEntry[]; history: HistoryEntry[] };
 type PageInput = { job: string; limit?: number; cursor?: string };
-type ListInput = { status?: JobStatus; letter?: Letter; relatedTo?: string; limit?: number; cursor?: string };
+type ListInput = {
+    schedule?: string;
+    status?: JobStatus;
+    letter?: Letter;
+    relatedTo?: string;
+    limit?: number;
+    cursor?: string;
+};
 type UpdateInput = { job: string; fields: Record<string, unknown> };
 type PairInput = { job: string; other: string };
 
@@ -67,6 +74,7 @@ function parseOneOf<T extends string>(record: Record<string, unknown>, field: st
 function parseList(raw: unknown): ListInput {
     const record = asRecord(raw);
     const input: ListInput = parseLimit(record);
+    if (record.schedule !== undefined) input.schedule = requireString(record, "schedule");
     if (record.status !== undefined) input.status = parseOneOf<JobStatus>(record, "status", STATUSES);
     if (record.letter !== undefined) input.letter = parseOneOf<Letter>(record, "letter", LETTERS);
     if (record.relatedTo !== undefined) input.relatedTo = requireString(record, "relatedTo");
