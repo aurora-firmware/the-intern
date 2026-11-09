@@ -1,11 +1,24 @@
 /** A scheduled job at each due time (S-007 REQ-001, REQ-004, REQ-015: AC-001.2, AC-004.1, AC-004.2, AC-015.1). */
 import assert from "node:assert/strict";
-import { chmod, mkdir, readFile, rm, stat, symlink } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, describe, it, type TestContext } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
+import { getApiProvider } from "@earendil-works/pi-ai/compat";
+import { createProvider } from "@earendil-works/pi-ai/models";
+import { createAgentsComponent } from "../../src/agents/agents_component.ts";
+import { runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
+import { createLogger } from "../../src/daemon/logger.ts";
+import { blockJob } from "../../src/jobs/job_actions.ts";
+import type { NewJob } from "../../src/jobs/job_store.ts";
+import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
+import { RoleRefusedError } from "../../src/roles/role_catalog.ts";
 import { localTimeText } from "../../src/schedules/schedule_time.ts";
-import { type ScheduleRig, startScheduleRig } from "../support/schedule_rig.ts";
+import { createSchedulesComponent } from "../../src/schedules/schedules_component.ts";
+import { ServiceError } from "../../src/service/operations.ts";
+import { createFakeModel } from "../support/fake_model.ts";
+import { createHermeticEnv } from "../support/hermetic_env.ts";
+import { createTestClock, type ScheduleRig, startScheduleRig } from "../support/schedule_rig.ts";
 
 const rigs: ScheduleRig[] = [];
 const TEST_TIMEOUT_MS = 60_000;
@@ -17,6 +30,259 @@ const at = (hour: number, minute = 0): Date => new Date(2026, 10, 8, hour, minut
 
 afterEach(async () => {
     for (const rig of rigs.splice(0)) await rig.dispose();
+});
+
+/** A real daemon with a held fake model, exposing the store for history and fault injection. */
+async function fireRig(t: TestContext, extra = "") {
+    const env = await createHermeticEnv();
+    const fake = createFakeModel(() => "ok", { gate: new Promise<void>(() => {}) });
+    const provider = fake.getModel().provider;
+    await writeFile(
+        join(env.piAgentDir, "settings.json"),
+        JSON.stringify({ defaultProvider: provider, defaultModel: fake.getModel().id }),
+    );
+    await writeFile(join(env.configDir, "config.toml"), entryToml("nightly", "* * * * *", extra));
+    let logs = "";
+    const logger = createLogger({
+        stream: {
+            write: (chunk) => {
+                logs += chunk;
+            },
+        },
+    });
+    const agents = await createAgentsComponent({ logger });
+    const jobs = await createJobsComponent({ agents, logger, turnEndRule: false });
+    const clock = createTestClock(at(1));
+    const schedules = await createSchedulesComponent({ agents, jobs, logger, clock });
+    let captured: ServiceContext | undefined;
+    const daemon = runDaemon({
+        flags: { configDir: env.configDir, stateDir: env.stateDir, dataDir: env.dataDir, runtimeDir: env.runtimeDir },
+        env: env.env,
+        homeDir: env.root,
+        logger,
+        workerThreadCount: 1,
+        sections: [...agents.sections, ...schedules.sections],
+        components: [
+            agents.component,
+            jobs.component,
+            schedules.component,
+            {
+                name: "probe",
+                start: async (ctx) => {
+                    captured = ctx;
+                },
+            },
+        ],
+        operations: [...agents.operations, ...jobs.operations, ...schedules.operations],
+        prepareModels: (runtime) => {
+            const implementation = getApiProvider(fake.api);
+            assert.ok(implementation);
+            runtime.models.registerNativeProvider(
+                createProvider({
+                    id: provider,
+                    auth: { apiKey: { name: "Fake", resolve: async () => ({ auth: {} }) } },
+                    models: fake.models,
+                    api: { stream: implementation.stream, streamSimple: implementation.streamSimple },
+                }),
+            );
+            return runtime.models;
+        },
+    });
+    t.after(async () => {
+        await daemon.stop();
+        fake.unregister();
+        await env.dispose();
+    });
+    await waitFor(async () => daemon.phase() === "ready", "the daemon to be ready");
+    assert.ok(captured);
+    const ctx = captured;
+    return {
+        ctx,
+        clock,
+        jobs,
+        env,
+        logs: () => logs,
+        invoke: (name: string, input: unknown = {}) =>
+            daemon.catalogue.invoke(name, input, {
+                actor: { kind: "team_member", wayIn: "command line" },
+            }),
+        history: () => ctx.jobStore.listScheduleRuns("nightly", {}),
+    };
+}
+
+async function waitFor(check: () => Promise<boolean>, description: string): Promise<void> {
+    const deadline = Date.now() + WAIT_TIMEOUT_MS;
+    while (!(await check())) {
+        if (Date.now() > deadline) throw new Error(`timed out waiting for ${description}`);
+        await sleep(POLL_INTERVAL_MS);
+    }
+}
+
+describe("a skipped schedule fire", { timeout: TEST_TIMEOUT_MS }, () => {
+    for (const status of ["in_progress", "to_do"] as const) {
+        it(`records the due time and open run and publishes the delta while ${status} (AC-006.1)`, async (t) => {
+            const rig = await fireRig(t);
+            if (status === "to_do") {
+                await rig.invoke("jobs.create", { text: "Hold the only worker thread." });
+                await waitFor(async () => rig.ctx.admission.state().active.length === 1, "the worker thread");
+            }
+            rig.clock.set(at(1, 1));
+            await waitFor(async () => (await rig.history()).items.length === 1, "the first scheduled run");
+            const first = await rig.ctx.jobStore.latestScheduledRun("nightly");
+            assert.ok(first);
+            await waitFor(async () => (await rig.ctx.jobStore.getJob(first.id)).status === status, status);
+            if (status === "to_do") {
+                await waitFor(async () => rig.ctx.admission.state().waiting.length === 1, "the waiting lead");
+            }
+            const sub = (await rig.invoke("feed.subscribe", { scope: "instance" })) as {
+                next(): Promise<{
+                    delta?: {
+                        type: string;
+                        entry?: string;
+                        dueTime?: string;
+                        reason?: string;
+                        openRun?: string | null;
+                    };
+                }>;
+            };
+            rig.clock.set(at(1, 2));
+            await waitFor(async () => (await rig.history()).items.length === 2, "the skipped fire");
+            const newest = (await rig.history()).items.find((item) => item.kind === "skip");
+            assert.ok(newest?.kind === "skip");
+            assert.deepEqual(newest.skip, {
+                entry: "nightly",
+                dueAt: at(1, 2).toISOString(),
+                dueTime: localTimeText(at(1, 2)),
+                reason: `A job of this schedule entry is still open: ${first.number}.`,
+                openRun: first.number,
+            });
+            const { delta } = await sub.next();
+            assert.equal(delta?.type, "schedule_fire_skipped");
+            assert.equal(delta?.entry, "nightly");
+            assert.equal(delta?.dueTime, newest.skip.dueTime);
+            assert.equal(delta?.reason, newest.skip.reason);
+            assert.equal(delta?.openRun, first.number);
+            assert.equal((await rig.ctx.jobStore.listJobs({ schedule: "nightly" })).jobs.length, 1);
+        });
+    }
+
+    it("starts the next run while the earlier run stays Blocked (AC-006.2)", async (t) => {
+        const rig = await fireRig(t);
+        rig.clock.set(at(1, 1));
+        await waitFor(async () => (await rig.history()).items.length === 1, "the first scheduled run");
+        const first = await rig.ctx.jobStore.latestScheduledRun("nightly");
+        assert.ok(first);
+        await waitFor(
+            async () => (await rig.ctx.jobStore.getJob(first.id)).status === "in_progress",
+            "the lead to start",
+        );
+        await blockJob({ ctx: rig.ctx, options: rig.jobs.options }, first.id, "Waiting for an answer.", {
+            kind: "daemon",
+        });
+        rig.clock.set(at(1, 2));
+        await waitFor(async () => (await rig.history()).items.length === 2, "the second scheduled run");
+        const newest = await rig.ctx.jobStore.latestScheduledRun("nightly");
+        assert.equal(first.number, "S-1");
+        assert.equal(newest?.number, "S-2");
+        assert.equal((await rig.ctx.jobStore.getJob(first.id)).status, "blocked");
+        assert.ok((await rig.history()).items.every((item) => item.kind === "run"));
+    });
+
+    for (const hasOpenRun of [false, true]) {
+        it(`records a missing folder before checking for an open run (${hasOpenRun}) (AC-006.3)`, async (t) => {
+            const rig = await fireRig(t);
+            const workspace = rig.jobs.options.agents.runtime().catalog.seatFor("bob").workspace;
+            if (hasOpenRun) {
+                rig.clock.set(at(1, 1));
+                await waitFor(async () => (await rig.history()).items.length === 1, "the first run");
+            }
+            await rm(workspace, { recursive: true });
+            rig.clock.set(at(1, 2));
+            await waitFor(
+                async () => (await rig.history()).items.some((item) => item.kind === "skip"),
+                "the skipped fire",
+            );
+            const item = (await rig.history()).items.find((item) => item.kind === "skip");
+            assert.ok(item?.kind === "skip");
+            assert.equal(item.skip.reason, `The workspace folder ${workspace} does not exist.`);
+            assert.equal(item.skip.openRun, null);
+            assert.equal((await rig.ctx.jobStore.listJobs({})).jobs.length, Number(hasOpenRun));
+            await mkdir(workspace, { recursive: true, mode: 0o700 });
+            if (hasOpenRun) await rig.invoke("jobs.cancel", { job: "S-1", justification: "Finished." });
+            rig.clock.set(at(1, 3));
+            await waitFor(
+                async () => (await rig.ctx.jobStore.listJobs({})).jobs.length === Number(hasOpenRun) + 1,
+                "the next run",
+            );
+            assert.equal((await rig.ctx.jobStore.latestScheduledRun("nightly"))?.number, hasOpenRun ? "S-2" : "S-1");
+        });
+    }
+
+    it("records the gone model without using a job number (AC-006.4)", async (t) => {
+        const rig = await fireRig(t, 'model = "nowhere/missing-model"\n');
+        rig.clock.set(at(1, 1));
+        await waitFor(async () => (await rig.history()).items.length === 1, "the skipped fire");
+        const item = (await rig.history()).items[0];
+        assert.ok(item?.kind === "skip");
+        assert.match(item.skip.reason, /nowhere\/missing-model/);
+        assert.equal(item.skip.openRun, null);
+        assert.deepEqual((await rig.ctx.jobStore.listJobs({})).jobs, []);
+        await rig.invoke("schedules.change", { name: "nightly", model: null });
+        rig.clock.set(at(1, 2));
+        await waitFor(async () => (await rig.history()).items.length === 2, "the next run");
+        assert.equal((await rig.ctx.jobStore.latestScheduledRun("nightly"))?.number, "S-1");
+    });
+
+    it("keeps a refusal after the job write as a cancelled run, without a skipped fire", async (t) => {
+        const rig = await fireRig(t);
+        const insertJob = rig.ctx.jobStore.insertJob.bind(rig.ctx.jobStore);
+        const catalog = rig.jobs.options.agents.runtime().catalog;
+        t.mock.method(rig.ctx.jobStore, "insertJob", async (input: NewJob) => {
+            const result = await insertJob(input);
+            t.mock.method(catalog, "seatFor", () => {
+                throw new RoleRefusedError("invalid", "bob", "the model is no longer available", "model", FAKE_MODEL);
+            });
+            return result;
+        });
+        rig.clock.set(at(1, 1));
+        await waitFor(
+            async () => (await rig.ctx.jobStore.latestScheduledRun("nightly"))?.status === "done",
+            "the cancelled run",
+        );
+        const { items } = await rig.history();
+        assert.equal(items.length, 1);
+        assert.ok(items[0]?.kind === "run");
+        assert.equal(items[0].job.number, "S-1");
+        assert.equal(items[0].job.resolution?.kind, "cancelled");
+        assert.match(items[0].job.resolution?.justification ?? "", /model is no longer available/);
+    });
+
+    for (const code of ["not_found", "conflict", "busy", "unavailable", "internal"] as const) {
+        it(`handles a ${code} start failure as ${["unavailable", "internal"].includes(code) ? "a logged failure" : "a skip"}`, async (t) => {
+            const rig = await fireRig(t);
+            const fault = t.mock.method(rig.ctx.jobStore, "insertJob", async () => {
+                throw new ServiceError(code, `Start failed: ${code}`);
+            });
+            rig.clock.set(at(1, 1));
+            await waitFor(async () => fault.mock.callCount() === 1, "the attempted start");
+            const isFailure = code === "unavailable" || code === "internal";
+            await waitFor(
+                async () =>
+                    isFailure ? rig.logs().includes(`Start failed: ${code}`) : (await rig.history()).items.length === 1,
+                "the handled failure",
+            );
+            if (isFailure) {
+                assert.match(rig.logs(), /A schedule fire failed/);
+                assert.deepEqual((await rig.history()).items, []);
+            } else {
+                const item = (await rig.history()).items[0];
+                assert.ok(item?.kind === "skip");
+                assert.equal(item.skip.reason, `Start failed: ${code}`);
+                assert.equal(item.skip.openRun, null);
+            }
+            assert.deepEqual((await rig.ctx.jobStore.listJobs({})).jobs, []);
+        });
+    }
 });
 
 type JobSummary = {
@@ -166,26 +432,6 @@ describe("a scheduled job at each due time", () => {
         assert.equal((await leadOf(rig, second.id)).seat.role, "gp");
         assert.equal(second.request.text, "Run it again.");
         assert.equal((await leadOf(rig, first.id)).seat.role, "bob");
-    });
-
-    it("creates no job and logs the refusal when the entry's workspace folder is gone", {
-        timeout: TEST_TIMEOUT_MS,
-    }, async () => {
-        const rig = await rigWith("");
-        const workspace = join(rig.env.root, "project");
-        await mkdir(workspace);
-        await chmod(workspace, 0o700);
-        await rig.invoke("workspaces.register", { path: workspace });
-        const registered = await readFile(join(rig.env.configDir, "config.toml"), "utf8");
-        await rig.restart(`${registered}\n${entryToml("audit", "0 2 * * *", `workspace = "${workspace}"\n`)}`);
-        await rm(workspace, { recursive: true });
-        rig.clock.set(at(2));
-        const deadline = Date.now() + WAIT_TIMEOUT_MS;
-        while (!rig.logs().includes(`The workspace folder ${workspace} does not exist.`)) {
-            if (Date.now() > deadline) throw new Error(`the refusal was not logged in: ${rig.logs()}`);
-            await sleep(POLL_INTERVAL_MS);
-        }
-        assert.deepEqual(await jobsOf(rig), []);
     });
 
     it("logs an access error when the workspace path contains a symbolic link loop", {
