@@ -466,6 +466,25 @@ describe("a scheduled job at each due time", () => {
 });
 
 describe("a schedule run on demand", { timeout: TEST_TIMEOUT_MS }, () => {
+    for (const firstOperation of ["jobs.create", "schedules.run"] as const) {
+        it(`separates colliding keys when ${firstOperation} runs first`, async (t) => {
+            const rig = await fireRig(t);
+            const create = () =>
+                rig.invoke("jobs.create", {
+                    text: "ordinary job",
+                    idempotencyKey: "schedules.run:x",
+                }) as Promise<JobSummary>;
+            const run = () =>
+                rig.invoke("schedules.run", { name: "nightly", idempotencyKey: "x" }) as Promise<JobSummary>;
+            const first = await (firstOperation === "jobs.create" ? create() : run());
+            const second = await (firstOperation === "jobs.create" ? run() : create());
+            assert.notEqual(first.id, second.id);
+            const [createdAgain, runAgain] = await Promise.all([create(), run(), create(), run()]);
+            assert.equal(createdAgain?.id, firstOperation === "jobs.create" ? first.id : second.id);
+            assert.equal(runAgain?.id, firstOperation === "schedules.run" ? first.id : second.id);
+        });
+    }
+
     it("returns the original job for a key even after the entry is removed", async (t) => {
         const rig = await fireRig(t);
         const before = await rig.invoke("schedules.get", { name: "nightly" });

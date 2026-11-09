@@ -120,9 +120,73 @@ describe("job store migration 2", () => {
 const scheduled = (entry: string, extra: Partial<NewJob> = {}): NewJob =>
     newJob("S", { schedule: { entry, firedAt: "2026-11-08T08:00:00.000Z" }, ...extra });
 
+describe("scoped idempotency", () => {
+    it("retains separate key spaces after reopening the database", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        const path = join(env.dataDir, "bob.sqlite");
+        const firstDb = await openHostDatabase(path);
+        await migrateJobStore(firstDb);
+        const firstStore = createJobStore(firstDb);
+        const run = await firstStore.insertJob(
+            scheduled("daily", { idempotencyKey: "schedules.run:x", idempotencyScope: "schedules.run" }),
+        );
+        const job = await firstStore.insertJob(newJob("C", { idempotencyKey: "schedules.run:x" }));
+        await firstDb.close();
+        const db = await openHostDatabase(path);
+        databases.push(db);
+        const store = createJobStore(db);
+        const [runAgain, jobAgain] = await Promise.all([
+            store.insertJob(
+                scheduled("daily", { idempotencyKey: "schedules.run:x", idempotencyScope: "schedules.run" }),
+            ),
+            store.insertJob(newJob("C", { idempotencyKey: "schedules.run:x" })),
+        ]);
+        assert.equal(runAgain.job.id, run.job.id);
+        assert.equal(jobAgain.job.id, job.job.id);
+    });
+
+    it("keeps caller keys separate from schedule runs and preserves legacy keys", async () => {
+        const db = await openDb();
+        for (const migration of JOB_MIGRATIONS.slice(0, 3)) await db.exec(migration);
+        await db.run("INSERT INTO intern_schema (id, version) VALUES (1, 3)");
+        await db.run(`INSERT INTO intern_jobs (id, letter, n, title, description, definition_of_done, status,
+            request_text, origin, lead_start, idempotency_key, created_at, updated_at)
+            VALUES ('legacy', 'C', 1, '', '', '', 'to_do', 'r', '{}', '{}', 'schedules.run:x', 'c', 'u')`);
+        await db.run(`INSERT INTO intern_jobs (id, letter, n, title, description, definition_of_done, status,
+            request_text, origin, lead_start, idempotency_key, created_at, updated_at)
+            VALUES ('fire', 'S', 1, '', '', '', 'to_do', 'r', '{"kind":"schedule","entry":"old","fireTime":"t"}', '{}', 'schedule:old:t', 'c', 'u')`);
+        await db.run("INSERT INTO intern_counters (letter, last_value) VALUES ('S', 1)");
+        await migrateJobStore(db);
+        const store = createJobStore(db);
+        assert.equal(
+            (
+                await store.insertJob(
+                    scheduled("old", { idempotencyKey: "schedule:old:t", idempotencyScope: "schedule.fire" }),
+                )
+            ).job.id,
+            "fire",
+        );
+        assert.equal((await store.insertJob(newJob("C", { idempotencyKey: "schedules.run:x" }))).job.id, "legacy");
+        const run = await store.insertJob(
+            scheduled("daily", { idempotencyKey: "schedules.run:x", idempotencyScope: "schedules.run" }),
+        );
+        assert.notEqual(run.job.id, "legacy");
+        assert.equal((await store.jobByKey("schedules.run:x"))?.id, run.job.id);
+        assert.equal(
+            (
+                await store.insertJob(
+                    scheduled("daily", { idempotencyKey: "schedules.run:x", idempotencyScope: "schedules.run" }),
+                )
+            ).job.id,
+            run.job.id,
+        );
+    });
+});
+
 describe("job store schedule runs", () => {
-    it("is at schema version 3", () => {
-        assert.equal(JOB_SCHEMA_VERSION, 3);
+    it("is at schema version 4", () => {
+        assert.equal(JOB_SCHEMA_VERSION, 4);
     });
 
     it("refuses a second run of an entry while its job is To do, naming it, and uses no number", async () => {
@@ -212,7 +276,7 @@ describe("job store schedule runs", () => {
                 "'{}', '{}', 'c', 'u')",
         );
         await migrateJobStore(db);
-        assert.equal(await readJobSchemaVersion(db), 3);
+        assert.equal(await readJobSchemaVersion(db), JOB_SCHEMA_VERSION);
         const store = createJobStore(db);
         assert.deepEqual(numbersOf((await store.listJobs({})).jobs), ["C-1"]);
         assert.deepEqual((await store.listJobs({ schedule: "daily" })).jobs, []);

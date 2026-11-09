@@ -196,6 +196,7 @@ describe("the import step", () => {
     it("migrates an imported version 2 file to the current version at its next start, with its jobs intact", async () => {
         const { file, jobs } = await exportedFile();
         const older = new DatabaseSync(file);
+        older.exec("DROP TABLE intern_job_keys");
         older.exec("DROP INDEX intern_jobs_by_schedule");
         older.exec("DROP TABLE intern_schedule_skips");
         older.exec("ALTER TABLE intern_jobs DROP COLUMN schedule_entry");

@@ -613,8 +613,8 @@ nothing. A refusal after the job is written is `createJob`'s existing cancel, wh
 
 So the reason a fire names follows that order: when the folder is gone and a run is open, the reason names the folder.
 
-**The fire's identity.** The fire's `idempotencyKey` is `schedule:<entry>:<due time>`, in the unique `idempotency_key`
-column, so the job and its key are one commit (REQ-016). A crash before that commit leaves the due time missed. A crash
+**The fire's identity.** The fire's `idempotencyKey` is `schedule:<entry>:<due time>`, in the `schedule.fire`
+key space, so the job and its key are one commit (REQ-016). A crash before that commit leaves the due time missed. A crash
 after it leaves the existing pairing of a job and its lead start, which repair rule 1 finishes (S-004 REQ-018; ADR-001
 decision 4).
 
@@ -633,7 +633,9 @@ the check reads jobs and not entries (REQ-003).
 
 **`schedules.run`.** It reads for its key first, so a repeat returns the original job even if the entry has since gone
 or its folder is missing. It then answers `not_found` for an unknown entry, and calls `startScheduledRun`. Its key is
-stored as `schedules.run:<key>`, so it can't meet a `jobs.create` key. The key is optional, as on `jobs.create` and
+stored in the `schedules.run` key space, separate from `jobs.create` and `schedule.fire`. Migration preserves legacy
+keys in the `jobs.create` space, and associates legacy scheduled runs and fires with their respective spaces using their
+stored origin. The key is optional, as on `jobs.create` and
 `roles.create`. The limit of 200 characters applies to the caller's key, before the prefix: `schedules.run` checks it,
 and `checkBeforeWrite` keeps the check for every caller other than a job source, which only in-process code can be. A
 team member or the front desk can call it; any other actor is refused `invalid_input`.
