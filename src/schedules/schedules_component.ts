@@ -8,7 +8,8 @@ import { ConfigError, type ConfigSection } from "../config/config_file.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
 import type { JobsComponent } from "../jobs/jobs_component.ts";
-import type { Operation } from "../service/operations.ts";
+import { ScheduledRunBusyError } from "../service/job_operations.ts";
+import { type Operation, ServiceError } from "../service/operations.ts";
 import { scheduleOperations, startScheduledRun } from "../service/schedule_operations.ts";
 import { fireKey } from "./schedule_model.ts";
 import { scheduleSection } from "./schedule_section.ts";
@@ -63,13 +64,30 @@ export async function createSchedulesComponent(options: SchedulesComponentOption
                 clock: schedules.clock,
                 phase: () => ctx.status.phase(),
                 entries: () => ctx.config.current(scheduleSection),
-                // A refusal is logged by the scheduler until a fire records it as skipped.
                 fire: async (entry, dueTime) => {
                     const fireTime = localTimeText(dueTime);
-                    await startScheduledRun(ctx, options.jobs, entry, {
-                        fireTime,
-                        idempotencyKey: fireKey(entry.name, fireTime),
-                    });
+                    try {
+                        await startScheduledRun(ctx, options.jobs, entry, {
+                            fireTime,
+                            idempotencyKey: fireKey(entry.name, fireTime),
+                        });
+                    } catch (error) {
+                        // Failures of the service stay missed due times; the scheduler logs them.
+                        if (
+                            !(error instanceof ServiceError) ||
+                            error.code === "unavailable" ||
+                            error.code === "internal"
+                        ) {
+                            throw error;
+                        }
+                        await ctx.jobStore.recordSkip({
+                            entry: entry.name,
+                            dueAt: dueTime.toISOString(),
+                            dueTime: fireTime,
+                            reason: error.message,
+                            openRun: error instanceof ScheduledRunBusyError ? error.openRun : null,
+                        });
+                    }
                 },
                 logger: options.logger,
             });
