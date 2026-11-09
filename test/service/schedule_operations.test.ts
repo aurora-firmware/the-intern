@@ -1,6 +1,6 @@
 /** Schedule entries at startup and their read operations (S-007 REQ-002, REQ-009: AC-002.1 to AC-002.3). */
 import assert from "node:assert/strict";
-import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { localTimeText } from "../../src/schedules/schedule_time.ts";
@@ -462,5 +462,258 @@ describe("the holds on roles and workspaces an entry names", () => {
         await rig.invoke("workspaces.unregister", { path });
         const listed = (await rig.invoke("workspaces.list")) as Workspaces;
         assert.ok(!listed.workspaces.some((entry) => entry.path === path));
+    });
+});
+
+describe("schedule run history", () => {
+    it("retains skipped fires through export and import", { timeout: TEST_TIMEOUT_MS }, async () => {
+        const { startExportDaemon, waitFor } = await import("../support/export_daemon.ts");
+        const { runDaemon } = await import("../../src/daemon/daemon.ts");
+        const { jobExportOperation } = await import("../../src/service/job_export_operation.ts");
+        const { createLocalSocketComponent } = await import("../../src/listeners/local_socket.ts");
+        const { networkSection } = await import("../../src/listeners/network_section.ts");
+        const { runBob } = await import("../support/bob_process.ts");
+        const { scheduleOperations } = await import("../../src/service/schedule_operations.ts");
+        const { createCatalogue } = await import("../../src/service/operations.ts");
+        const { createLogger } = await import("../../src/daemon/logger.ts");
+        const source = await startExportDaemon();
+        let restarted: ReturnType<typeof runDaemon> | undefined;
+        try {
+            const store = source.ctx().jobStore;
+            for (const [minute, action] of [
+                ["06", "complete"],
+                ["07", "cancel"],
+            ] as const) {
+                const { job } = await store.insertJob({
+                    letter: "S",
+                    requestText: "request",
+                    origin: {
+                        kind: "schedule",
+                        entry: "nightly",
+                        fireTime: `2026-11-08T${minute}:00:00.000Z`,
+                        ...(action === "complete" && { onDemand: { wayIn: "command line" } }),
+                    },
+                    leadStart: {},
+                    schedule: { entry: "nightly", firedAt: `2026-11-08T${minute}:00:00.000Z` },
+                });
+                if (action === "complete") await store.applyAction(job.number, "start", {}, { kind: "daemon" });
+                await store.applyAction(
+                    job.number,
+                    action,
+                    { justification: action, definitionOfDone: "done" },
+                    { kind: "daemon" },
+                );
+            }
+            await source.ctx().jobStore.recordSkip({
+                entry: "nightly",
+                dueAt: "2026-11-08T08:00:00.000Z",
+                dueTime: "local time",
+                reason: "busy",
+                openRun: null,
+            });
+            const operations = scheduleOperations(
+                { clock: { now: () => new Date(), wait: async () => {} } },
+                {
+                    runtime: () => {
+                        throw new Error("not used");
+                    },
+                },
+            );
+            const catalogue = createCatalogue(operations, {
+                context: source.ctx(),
+                phase: () => "ready",
+                logger: createLogger({ stream: { write: () => true } }),
+            });
+            const readSource = () =>
+                catalogue.invoke("schedules.runs", { name: "nightly" }, { actor: { kind: "team_member" } });
+            const expected = [
+                { kind: "skip", dueTime: "local time", reason: "busy" },
+                {
+                    kind: "run",
+                    number: "S-2",
+                    firedAt: "2026-11-08T07:00:00.000Z",
+                    status: "done",
+                    resolution: { kind: "cancelled", justification: "cancel" },
+                    onDemand: undefined,
+                },
+                {
+                    kind: "run",
+                    number: "S-1",
+                    firedAt: "2026-11-08T06:00:00.000Z",
+                    status: "done",
+                    resolution: { kind: "completed", justification: "complete" },
+                    onDemand: { wayIn: "command line" },
+                },
+            ];
+            const fields = (result: unknown) =>
+                (result as { items: import("../../src/jobs/job_store.ts").ScheduleRunItem[] }).items.map((item) =>
+                    item.kind === "skip"
+                        ? { kind: item.kind, dueTime: item.skip.dueTime, reason: item.skip.reason }
+                        : {
+                              kind: item.kind,
+                              number: item.job.number,
+                              firedAt: item.firedAt,
+                              status: item.job.status,
+                              resolution: item.job.resolution,
+                              onDemand:
+                                  item.job.request.origin.kind === "schedule"
+                                      ? item.job.request.origin.onDemand
+                                      : undefined,
+                          },
+                );
+            assert.deepEqual(fields(await readSource()), expected);
+            await source.daemon.stop();
+            const sourceRestarted = runDaemon({
+                flags: {
+                    configDir: source.env.configDir,
+                    stateDir: source.env.stateDir,
+                    dataDir: source.env.dataDir,
+                    runtimeDir: source.env.runtimeDir,
+                },
+                env: source.env.env,
+                homeDir: source.env.root,
+                logger: createLogger({ stream: { write: () => true } }),
+                sections: [networkSection],
+                components: [createLocalSocketComponent()],
+                operations: [...operations, jobExportOperation],
+            });
+            restarted = sourceRestarted;
+            await waitFor(() => sourceRestarted.phase() === "ready", "the source daemon to restart");
+            assert.deepEqual(
+                fields(
+                    await sourceRestarted.catalogue.invoke(
+                        "schedules.runs",
+                        { name: "nightly" },
+                        { actor: { kind: "team_member" } },
+                    ),
+                ),
+                expected,
+            );
+            const exported = await runBob(["export", "backup.db"], {
+                runtimeDir: source.env.runtimeDir,
+                env: source.env.env,
+                cwd: source.env.root,
+            });
+            assert.equal(exported.status, 0, exported.stderr);
+            const target = await rigWith("");
+            await target.daemon().stop();
+            await rm(join(target.env.stateDir, "the-intern.sqlite"));
+            const imported = await runBob(
+                [
+                    "import",
+                    join(source.env.root, "backup.db"),
+                    "--config-dir",
+                    target.env.configDir,
+                    "--state-dir",
+                    target.env.stateDir,
+                    "--data-dir",
+                    target.env.dataDir,
+                    "--runtime-dir",
+                    target.env.runtimeDir,
+                ],
+                { env: target.env.env },
+            );
+            assert.equal(imported.status, 0, imported.stderr);
+            await target.restart();
+            const history = (await target.invoke("schedules.runs", { name: "nightly" })) as {
+                items: { kind: string; skip: { reason: string } }[];
+            };
+            assert.deepEqual(fields(history), expected);
+            await target.restart();
+            assert.deepEqual(fields(await target.invoke("schedules.runs", { name: "nightly" })), expected);
+            assert.deepEqual(((await target.invoke("schedules.list")) as Listed).schedules, []);
+        } finally {
+            await restarted?.stop();
+            await source.stop();
+        }
+    });
+
+    it("returns history for configured and removed entries, and refuses unknown entries", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await rigWith(entryToml());
+        const { openHostDatabase } = await import("../../src/host/harness_host.ts");
+        const { createJobStore } = await import("../../src/jobs/job_store.ts");
+        const db = await openHostDatabase(join(rig.env.stateDir, "the-intern.sqlite"));
+        try {
+            const store = createJobStore(db);
+            const { job } = await store.insertJob({
+                letter: "S",
+                requestText: "request",
+                origin: { kind: "request", wayIn: "command line" },
+                leadStart: {},
+                schedule: { entry: "nightly", firedAt: "2026-11-08T07:00:00.000Z" },
+            });
+            await store.applyAction(job.number, "cancel", { justification: "cancelled" }, { kind: "daemon" });
+            await store.insertJob({
+                letter: "S",
+                requestText: "other",
+                origin: { kind: "request", wayIn: "command line" },
+                leadStart: {},
+                schedule: { entry: "other", firedAt: "2026-11-08T07:00:00.000Z" },
+            });
+            await store.insertJob({
+                letter: "C",
+                requestText: "ordinary",
+                origin: { kind: "request", wayIn: "command line" },
+                leadStart: {},
+            });
+            await store.recordSkip({
+                entry: "nightly",
+                dueAt: "2026-11-08T08:00:00.000Z",
+                dueTime: "local time",
+                reason: "busy",
+                openRun: job.number,
+            });
+            const history = await rig.invoke("schedules.runs", { name: "nightly" });
+            const page = history as { items: { kind: string }[] };
+            assert.deepEqual(
+                page.items.map((item) => item.kind),
+                ["skip", "run"],
+            );
+            const first = (await rig.invoke("schedules.runs", { name: "nightly", limit: 1 })) as {
+                items: unknown[];
+                cursor: string;
+            };
+            const second = (await rig.invoke("schedules.runs", {
+                name: "nightly",
+                limit: 1,
+                cursor: first.cursor,
+            })) as { items: unknown[]; cursor?: string };
+            assert.deepEqual([...first.items, ...second.items], page.items);
+            assert.equal(second.cursor, undefined);
+            for (const input of [
+                { name: "nightly", limit: 0 },
+                { name: "nightly", limit: 501 },
+                { name: "nightly", limit: 1.5 },
+                { name: "nightly", cursor: "invalid" },
+                { name: "nightly", cursor: "" },
+            ]) {
+                await assert.rejects(() => rig.invoke("schedules.runs", input), isRefusal("invalid_input"));
+            }
+            const listed = (await rig.invoke("schedules.list")) as {
+                schedules: { latestScheduledRun?: { number: string } }[];
+            };
+            assert.equal(listed.schedules[0]?.latestScheduledRun?.number, job.number);
+            assert.deepEqual(
+                ((await rig.invoke("jobs.list", { schedule: "nightly" })) as { jobs: { number: string }[] }).jobs.map(
+                    (item) => item.number,
+                ),
+                [job.number],
+            );
+            assert.deepEqual(
+                ((await rig.invoke("jobs.list", { schedule: "missing" })) as { jobs: unknown[] }).jobs,
+                [],
+            );
+            await rig.restart("");
+            assert.deepEqual(await rig.invoke("schedules.runs", { name: "nightly" }), history);
+            assert.deepEqual(((await rig.invoke("schedules.list")) as Listed).schedules, []);
+            await assert.rejects(
+                () => rig.invoke("schedules.runs", { name: "missing" }),
+                isRefusal("not_found", "missing"),
+            );
+        } finally {
+            await db.close();
+        }
     });
 });

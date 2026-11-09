@@ -19,6 +19,7 @@ import { scheduleSection } from "../schedules/schedule_section.ts";
 import { localTimeText, nextDueTime, parseCron } from "../schedules/schedule_time.ts";
 import type { SchedulesComponent } from "../schedules/schedules_component.ts";
 import { createJob, type JobView } from "./job_operations.ts";
+import { asRecord, refusing, requireString, STORE_PAGE_SIZE } from "./job_record_operations.ts";
 import { defineOperation, type Operation, ServiceError } from "./operations.ts";
 
 const CLEARABLE_KEYS = ["role", "model", "thinkingLevel", "workspace"];
@@ -149,7 +150,43 @@ export function scheduleOperations(
         name: "schedules.list",
         kind: "read",
         parse: () => ({}),
-        run: async ({ config }) => ({ schedules: config.current(scheduleSection).map(view) }),
+        run: async ({ config, jobStore }) => ({
+            schedules: await Promise.all(
+                config.current(scheduleSection).map(async (entry) => {
+                    const latestScheduledRun = await jobStore.latestScheduledRun(entry.name);
+                    return { ...view(entry), ...(latestScheduledRun !== undefined && { latestScheduledRun }) };
+                }),
+            ),
+        }),
+    });
+
+    const runsOperation = defineOperation({
+        name: "schedules.runs",
+        kind: "read",
+        parse: (raw: unknown) => {
+            const record = asRecord(raw);
+            const name = requireString(record, "name");
+            const limit = record.limit;
+            if (
+                limit !== undefined &&
+                (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > STORE_PAGE_SIZE)
+            ) {
+                throw new Error(`limit must be a whole number from 1 to ${STORE_PAGE_SIZE}`);
+            }
+            const cursor = record.cursor === undefined ? undefined : requireString(record, "cursor");
+            return { name, limit, cursor };
+        },
+        run: async ({ config, jobStore }: ServiceContext, { name, limit, cursor }) => {
+            const page = await refusing(jobStore.listScheduleRuns(name, { limit, cursor }));
+            if (
+                cursor === undefined &&
+                page.items.length === 0 &&
+                !config.current(scheduleSection).some((entry) => entry.name === name)
+            ) {
+                throw missing(name);
+            }
+            return page;
+        },
     });
 
     const getOperation = defineOperation<ServiceContext, { name: string }, { schedule: ScheduleView }>({
@@ -254,6 +291,7 @@ export function scheduleOperations(
     // biome-ignore lint/suspicious/noExplicitAny: heterogeneous operations cannot share a narrower type
     const operations: Operation<ServiceContext, any, any>[] = [
         listOperation,
+        runsOperation,
         getOperation,
         createOperation,
         changeOperation,
