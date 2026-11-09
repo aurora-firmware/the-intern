@@ -469,6 +469,9 @@ describe("schedule run history", () => {
     it("retains skipped fires through export and import", { timeout: TEST_TIMEOUT_MS }, async () => {
         const { startExportDaemon } = await import("../support/export_daemon.ts");
         const { runBob } = await import("../support/bob_process.ts");
+        const { scheduleOperations } = await import("../../src/service/schedule_operations.ts");
+        const { createCatalogue } = await import("../../src/service/operations.ts");
+        const { createLogger } = await import("../../src/daemon/logger.ts");
         const source = await startExportDaemon();
         try {
             const store = source.ctx().jobStore;
@@ -479,7 +482,12 @@ describe("schedule run history", () => {
                 const { job } = await store.insertJob({
                     letter: "S",
                     requestText: "request",
-                    origin: { kind: "request", wayIn: "command line" },
+                    origin: {
+                        kind: "schedule",
+                        entry: "nightly",
+                        fireTime: `2026-11-08T${minute}:00:00.000Z`,
+                        ...(action === "complete" && { onDemand: { wayIn: "command line" } }),
+                    },
                     leadStart: {},
                     schedule: { entry: "nightly", firedAt: `2026-11-08T${minute}:00:00.000Z` },
                 });
@@ -498,6 +506,57 @@ describe("schedule run history", () => {
                 reason: "busy",
                 openRun: null,
             });
+            const operations = scheduleOperations(
+                { clock: { now: () => new Date(), wait: async () => {} } },
+                {
+                    runtime: () => {
+                        throw new Error("not used");
+                    },
+                },
+            );
+            const catalogue = createCatalogue(operations, {
+                context: source.ctx(),
+                phase: () => "ready",
+                logger: createLogger({ stream: { write: () => true } }),
+            });
+            const readSource = () =>
+                catalogue.invoke("schedules.runs", { name: "nightly" }, { actor: { kind: "team_member" } });
+            const expected = [
+                { kind: "skip", dueTime: "local time", reason: "busy" },
+                {
+                    kind: "run",
+                    number: "S-2",
+                    firedAt: "2026-11-08T07:00:00.000Z",
+                    status: "done",
+                    resolution: { kind: "cancelled", justification: "cancel" },
+                    onDemand: undefined,
+                },
+                {
+                    kind: "run",
+                    number: "S-1",
+                    firedAt: "2026-11-08T06:00:00.000Z",
+                    status: "done",
+                    resolution: { kind: "completed", justification: "complete" },
+                    onDemand: { wayIn: "command line" },
+                },
+            ];
+            const fields = (result: unknown) =>
+                (result as { items: import("../../src/jobs/job_store.ts").ScheduleRunItem[] }).items.map((item) =>
+                    item.kind === "skip"
+                        ? { kind: item.kind, dueTime: item.skip.dueTime, reason: item.skip.reason }
+                        : {
+                              kind: item.kind,
+                              number: item.job.number,
+                              firedAt: item.firedAt,
+                              status: item.job.status,
+                              resolution: item.job.resolution,
+                              onDemand:
+                                  item.job.request.origin.kind === "schedule"
+                                      ? item.job.request.origin.onDemand
+                                      : undefined,
+                          },
+                );
+            assert.deepEqual(fields(await readSource()), expected);
             const exported = await runBob(["export", "backup.db"], {
                 runtimeDir: source.env.runtimeDir,
                 env: source.env.env,
@@ -527,11 +586,9 @@ describe("schedule run history", () => {
             const history = (await target.invoke("schedules.runs", { name: "nightly" })) as {
                 items: { kind: string; skip: { reason: string } }[];
             };
-            assert.deepEqual(
-                history.items.map((item) => item.kind),
-                ["skip", "run", "run"],
-            );
-            assert.equal(history.items[0]?.skip.reason, "busy");
+            assert.deepEqual(fields(history), expected);
+            await target.restart();
+            assert.deepEqual(fields(await target.invoke("schedules.runs", { name: "nightly" })), expected);
             assert.deepEqual(((await target.invoke("schedules.list")) as Listed).schedules, []);
         } finally {
             await source.stop();
@@ -581,13 +638,35 @@ describe("schedule run history", () => {
                 page.items.map((item) => item.kind),
                 ["skip", "run"],
             );
+            const first = (await rig.invoke("schedules.runs", { name: "nightly", limit: 1 })) as {
+                items: unknown[];
+                cursor: string;
+            };
+            const second = (await rig.invoke("schedules.runs", {
+                name: "nightly",
+                limit: 1,
+                cursor: first.cursor,
+            })) as { items: unknown[]; cursor?: string };
+            assert.deepEqual([...first.items, ...second.items], page.items);
+            assert.equal(second.cursor, undefined);
+            for (const input of [
+                { name: "nightly", limit: 0 },
+                { name: "nightly", limit: 501 },
+                { name: "nightly", limit: 1.5 },
+                { name: "nightly", cursor: "invalid" },
+                { name: "nightly", cursor: "" },
+            ]) {
+                await assert.rejects(() => rig.invoke("schedules.runs", input), isRefusal("invalid_input"));
+            }
             const listed = (await rig.invoke("schedules.list")) as {
                 schedules: { latestScheduledRun?: { number: string } }[];
             };
             assert.equal(listed.schedules[0]?.latestScheduledRun?.number, job.number);
-            assert.equal(
-                ((await rig.invoke("jobs.list", { schedule: "nightly" })) as { jobs: unknown[] }).jobs.length,
-                1,
+            assert.deepEqual(
+                ((await rig.invoke("jobs.list", { schedule: "nightly" })) as { jobs: { number: string }[] }).jobs.map(
+                    (item) => item.number,
+                ),
+                [job.number],
             );
             assert.deepEqual(
                 ((await rig.invoke("jobs.list", { schedule: "missing" })) as { jobs: unknown[] }).jobs,
