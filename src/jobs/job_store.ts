@@ -142,6 +142,7 @@ export type JobChange =
 export type JobStore = {
     insertJob(input: NewJob): Promise<{ job: Job; created: boolean }>;
     getJob(ref: string): Promise<Job>;
+    jobByKey(key: string): Promise<Job | undefined>;
     listJobs(filter: JobListFilter): Promise<{ jobs: Job[]; cursor?: string }>;
     leadStartOf(ref: string): Promise<unknown>;
     /** The lead's newest transcript entry ID recorded by the job's block, or null (S-004 REQ-018 rule 3). */
@@ -784,6 +785,10 @@ export function createJobStore(db: HostDatabase, options: JobStoreOptions = {}):
             const { job, created, changes } = await transact((tx) => insertIn(tx, input));
             for (const change of changes) report(change);
             return { job, created };
+        },
+        async jobByKey(key) {
+            const row = await db.get<JobRow>(`SELECT ${JOB_COLUMNS} FROM intern_jobs WHERE idempotency_key = ?`, key);
+            return row === undefined ? undefined : toJob(db, row);
         },
         async getJob(ref) {
             return toJob(db, await findRow(db, ref));

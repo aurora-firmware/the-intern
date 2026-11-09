@@ -1,6 +1,7 @@
 /** A scheduled job at each due time (S-007 REQ-001, REQ-004, REQ-015: AC-001.2, AC-004.1, AC-004.2, AC-015.1). */
 import assert from "node:assert/strict";
 import { chmod, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { request } from "node:http";
 import { join } from "node:path";
 import { afterEach, describe, it, type TestContext } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -12,10 +13,12 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import { blockJob } from "../../src/jobs/job_actions.ts";
 import type { NewJob } from "../../src/jobs/job_store.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
+import { localSocketPath } from "../../src/listeners/socket_path.ts";
 import { RoleRefusedError } from "../../src/roles/role_catalog.ts";
 import { localTimeText } from "../../src/schedules/schedule_time.ts";
 import { createSchedulesComponent } from "../../src/schedules/schedules_component.ts";
 import { ServiceError } from "../../src/service/operations.ts";
+import { startDaemon } from "../support/daemon_process.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv } from "../support/hermetic_env.ts";
 import { createTestClock, type ScheduleRig, startScheduleRig } from "../support/schedule_rig.ts";
@@ -106,6 +109,8 @@ async function fireRig(t: TestContext, extra = "") {
             daemon.catalogue.invoke(name, input, {
                 actor: { kind: "team_member", wayIn: "command line" },
             }),
+        invokeAs: (name: string, input: unknown, actor: import("../../src/service/operations.ts").Actor) =>
+            daemon.catalogue.invoke(name, input, { actor }),
         history: () => ctx.jobStore.listScheduleRuns("nightly", {}),
     };
 }
@@ -457,5 +462,145 @@ describe("a scheduled job at each due time", () => {
         assert.ok(rig.logs().includes(workspace));
         assert.ok(!rig.logs().includes(`The workspace folder ${workspace} does not exist.`));
         assert.deepEqual(await jobsOf(rig), []);
+    });
+});
+
+describe("a schedule run on demand", { timeout: TEST_TIMEOUT_MS }, () => {
+    it("returns the original job for a key even after the entry is removed", async (t) => {
+        const rig = await fireRig(t);
+        const before = await rig.invoke("schedules.get", { name: "nightly" });
+        const key = "k".repeat(200);
+        const first = (await rig.invoke("schedules.run", { name: "nightly", idempotencyKey: key })) as JobSummary;
+        assert.equal(first.number, "S-1");
+        assert.deepEqual(first.request.origin, {
+            kind: "schedule",
+            entry: "nightly",
+            fireTime: localTimeText(at(1)),
+            onDemand: { wayIn: "command line" },
+        });
+        assert.deepEqual(await rig.invoke("schedules.get", { name: "nightly" }), before);
+        await rig.invoke("schedules.remove", { name: "nightly" });
+        const repeat = (await rig.invoke("schedules.run", { name: "nightly", idempotencyKey: key })) as JobSummary;
+        assert.equal(repeat.id, first.id);
+        assert.equal((await rig.history()).items.length, 1);
+    });
+
+    it("refuses an open run and starts another after it is blocked", async (t) => {
+        const rig = await fireRig(t);
+        const first = (await rig.invoke("schedules.run", { name: "nightly" })) as JobSummary;
+        await waitFor(
+            async () => (await rig.ctx.jobStore.getJob(first.id)).status === "in_progress",
+            "the lead to start",
+        );
+        await assert.rejects(rig.invoke("schedules.run", { name: "nightly" }), { code: "busy", message: /S-1/ });
+        assert.equal((await rig.history()).items.length, 1);
+        await blockJob({ ctx: rig.ctx, options: rig.jobs.options }, first.id, "Waiting.", { kind: "daemon" });
+        const second = (await rig.invoke("schedules.run", { name: "nightly" })) as JobSummary;
+        assert.equal(second.number, "S-2");
+    });
+
+    it("refuses a missing entry, long key, and missing folder without recording a run", async (t) => {
+        const rig = await fireRig(t);
+        await assert.rejects(rig.invoke("schedules.run", { name: "absent" }), { code: "not_found" });
+        await assert.rejects(rig.invoke("schedules.run", { name: "nightly", idempotencyKey: "x".repeat(201) }), {
+            code: "invalid_input",
+        });
+        const workspace = rig.jobs.options.agents.runtime().catalog.seatFor("bob").workspace;
+        await rm(workspace, { recursive: true });
+        await assert.rejects(rig.invoke("schedules.run", { name: "nightly" }), {
+            code: "invalid_input",
+            message: new RegExp(workspace),
+        });
+        assert.deepEqual((await rig.history()).items, []);
+        await mkdir(workspace, { recursive: true, mode: 0o700 });
+        assert.equal(((await rig.invoke("schedules.run", { name: "nightly" })) as JobSummary).number, "S-1");
+    });
+
+    it("refuses an unavailable model without recording a run", async (t) => {
+        const rig = await fireRig(t, 'model = "nowhere/missing-model"\n');
+        await assert.rejects(rig.invoke("schedules.run", { name: "nightly" }), {
+            code: "invalid_input",
+            message: /nowhere\/missing-model/,
+        });
+        assert.deepEqual((await rig.history()).items, []);
+        assert.deepEqual((await rig.ctx.jobStore.listJobs({})).jobs, []);
+    });
+});
+
+describe("on-demand callers", { timeout: TEST_TIMEOUT_MS }, () => {
+    it("accepts the front desk and refuses other agents", async (t) => {
+        const rig = await fireRig(t);
+        await assert.rejects(
+            rig.invokeAs("schedules.run", { name: "nightly" }, { kind: "agent", conversationId: "agent" }),
+            { code: "invalid_input" },
+        );
+        const job = (await rig.invokeAs(
+            "schedules.run",
+            { name: "nightly" },
+            { kind: "front_desk", conversationId: "desk", wayIn: "web interface" },
+        )) as JobSummary;
+        assert.deepEqual(job.request.origin, {
+            kind: "schedule",
+            entry: "nightly",
+            fireTime: localTimeText(at(1)),
+            onDemand: { wayIn: "web interface", frontDesk: "desk" },
+        });
+    });
+
+    it("records the actual way in on each listener", async (t) => {
+        const env = await createHermeticEnv();
+        await writeFile(
+            join(env.configDir, "config.toml"),
+            entryToml("local", "0 2 * * *") + entryToml("network", "0 2 * * *"),
+        );
+        const daemon = startDaemon({
+            hermetic: env,
+            networkListener: true,
+            scheduleClock: at(1).toISOString(),
+            script: "gated",
+        });
+        t.after(async () => {
+            daemon.signal("SIGTERM");
+            await daemon.exited;
+            await env.dispose();
+        });
+        await daemon.ready;
+        const post = (target: { socketPath: string } | { host: string; port: number }, name: string) =>
+            new Promise<{ job: JobSummary; port?: number }>((resolve, reject) => {
+                const call = request(
+                    {
+                        ...target,
+                        method: "POST",
+                        path: "/operations/schedules.run",
+                        headers: { "content-type": "application/json" },
+                    },
+                    (response) => {
+                        const port = response.socket.localPort;
+                        const chunks: Buffer[] = [];
+                        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+                        response.on("end", () => {
+                            const body = JSON.parse(Buffer.concat(chunks).toString());
+                            if (response.statusCode !== 200) reject(new Error(JSON.stringify(body)));
+                            else resolve({ job: body.result, port });
+                        });
+                    },
+                );
+                call.on("error", reject);
+                call.end(JSON.stringify({ name }));
+            });
+        const local = await post({ socketPath: localSocketPath(env.runtimeDir) }, "local");
+        const network = await post({ host: "127.0.0.1", port: await daemon.networkPort() }, "network");
+        assert.deepEqual(local.job.request.origin, {
+            kind: "schedule",
+            entry: "local",
+            fireTime: localTimeText(at(1)),
+            onDemand: { wayIn: "command line" },
+        });
+        assert.deepEqual(network.job.request.origin, {
+            kind: "schedule",
+            entry: "network",
+            fireTime: localTimeText(at(1)),
+            onDemand: { wayIn: "web interface", observed: { remoteAddress: "127.0.0.1", remotePort: network.port } },
+        });
     });
 });
