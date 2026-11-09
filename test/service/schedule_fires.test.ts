@@ -1,6 +1,6 @@
 /** A scheduled job at each due time (S-007 REQ-001, REQ-004, REQ-015: AC-001.2, AC-004.1, AC-004.2, AC-015.1). */
 import assert from "node:assert/strict";
-import { chmod, mkdir, readFile, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, stat, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -188,31 +188,28 @@ describe("a scheduled job at each due time", () => {
         assert.deepEqual(await jobsOf(rig), []);
     });
 
-    it("logs an access error when the workspace exists inside an inaccessible folder", {
+    it("logs an access error when the workspace path contains a symbolic link loop", {
         timeout: TEST_TIMEOUT_MS,
     }, async () => {
         const rig = await rigWith("");
-        const parent = join(rig.env.root, "projects");
-        const workspace = join(parent, "audit");
-        await mkdir(workspace, { recursive: true, mode: 0o700 });
+        const workspace = join(rig.env.root, "audit");
+        await mkdir(workspace, { mode: 0o700 });
         await rig.invoke("workspaces.register", { path: workspace });
         const registered = await readFile(join(rig.env.configDir, "config.toml"), "utf8");
         await rig.restart(`${registered}\n${entryToml("audit", "0 2 * * *", `workspace = "${workspace}"\n`)}`);
-        await chmod(parent, 0o600);
-        try {
-            await assert.rejects(stat(workspace), { code: "EACCES" });
-            rig.clock.set(at(2));
-            const deadline = Date.now() + WAIT_TIMEOUT_MS;
-            while (!rig.logs().includes("A schedule fire failed")) {
-                if (Date.now() > deadline) throw new Error(`the access error was not logged in: ${rig.logs()}`);
-                await sleep(POLL_INTERVAL_MS);
-            }
-            assert.match(rig.logs(), /EACCES/);
-            assert.ok(rig.logs().includes(workspace));
-            assert.ok(!rig.logs().includes(`The workspace folder ${workspace} does not exist.`));
-            assert.deepEqual(await jobsOf(rig), []);
-        } finally {
-            await chmod(parent, 0o700);
+        // A link loop makes stat fail even as root, which bypasses directory permission restrictions in CI.
+        await rm(workspace, { recursive: true });
+        await symlink(workspace, workspace, "dir");
+        await assert.rejects(stat(workspace), { code: "ELOOP" });
+        rig.clock.set(at(2));
+        const deadline = Date.now() + WAIT_TIMEOUT_MS;
+        while (!rig.logs().includes("A schedule fire failed")) {
+            if (Date.now() > deadline) throw new Error(`the access error was not logged in: ${rig.logs()}`);
+            await sleep(POLL_INTERVAL_MS);
         }
+        assert.match(rig.logs(), /ELOOP/);
+        assert.ok(rig.logs().includes(workspace));
+        assert.ok(!rig.logs().includes(`The workspace folder ${workspace} does not exist.`));
+        assert.deepEqual(await jobsOf(rig), []);
     });
 });
