@@ -18,7 +18,7 @@ import { checkEntry, type ScheduleEntry } from "../schedules/schedule_model.ts";
 import { scheduleSection } from "../schedules/schedule_section.ts";
 import { localTimeText, nextDueTime, parseCron } from "../schedules/schedule_time.ts";
 import type { SchedulesComponent } from "../schedules/schedules_component.ts";
-import { createJob, type JobView } from "./job_operations.ts";
+import { createJob, type JobView, leadConversationOf, MAX_KEY_LENGTH } from "./job_operations.ts";
 import { asRecord, refusing, requireString, STORE_PAGE_SIZE } from "./job_record_operations.ts";
 import { defineOperation, type Operation, ServiceError } from "./operations.ts";
 
@@ -138,6 +138,7 @@ export async function startScheduledRun(
 export function scheduleOperations(
     component: Pick<SchedulesComponent, "clock">,
     agents: Pick<AgentsComponent, "runtime">,
+    jobs?: Pick<JobsComponent, "options">,
 ) {
     const view = (entry: ScheduleEntry): ScheduleView => ({
         ...entry,
@@ -274,6 +275,48 @@ export function scheduleOperations(
             }),
     });
 
+    const runOperation = defineOperation({
+        name: "schedules.run",
+        kind: "control",
+        parse: (raw: unknown) => {
+            const { name } = parseName(raw);
+            const { idempotencyKey } = raw as Record<string, unknown>;
+            if (
+                idempotencyKey !== undefined &&
+                (typeof idempotencyKey !== "string" || idempotencyKey.length > MAX_KEY_LENGTH)
+            ) {
+                throw new Error(`idempotencyKey must be a string of at most ${MAX_KEY_LENGTH} characters`);
+            }
+            return { name, idempotencyKey: idempotencyKey as string | undefined };
+        },
+        run: async (ctx: ServiceContext, { name, idempotencyKey }, { actor }) => {
+            let onDemand: JobOriginOnDemand;
+            if (actor.kind === "team_member") {
+                onDemand = { wayIn: actor.wayIn ?? "in-process", ...(actor.observed && { observed: actor.observed }) };
+            } else if (actor.kind === "front_desk") {
+                onDemand = { wayIn: actor.wayIn, frontDesk: actor.conversationId };
+            } else {
+                throw new ServiceError("invalid_input", `A ${actor.kind} cannot run a schedule`);
+            }
+            const key = idempotencyKey === undefined ? undefined : `schedules.run:${idempotencyKey}`;
+            if (key !== undefined) {
+                const existing = await ctx.jobStore.jobByKey(key);
+                if (existing !== undefined) {
+                    const leadConversation = await leadConversationOf(ctx.host, existing.id);
+                    return { ...existing, ...(leadConversation !== undefined && { leadConversation }) };
+                }
+            }
+            const entry = ctx.config.current(scheduleSection).find((candidate) => candidate.name === name);
+            if (entry === undefined) throw missing(name);
+            if (jobs === undefined) throw new ServiceError("internal", "Schedule runs need the jobs component");
+            return startScheduledRun(ctx, jobs, entry, {
+                fireTime: localTimeText(component.clock.now()),
+                onDemand,
+                ...(key !== undefined && { idempotencyKey: key }),
+            });
+        },
+    });
+
     const removeOperation = defineOperation<ServiceContext, { name: string }, Record<string, never>>({
         name: "schedules.remove",
         kind: "control",
@@ -296,6 +339,7 @@ export function scheduleOperations(
         createOperation,
         changeOperation,
         removeOperation,
+        runOperation,
     ];
     return operations;
 }

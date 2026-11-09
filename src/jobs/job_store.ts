@@ -28,7 +28,7 @@ import {
 
 export type { ScheduleRunItem, ScheduleSkip };
 
-export const JOB_SCHEMA_VERSION = 3;
+export const JOB_SCHEMA_VERSION = 4;
 
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 500;
@@ -106,6 +106,7 @@ export type NewJob = {
     title?: string;
     statedBy?: string;
     idempotencyKey?: string;
+    idempotencyScope?: "jobs.create" | "schedules.run" | "schedule.fire";
     /** A job to relate the new one to, written in the insert's own transaction. */
     relatedTo?: string;
     /** The schedule entry that fires the job and the UTC time it fired. Refused while a job of the entry is open. */
@@ -142,6 +143,7 @@ export type JobChange =
 export type JobStore = {
     insertJob(input: NewJob): Promise<{ job: Job; created: boolean }>;
     getJob(ref: string): Promise<Job>;
+    jobByKey(key: string): Promise<Job | undefined>;
     listJobs(filter: JobListFilter): Promise<{ jobs: Job[]; cursor?: string }>;
     leadStartOf(ref: string): Promise<unknown>;
     /** The lead's newest transcript entry ID recorded by the job's block, or null (S-004 REQ-018 rule 3). */
@@ -248,6 +250,18 @@ export const JOB_MIGRATIONS: readonly string[] = [
         open_run TEXT,
         PRIMARY KEY (entry, due_at)
     );
+    `,
+    `
+    CREATE TABLE intern_job_keys (scope TEXT NOT NULL, key TEXT NOT NULL, job TEXT NOT NULL REFERENCES intern_jobs(id),
+        PRIMARY KEY (scope, key));
+    INSERT INTO intern_job_keys SELECT 'jobs.create', idempotency_key, id FROM intern_jobs
+        WHERE idempotency_key IS NOT NULL AND json_extract(origin, '$.kind') IS NOT 'schedule';
+    INSERT INTO intern_job_keys SELECT 'schedule.fire', idempotency_key, id FROM intern_jobs
+        WHERE idempotency_key IS NOT NULL AND json_extract(origin, '$.kind') = 'schedule'
+        AND json_type(origin, '$.onDemand') IS NULL;
+    INSERT INTO intern_job_keys SELECT 'schedules.run', idempotency_key, id FROM intern_jobs
+        WHERE idempotency_key IS NOT NULL AND json_extract(origin, '$.kind') = 'schedule'
+        AND json_type(origin, '$.onDemand') IS NOT NULL;
     `,
 ];
 
@@ -462,7 +476,8 @@ async function refuseOpenScheduledRun(tx: HostSqlExecutor, entry: string): Promi
 async function insertIn(tx: HostSqlExecutor, input: NewJob): Promise<Inserted> {
     if (input.idempotencyKey !== undefined) {
         const existing = await tx.get<JobRow>(
-            `SELECT ${JOB_COLUMNS} FROM intern_jobs WHERE idempotency_key = ?`,
+            `SELECT ${JOB_COLUMNS} FROM intern_jobs WHERE id = (SELECT job FROM intern_job_keys WHERE scope = ? AND key = ?)`,
+            input.idempotencyScope ?? "jobs.create",
             input.idempotencyKey,
         );
         if (existing) return { job: await toJob(tx, existing), created: false, changes: [] };
@@ -483,12 +498,20 @@ async function insertIn(tx: HostSqlExecutor, input: NewJob): Promise<Inserted> {
         JSON.stringify(input.origin),
         input.statedBy ?? null,
         JSON.stringify(input.leadStart ?? null),
-        input.idempotencyKey ?? null,
+        null,
         now,
         now,
         input.schedule?.entry ?? null,
         input.schedule?.firedAt ?? null,
     );
+    if (input.idempotencyKey !== undefined) {
+        await tx.run(
+            "INSERT INTO intern_job_keys (scope, key, job) VALUES (?, ?, ?)",
+            input.idempotencyScope ?? "jobs.create",
+            input.idempotencyKey,
+            id,
+        );
+    }
     const changes: JobChange[] = [];
     if (input.relatedTo !== undefined) {
         const other = await findRow(tx, input.relatedTo);
@@ -784,6 +807,14 @@ export function createJobStore(db: HostDatabase, options: JobStoreOptions = {}):
             const { job, created, changes } = await transact((tx) => insertIn(tx, input));
             for (const change of changes) report(change);
             return { job, created };
+        },
+        async jobByKey(key) {
+            const row = await db.get<JobRow>(
+                `SELECT ${JOB_COLUMNS} FROM intern_jobs WHERE id = (SELECT job FROM intern_job_keys WHERE scope = ? AND key = ?)`,
+                "schedules.run",
+                key,
+            );
+            return row === undefined ? undefined : toJob(db, row);
         },
         async getJob(ref) {
             return toJob(db, await findRow(db, ref));

@@ -353,7 +353,11 @@ export async function createJob(
             ...(origin.kind === "schedule" && { schedule: { entry: origin.entry, firedAt: origin.fireTime } }),
             ...(request.title !== undefined && { title: request.title }),
             ...(request.statedBy !== undefined && { statedBy: request.statedBy }),
-            ...(request.idempotencyKey !== undefined && { idempotencyKey: request.idempotencyKey }),
+            ...(request.idempotencyKey !== undefined && {
+                idempotencyKey: request.idempotencyKey,
+                idempotencyScope:
+                    origin.kind === "schedule" ? (origin.onDemand ? "schedules.run" : "schedule.fire") : "jobs.create",
+            }),
             ...(relatedTo !== undefined && { relatedTo, author }),
             leadStart,
         });
