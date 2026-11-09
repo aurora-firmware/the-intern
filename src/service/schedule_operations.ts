@@ -82,7 +82,10 @@ const SCHEDULE_SOURCE = { kind: "job_source", source: "schedule" } as const;
 async function requireFolder(path: string): Promise<void> {
     const found = await stat(path).then(
         (info) => info.isDirectory(),
-        () => false,
+        (error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return false;
+            throw error;
+        },
     );
     if (!found) throw new ServiceError("invalid_input", `The workspace folder ${path} does not exist.`);
 }

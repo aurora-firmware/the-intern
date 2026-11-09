@@ -1,6 +1,6 @@
 /** A scheduled job at each due time (S-007 REQ-001, REQ-004, REQ-015: AC-001.2, AC-004.1, AC-004.2, AC-015.1). */
 import assert from "node:assert/strict";
-import { chmod, mkdir, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -81,9 +81,11 @@ describe("a scheduled job at each due time", () => {
         const rig = await rigWith(entryToml("nightly", "0 2 * * *"));
         assert.deepEqual(await jobsOf(rig), []);
         rig.clock.set(at(2));
-        const [job, ...rest] = await waitForJobs(rig, 1);
+        const jobs = await waitForJobs(rig, 1);
+        assert.equal(jobs.length, 1);
+        const [job] = jobs;
         await sleep(100);
-        assert.equal((await jobsOf(rig)).length, 1 + rest.length);
+        assert.equal((await jobsOf(rig)).length, 1);
         assert.ok(job);
         assert.equal(job.request.text, "Run nightly.");
         assert.deepEqual(job.request.origin, { kind: "schedule", entry: "nightly", fireTime: localTimeText(at(2)) });
@@ -184,5 +186,33 @@ describe("a scheduled job at each due time", () => {
             await sleep(POLL_INTERVAL_MS);
         }
         assert.deepEqual(await jobsOf(rig), []);
+    });
+
+    it("logs an access error when the workspace exists inside an inaccessible folder", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await rigWith("");
+        const parent = join(rig.env.root, "projects");
+        const workspace = join(parent, "audit");
+        await mkdir(workspace, { recursive: true, mode: 0o700 });
+        await rig.invoke("workspaces.register", { path: workspace });
+        const registered = await readFile(join(rig.env.configDir, "config.toml"), "utf8");
+        await rig.restart(`${registered}\n${entryToml("audit", "0 2 * * *", `workspace = "${workspace}"\n`)}`);
+        await chmod(parent, 0o600);
+        try {
+            await assert.rejects(stat(workspace), { code: "EACCES" });
+            rig.clock.set(at(2));
+            const deadline = Date.now() + WAIT_TIMEOUT_MS;
+            while (!rig.logs().includes("A schedule fire failed")) {
+                if (Date.now() > deadline) throw new Error(`the access error was not logged in: ${rig.logs()}`);
+                await sleep(POLL_INTERVAL_MS);
+            }
+            assert.match(rig.logs(), /EACCES/);
+            assert.ok(rig.logs().includes(workspace));
+            assert.ok(!rig.logs().includes(`The workspace folder ${workspace} does not exist.`));
+            assert.deepEqual(await jobsOf(rig), []);
+        } finally {
+            await chmod(parent, 0o700);
+        }
     });
 });
