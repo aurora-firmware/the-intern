@@ -623,3 +623,94 @@ describe("on-demand callers", { timeout: TEST_TIMEOUT_MS }, () => {
         });
     });
 });
+
+describe("missed due times and job endings", { timeout: TEST_TIMEOUT_MS }, () => {
+    it("does not catch up after a restart and reports tomorrow's due time (AC-007.1)", async () => {
+        const rig = await rigWith(entryToml("nightly", "0 2 * * *"));
+        rig.clock.set(at(1, 59));
+        await rig.daemon().stop();
+        rig.clock.set(at(2, 5));
+        await rig.restart();
+        assert.deepEqual(await jobsOf(rig), []);
+        assert.deepEqual(((await rig.invoke("schedules.runs", { name: "nightly" })) as { items: unknown[] }).items, []);
+        const result = (await rig.invoke("schedules.get", { name: "nightly" })) as {
+            schedule: { nextDueTime: string };
+        };
+        assert.equal(result.schedule.nextDueTime, localTimeText(new Date(2026, 10, 9, 2)));
+    });
+
+    it("does not catch up after the clock jumps to 02:30 (AC-007.2)", async (t) => {
+        const rig = await rigWith(entryToml("nightly", "0 2 * * *"));
+        rig.clock.set(at(1, 59));
+        await sleep(20);
+        const wait = t.mock.method(rig.clock, "wait");
+        rig.clock.set(at(2, 30));
+        await waitFor(async () => wait.mock.callCount() > 0, "the scheduler's next check");
+        await rig.restart();
+        assert.deepEqual(await jobsOf(rig), []);
+        assert.deepEqual(((await rig.invoke("schedules.runs", { name: "nightly" })) as { items: unknown[] }).items, []);
+    });
+
+    it("fires a due time less than a minute old after a clock jump (REQ-007)", async () => {
+        const rig = await rigWith(entryToml("nightly", "0 2 * * *"));
+        rig.clock.set(new Date(2026, 10, 8, 1, 59, 50));
+        rig.clock.set(new Date(2026, 10, 8, 2, 0, 40));
+        const jobs = await waitForJobs(rig, 1);
+        assert.equal(jobs.length, 1);
+        assert.equal(jobs[0]?.request.origin.fireTime, localTimeText(at(2)));
+    });
+
+    it("keeps runs through removal and adds fires after the name is restored (AC-003.3)", async (t) => {
+        const rig = await fireRig(t);
+        rig.clock.set(at(1, 1));
+        await waitFor(async () => (await rig.history()).items.length === 1, "the first run");
+        await rig.invoke("jobs.update", { job: "S-1", definitionOfDone: "The work is done." });
+        await rig.invoke("jobs.complete", { job: "S-1", justification: "Finished." });
+        rig.clock.set(at(1, 2));
+        await waitFor(async () => (await rig.history()).items.length === 2, "the second run");
+        await waitFor(async () => (await rig.ctx.jobStore.getJob("S-2")).status === "in_progress", "the second lead");
+        const runs = async () =>
+            (
+                (await rig.invoke("schedules.runs", { name: "nightly" })) as {
+                    items: { kind: string; job?: { number: string; status: string } }[];
+                }
+            ).items;
+        const numbers = async () => (await runs()).map((item) => item.job?.number).sort();
+        assert.deepEqual(await numbers(), ["S-1", "S-2"]);
+        await rig.invoke("schedules.remove", { name: "nightly" });
+        assert.deepEqual(await numbers(), ["S-1", "S-2"]);
+        const wait = t.mock.method(rig.clock, "wait");
+        rig.clock.set(at(1, 3));
+        await waitFor(async () => wait.mock.callCount() > 0, "the check with the entry removed");
+        await sleep(100);
+        assert.equal((await rig.ctx.jobStore.listJobs({})).jobs.length, 2);
+        assert.deepEqual(await numbers(), ["S-1", "S-2"]);
+        await rig.invoke("jobs.update", { job: "S-2", definitionOfDone: "The work is done." });
+        await rig.invoke("jobs.complete", { job: "S-2", justification: "Finished normally." });
+        assert.equal((await rig.ctx.jobStore.getJob("S-2")).status, "done");
+        assert.deepEqual(await numbers(), ["S-1", "S-2"]);
+        await rig.invoke("schedules.create", { name: "nightly", cron: "* * * * *", request: "Run again." });
+        assert.deepEqual(await numbers(), ["S-1", "S-2"]);
+        rig.clock.set(at(1, 4));
+        await waitFor(async () => (await runs()).length === 3, "the restored entry's fire");
+        assert.deepEqual(await numbers(), ["S-1", "S-2", "S-3"]);
+        assert.ok((await runs()).every((item) => item.kind === "run"));
+    });
+
+    it("starts no extra jobs when scheduled runs complete and are cancelled (AC-014.1)", async (t) => {
+        const rig = await fireRig(t);
+        rig.clock.set(at(1, 1));
+        await waitFor(async () => (await rig.history()).items.length === 1, "the first run");
+        await rig.invoke("jobs.update", { job: "S-1", definitionOfDone: "The work is done." });
+        await rig.invoke("jobs.complete", { job: "S-1", justification: "Finished." });
+        await sleep(100);
+        assert.equal((await rig.ctx.jobStore.listJobs({})).jobs.length, 1);
+        rig.clock.set(at(1, 2));
+        await waitFor(async () => (await rig.history()).items.length === 2, "the second run");
+        await rig.invoke("jobs.cancel", { job: "S-2", justification: "No longer needed." });
+        await sleep(100);
+        assert.equal((await rig.ctx.jobStore.listJobs({})).jobs.length, 2);
+        await rig.invoke("jobs.create", { text: "A team member's job." });
+        assert.equal((await rig.ctx.jobStore.listJobs({})).jobs.length, 3);
+    });
+});
