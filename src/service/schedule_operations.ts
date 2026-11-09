@@ -2,18 +2,23 @@
  * The schedule operations (S-007 REQ-009, REQ-001): `schedules.list` and `schedules.get`, and `schedules.create`,
  * `schedules.change` and `schedules.remove`, which check the entry and write the configuration file as one step.
  */
+import { stat } from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import type { AgentsComponent } from "../agents/agents_component.ts";
 import { ConfigValueError } from "../config/config_file.ts";
 import { ConfigChangeRefused } from "../config/config_writer.ts";
 import type { ServiceContext } from "../daemon/daemon.ts";
 import { HostInvalidKeyError, settingsResultOnce } from "../host/idempotency.ts";
+import type { JobOriginOnDemand } from "../jobs/job_model.ts";
+import type { JobsComponent } from "../jobs/jobs_component.ts";
 import { RoleRefusedError } from "../roles/role_catalog.ts";
+import type { Seat } from "../roles/role_model.ts";
 import { DEFAULT_LEAD_ROLE } from "../roles/shipped_roles.ts";
 import { checkEntry, type ScheduleEntry } from "../schedules/schedule_model.ts";
 import { scheduleSection } from "../schedules/schedule_section.ts";
 import { localTimeText, nextDueTime, parseCron } from "../schedules/schedule_time.ts";
 import type { SchedulesComponent } from "../schedules/schedules_component.ts";
+import { createJob, type JobView } from "./job_operations.ts";
 import { defineOperation, type Operation, ServiceError } from "./operations.ts";
 
 const CLEARABLE_KEYS = ["role", "model", "thinkingLevel", "workspace"];
@@ -68,6 +73,65 @@ async function mappingRefusals<T>(action: () => Promise<T>): Promise<T> {
         if (error instanceof HostInvalidKeyError) throw new ServiceError("invalid_input", error.message);
         throw error;
     }
+}
+
+export type ScheduledRunOptions = { fireTime: string; onDemand?: JobOriginOnDemand; idempotencyKey?: string };
+
+const SCHEDULE_SOURCE = { kind: "job_source", source: "schedule" } as const;
+
+async function requireFolder(path: string): Promise<void> {
+    const found = await stat(path).then(
+        (info) => info.isDirectory(),
+        (error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return false;
+            throw error;
+        },
+    );
+    if (!found) throw new ServiceError("invalid_input", `The workspace folder ${path} does not exist.`);
+}
+
+/**
+ * Starts the job of a schedule entry: a fire and a run on demand make the same checks here, and differ only in what
+ * they do with a refusal (S-007 REQ-006, REQ-008). The entry's values are stored with the job when it is written, so a
+ * later change of the entry leaves the running job as it was (REQ-003).
+ */
+export async function startScheduledRun(
+    ctx: ServiceContext,
+    jobs: Pick<JobsComponent, "options">,
+    entry: ScheduleEntry,
+    options: ScheduledRunOptions,
+): Promise<JobView> {
+    const overrides = {
+        ...(entry.model === undefined ? {} : { model: entry.model }),
+        ...(entry.thinkingLevel === undefined ? {} : { thinkingLevel: entry.thinkingLevel }),
+        ...(entry.workspace === undefined ? {} : { workspace: entry.workspace }),
+    };
+    let seat: Seat;
+    try {
+        seat = jobs.options.agents.runtime().catalog.seatFor(entry.role ?? DEFAULT_LEAD_ROLE, overrides);
+    } catch (error) {
+        if (error instanceof RoleRefusedError) throw new ServiceError("invalid_input", error.message);
+        throw error;
+    }
+    await requireFolder(seat.workspace);
+    const origin = {
+        kind: "schedule",
+        entry: entry.name,
+        fireTime: options.fireTime,
+        ...(options.onDemand !== undefined && { onDemand: options.onDemand }),
+    };
+    return createJob(
+        ctx,
+        jobs.options,
+        {
+            text: entry.request,
+            ...(entry.role !== undefined && { role: entry.role }),
+            ...overrides,
+            origin,
+            ...(options.idempotencyKey !== undefined && { idempotencyKey: options.idempotencyKey }),
+        },
+        { actor: SCHEDULE_SOURCE },
+    );
 }
 
 export function scheduleOperations(

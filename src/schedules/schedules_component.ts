@@ -9,8 +9,11 @@ import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
 import type { JobsComponent } from "../jobs/jobs_component.ts";
 import type { Operation } from "../service/operations.ts";
-import { scheduleOperations } from "../service/schedule_operations.ts";
+import { scheduleOperations, startScheduledRun } from "../service/schedule_operations.ts";
+import { fireKey } from "./schedule_model.ts";
 import { scheduleSection } from "./schedule_section.ts";
+import { localTimeText } from "./schedule_time.ts";
+import { createScheduler, type Scheduler } from "./scheduler.ts";
 
 /** What the schedules read time from. A test passes its own; the real one is `Date` and `setTimeout`. */
 export type ScheduleClock = {
@@ -51,9 +54,31 @@ const realClock: ScheduleClock = {
 
 export async function createSchedulesComponent(options: SchedulesComponentOptions): Promise<SchedulesComponent> {
     const { agents } = options;
+    let scheduler: Scheduler | undefined;
 
     const component: DaemonComponent = {
         name: "schedules",
+        async start(ctx) {
+            scheduler = createScheduler({
+                clock: schedules.clock,
+                phase: () => ctx.status.phase(),
+                entries: () => ctx.config.current(scheduleSection),
+                // A refusal is logged by the scheduler until a fire records it as skipped.
+                fire: async (entry, dueTime) => {
+                    const fireTime = localTimeText(dueTime);
+                    await startScheduledRun(ctx, options.jobs, entry, {
+                        fireTime,
+                        idempotencyKey: fireKey(entry.name, fireTime),
+                    });
+                },
+                logger: options.logger,
+            });
+            scheduler.start();
+        },
+        async stop() {
+            await scheduler?.stop();
+            scheduler = undefined;
+        },
         async checkModels(ctx) {
             const { catalog, workspaces } = agents.runtime();
             const entries = () => ctx.config.current(scheduleSection);
