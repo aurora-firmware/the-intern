@@ -146,6 +146,45 @@ describe("scoped idempotency", () => {
         assert.equal(jobAgain.job.id, job.job.id);
     });
 
+    it("does not import legacy scheduled keys into the jobs.create space", async () => {
+        const db = await openDb();
+        for (const migration of JOB_MIGRATIONS.slice(0, 3)) await db.exec(migration);
+        await db.run("INSERT INTO intern_schema (id, version) VALUES (1, 3)");
+        const insert = `INSERT INTO intern_jobs (id, letter, n, title, description, definition_of_done, status,
+            request_text, origin, lead_start, idempotency_key, created_at, updated_at)
+            VALUES (?, 'S', ?, '', '', '', 'to_do', 'r', ?, '{}', ?, 'c', 'u')`;
+        await db.run(
+            insert,
+            "run",
+            1,
+            JSON.stringify({ kind: "schedule", entry: "daily", fireTime: "t", onDemand: { wayIn: "command line" } }),
+            "schedules.run:x",
+        );
+        await db.run(
+            insert,
+            "fire",
+            2,
+            JSON.stringify({ kind: "schedule", entry: "weekly", fireTime: "t" }),
+            "schedule:weekly:t",
+        );
+        await migrateJobStore(db);
+        const store = createJobStore(db);
+        assert.equal((await store.jobByKey("schedules.run:x"))?.id, "run");
+        assert.equal(
+            (
+                await store.insertJob(
+                    scheduled("weekly", { idempotencyKey: "schedule:weekly:t", idempotencyScope: "schedule.fire" }),
+                )
+            ).job.id,
+            "fire",
+        );
+        for (const key of ["schedules.run:x", "schedule:weekly:t"]) {
+            const created = await store.insertJob(newJob("C", { idempotencyKey: key }));
+            assert.equal(created.created, true);
+            assert.equal((await store.insertJob(newJob("C", { idempotencyKey: key }))).job.id, created.job.id);
+        }
+    });
+
     it("keeps caller keys separate from schedule runs and preserves legacy keys", async () => {
         const db = await openDb();
         for (const migration of JOB_MIGRATIONS.slice(0, 3)) await db.exec(migration);

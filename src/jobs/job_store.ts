@@ -254,7 +254,8 @@ export const JOB_MIGRATIONS: readonly string[] = [
     `
     CREATE TABLE intern_job_keys (scope TEXT NOT NULL, key TEXT NOT NULL, job TEXT NOT NULL REFERENCES intern_jobs(id),
         PRIMARY KEY (scope, key));
-    INSERT INTO intern_job_keys SELECT 'jobs.create', idempotency_key, id FROM intern_jobs WHERE idempotency_key IS NOT NULL;
+    INSERT INTO intern_job_keys SELECT 'jobs.create', idempotency_key, id FROM intern_jobs
+        WHERE idempotency_key IS NOT NULL AND json_extract(origin, '$.kind') IS NOT 'schedule';
     INSERT INTO intern_job_keys SELECT 'schedule.fire', idempotency_key, id FROM intern_jobs
         WHERE idempotency_key IS NOT NULL AND json_extract(origin, '$.kind') = 'schedule'
         AND json_type(origin, '$.onDemand') IS NULL;

@@ -633,9 +633,8 @@ the check reads jobs and not entries (REQ-003).
 
 **`schedules.run`.** It reads for its key first, so a repeat returns the original job even if the entry has since gone
 or its folder is missing. It then answers `not_found` for an unknown entry, and calls `startScheduledRun`. Its key is
-stored in the `schedules.run` key space, separate from `jobs.create` and `schedule.fire`. Migration preserves legacy
-keys in the `jobs.create` space, and associates legacy scheduled runs and fires with their respective spaces using their
-stored origin. The key is optional, as on `jobs.create` and
+stored in the `schedules.run` key space, separate from `jobs.create` and `schedule.fire`. Migration assigns legacy
+keys to the `jobs.create`, `schedules.run` or `schedule.fire` space using the job’s stored origin. The key is optional, as on `jobs.create` and
 `roles.create`. The limit of 200 characters applies to the caller's key, before the prefix: `schedules.run` checks it,
 and `checkBeforeWrite` keeps the check for every caller other than a job source, which only in-process code can be. A
 team member or the front desk can call it; any other actor is refused `invalid_input`.
