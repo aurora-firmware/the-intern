@@ -467,12 +467,17 @@ describe("the holds on roles and workspaces an entry names", () => {
 
 describe("schedule run history", () => {
     it("retains skipped fires through export and import", { timeout: TEST_TIMEOUT_MS }, async () => {
-        const { startExportDaemon } = await import("../support/export_daemon.ts");
+        const { startExportDaemon, waitFor } = await import("../support/export_daemon.ts");
+        const { runDaemon } = await import("../../src/daemon/daemon.ts");
+        const { jobExportOperation } = await import("../../src/service/job_export_operation.ts");
+        const { createLocalSocketComponent } = await import("../../src/listeners/local_socket.ts");
+        const { networkSection } = await import("../../src/listeners/network_section.ts");
         const { runBob } = await import("../support/bob_process.ts");
         const { scheduleOperations } = await import("../../src/service/schedule_operations.ts");
         const { createCatalogue } = await import("../../src/service/operations.ts");
         const { createLogger } = await import("../../src/daemon/logger.ts");
         const source = await startExportDaemon();
+        let restarted: ReturnType<typeof runDaemon> | undefined;
         try {
             const store = source.ctx().jobStore;
             for (const [minute, action] of [
@@ -557,6 +562,33 @@ describe("schedule run history", () => {
                           },
                 );
             assert.deepEqual(fields(await readSource()), expected);
+            await source.daemon.stop();
+            const sourceRestarted = runDaemon({
+                flags: {
+                    configDir: source.env.configDir,
+                    stateDir: source.env.stateDir,
+                    dataDir: source.env.dataDir,
+                    runtimeDir: source.env.runtimeDir,
+                },
+                env: source.env.env,
+                homeDir: source.env.root,
+                logger: createLogger({ stream: { write: () => true } }),
+                sections: [networkSection],
+                components: [createLocalSocketComponent()],
+                operations: [...operations, jobExportOperation],
+            });
+            restarted = sourceRestarted;
+            await waitFor(() => sourceRestarted.phase() === "ready", "the source daemon to restart");
+            assert.deepEqual(
+                fields(
+                    await sourceRestarted.catalogue.invoke(
+                        "schedules.runs",
+                        { name: "nightly" },
+                        { actor: { kind: "team_member" } },
+                    ),
+                ),
+                expected,
+            );
             const exported = await runBob(["export", "backup.db"], {
                 runtimeDir: source.env.runtimeDir,
                 env: source.env.env,
@@ -591,6 +623,7 @@ describe("schedule run history", () => {
             assert.deepEqual(fields(await target.invoke("schedules.runs", { name: "nightly" })), expected);
             assert.deepEqual(((await target.invoke("schedules.list")) as Listed).schedules, []);
         } finally {
+            await restarted?.stop();
             await source.stop();
         }
     });
