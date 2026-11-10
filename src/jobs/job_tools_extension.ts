@@ -84,11 +84,15 @@ async function refusable(tool: string, action: () => Promise<ToolExecutionResult
 const readJobTool = (options: JobToolsOptions) =>
     defineTool({
         name: "read_job",
-        description: "Read the job of this conversation with its worklog and its history.",
-        parameters: Type.Object({}),
-        async execute(_args, api) {
+        description: "Read a job with its worklog and history, or the job of this conversation if none is named.",
+        parameters: Type.Object({
+            job: Type.Optional(Type.String({ description: "The job, by ID or short number such as S-14." })),
+        }),
+        async execute(args, api) {
             const { jobId } = await seatOf(options, api);
-            return refusable("read_job", async () => jsonResult(await readJob(options.actions().ctx, jobId)));
+            return refusable("read_job", async () =>
+                jsonResult(await readJob(options.actions().ctx, args.job ?? jobId)),
+            );
         },
     });
 

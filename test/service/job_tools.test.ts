@@ -182,6 +182,53 @@ describe("the job tools extension", () => {
 });
 
 describe("read_job", () => {
+    it("reads another Done job by number and ID without redirecting later writes", async () => {
+        const started = await start();
+        const other = await started.createJob(sourceCaller, { origin: schedule });
+        await started.invoke("jobs.worklog.add", { job: other.id, text: "previous run" });
+        await started.ctx.jobStore.applyAction(other.id, "cancel", { justification: "finished" }, { kind: "daemon" });
+        const job = await started.createJob(sourceCaller, { origin: schedule });
+        const before = await started.ctx.jobStore.getJob(other.id);
+        const conversation = await started.seat(job.id);
+
+        const { state, results } = await started.run(conversation, [
+            { name: "read_job", arguments: { job: other.number } },
+            { name: "read_job", arguments: { job: other.id } },
+            { name: "update_job", arguments: { title: "Current run" } },
+            { name: "add_worklog", arguments: { text: "current work" } },
+        ]);
+
+        assert.equal(state, "done");
+        for (const result of results.slice(0, 2)) {
+            assert.equal(result.isError, false);
+            const read = jsonOf(result);
+            assert.equal(read.number, other.number);
+            assert.equal(read.worklog[0].text, "previous run");
+            assert.ok(read.history.length > 0);
+        }
+        assert.equal(results[2]?.isError, false);
+        assert.equal(results[3]?.isError, false);
+        assert.equal((await started.ctx.jobStore.getJob(job.id)).title, "Current run");
+        assert.equal((await started.ctx.jobStore.listWorklog(job.id, {})).entries[0]?.text, "current work");
+        assert.deepEqual(await started.ctx.jobStore.getJob(other.id), before);
+    });
+
+    it("refuses an unknown job and continues the run", async () => {
+        const started = await start();
+        const job = await started.createJob();
+        const conversation = await started.seat(job.id);
+
+        const { state, results } = await started.run(conversation, [
+            { name: "read_job", arguments: { job: "S-99999" } },
+            { name: "read_job", arguments: {} },
+        ]);
+
+        assert.equal(state, "done");
+        assert.equal(results[0]?.isError, true);
+        assert.match(results[0]?.text ?? "", /S-99999/);
+        assert.equal(jsonOf(results[1]).number, job.number);
+    });
+
     it("returns the job of its own conversation with its worklog and history", async () => {
         const started = await start();
         const job = await started.createJob();
