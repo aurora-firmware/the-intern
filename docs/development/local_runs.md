@@ -23,10 +23,11 @@ The daemon runs in the foreground and writes its log to standard error (S-002 RE
 lines. Stop it with Ctrl-C. For a second instance, use another folder under `.tmp/`.
 
 Run the live checks, which start the daemon over your own pi login, with `npm run test:live`,
-`npm run test:live:agents`, `npm run test:live:jobs` and `npm run test:live:desk`. The last asks the front desk for a
-piece of work, then pipes the same request to `bob chat` and runs `bob jobs follow` on the job it names until it is
-Done. Each takes `--model <provider/id>` after `--`, and each runs in a short folder under the system temp folder,
-since a socket path over 107 bytes fails.
+`npm run test:live:agents`, `npm run test:live:jobs`, `npm run test:live:schedules` and `npm run test:live:desk`. The
+schedules check creates an entry that fires every minute for a file in `gp`'s workspace, and waits for the fire at the
+next whole minute. The desk check asks the front desk for a piece of work, then pipes the same request to `bob chat`
+and runs `bob jobs follow` on the job it names until it is Done. Each takes `--model <provider/id>` after `--`, and each
+runs in a short folder under the system temp folder, since a socket path over 107 bytes fails.
 
 ## Checking the network listener from the LAN
 
