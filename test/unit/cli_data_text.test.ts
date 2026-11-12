@@ -16,7 +16,8 @@ import {
 } from "../../src/cli/conversation_text.ts";
 import { conversationEntryLine, doneLine, instanceEventLine, jobEventLine } from "../../src/cli/feed_text.ts";
 import { formatCreated, formatJobDetail, formatJobLine } from "../../src/cli/job_text.ts";
-import type { Job } from "../../src/jobs/job_store.ts";
+import { entriesText, entryText } from "../../src/cli/schedule_text.ts";
+import type { Job, ScheduleRunItem } from "../../src/jobs/job_store.ts";
 import { renderTerminal } from "../support/screen_renderer.ts";
 
 const ESC = String.fromCharCode(27);
@@ -274,5 +275,133 @@ describe("the chat's answers", () => {
 
         assert.equal(rendered(), "onetwothree\n>");
         close();
+    });
+});
+
+const DUE = "2026-11-13T09:00:00.000+01:00";
+const FIRE = "2026-11-12T09:00:00.000+01:00";
+const FIRE_PATTERN = FIRE.replace(/[.+]/g, "\\$&");
+
+function scheduledJob(overrides: Partial<Job> = {}): Job {
+    const origin = { kind: "schedule", entry: "digest", fireTime: FIRE } as const;
+    return job({ number: "S-3", request: { text: "request", origin }, ...overrides });
+}
+
+function scheduleView(overrides: Record<string, unknown> = {}) {
+    return { name: "digest", cron: "0 9 * * *", request: "Summarise the mail", nextDueTime: DUE, ...overrides };
+}
+
+function skipItem(overrides: Record<string, unknown> = {}): ScheduleRunItem {
+    const skip = {
+        entry: "digest",
+        dueAt: AT,
+        dueTime: FIRE,
+        reason: "S-3 is still open",
+        openRun: "S-3",
+        ...overrides,
+    };
+    return { kind: "skip", skip };
+}
+
+describe("schedules list", () => {
+    it("prints_one_line_per_entry_with_name_cron_next_due_time_and_latest_scheduled_run", () => {
+        const text = entriesText({
+            schedules: [
+                { ...scheduleView(), latestScheduledRun: scheduledJob({ status: "done" }) },
+                scheduleView({ name: "weekly", cron: "0 8 * * 1" }),
+            ],
+        });
+
+        assert.deepEqual(text.split("\n"), [
+            `digest  0 9 * * *  next ${DUE}  latest S-3 (Done)`,
+            `weekly  0 8 * * 1  next ${DUE}  latest (none)`,
+        ]);
+    });
+
+    it("keeps_a_name_with_line_breaks_and_escapes_on_one_clean_line", () => {
+        const text = entriesText({ schedules: [scheduleView({ name: `a${CLIPBOARD_WRITE}\nb` })] });
+
+        assert.ok(hasNoControl(text));
+        assert.equal(text.split("\n").length, 1);
+    });
+});
+
+describe("schedules show", () => {
+    it("prints_the_entry_s_values_and_next_due_time", () => {
+        const text = entryText(
+            { schedule: scheduleView({ role: "researcher", model: "m", thinkingLevel: "low", workspace: "/w" }) },
+            { items: [] },
+        );
+
+        const lines = text.split("\n");
+        assert.equal(lines[0], "digest");
+        for (const expected of [
+            "Cron: 0 9 * * *",
+            `Next due: ${DUE}`,
+            "Request: Summarise the mail",
+            "Role: researcher",
+            "Model: m",
+            "Thinking level: low",
+            "Workspace: /w",
+        ])
+            assert.ok(lines.includes(expected), expected);
+    });
+
+    it("prints_each_scheduled_run_and_each_skipped_fire_with_its_reason", () => {
+        const done = scheduledJob({
+            status: "done",
+            resolution: { kind: "completed", justification: "mailed the digest" },
+        });
+        const demand = scheduledJob({
+            number: "S-2",
+            request: {
+                text: "r",
+                origin: { kind: "schedule", entry: "digest", fireTime: FIRE, onDemand: { wayIn: "command line" } },
+            },
+        });
+        const text = entryText(
+            { schedule: scheduleView() },
+            {
+                items: [
+                    { kind: "run", firedAt: FIRE, job: done },
+                    skipItem(),
+                    { kind: "run", firedAt: FIRE, job: demand },
+                ],
+            },
+        );
+
+        assert.match(text, new RegExp(`  S-3  ${FIRE_PATTERN}  Done  completed - mailed the digest`));
+        assert.match(text, new RegExp(`  S-2  ${FIRE_PATTERN}  on demand  In progress`));
+        assert.match(text, new RegExp(`  skipped  ${FIRE_PATTERN}  S-3 is still open \\(open run S-3\\)`));
+    });
+
+    it("says_so_when_the_entry_has_no_history", () => {
+        assert.match(entryText({ schedule: scheduleView() }, { items: [] }), /Runs:\n {2}\(none\)$/);
+    });
+
+    it("keeps_the_request_and_a_skip_reason_with_escapes_and_line_breaks_clean_and_indented", () => {
+        const text = entryText(
+            { schedule: scheduleView({ request: `go${CLIPBOARD_WRITE}\n${FORGED_DONE}` }) },
+            {
+                items: [
+                    skipItem({ reason: `why${CLIPBOARD_WRITE}\n${FORGED_DONE}` }),
+                    {
+                        kind: "run",
+                        firedAt: FIRE,
+                        job: scheduledJob({
+                            status: "done",
+                            resolution: { kind: "cancelled", justification: `no${ESC}[2K\nS-9 forged` },
+                        }),
+                    },
+                ],
+            },
+        );
+
+        assert.ok(hasNoControl(text));
+        assert.ok(!text.includes(ESC));
+        assert.deepEqual(
+            text.split("\n").filter((line) => line.startsWith(FORGED_DONE) || line.startsWith("S-9")),
+            [],
+        );
     });
 });
