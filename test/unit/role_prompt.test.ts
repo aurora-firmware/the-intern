@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Skill } from "@earendil-works/pi-coding-agent";
 import { JOB_TOOL_NAMES } from "../../src/jobs/job_model.ts";
-import { LEAD_DUTY, type RolePromptInput, renderRolePrompt } from "../../src/prompt/role_prompt.ts";
+import { LEAD_DUTY, type RolePromptInput, renderRolePrompt, scheduledRunNotice } from "../../src/prompt/role_prompt.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 
 const seat: Seat = {
@@ -107,6 +107,19 @@ describe("renderRolePrompt", () => {
             assert.ok(JOB_TOOL_NAMES.includes(tool), `${tool} is a job tool`);
             assert.ok(LEAD_DUTY.includes(tool), tool);
         }
+    });
+
+    it("names the schedule entry, the read schedule runs tool and the earlier scheduled runs", () => {
+        const notice = scheduledRunNotice("nightly-backup");
+        assert.ok(notice.includes("nightly-backup"));
+        assert.ok(notice.includes("read_schedule_runs"));
+        assert.ok(JOB_TOOL_NAMES.includes("read_schedule_runs"));
+        assert.match(notice, /earlier scheduled runs/i);
+    });
+
+    it("builds the same notice for the same entry", () => {
+        assert.equal(scheduledRunNotice("nightly"), scheduledRunNotice("nightly"));
+        assert.notEqual(scheduledRunNotice("nightly"), scheduledRunNotice("weekly"));
     });
 
     it("renders the lead duty byte-identically on every request", () => {

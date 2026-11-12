@@ -17,6 +17,7 @@ type JobToolName = (typeof JOB_TOOL_NAMES)[number];
 const UPDATE_JOB: JobToolName = "update_job";
 const BLOCK_JOB: JobToolName = "block_job";
 const COMPLETE_JOB: JobToolName = "complete_job";
+const READ_SCHEDULE_RUNS: JobToolName = "read_schedule_runs";
 
 // The lead's first duty (S-004 REQ-008). One constant, so the prompt section and the lead's first input say the same.
 export const LEAD_DUTY = [
@@ -26,6 +27,15 @@ export const LEAD_DUTY = [
     `Before you complete the job with ${COMPLETE_JOB}, check the result against the definition of done`,
     "and state the evidence in the justification.",
 ].join(" ");
+
+// What a scheduled run's lead is told about its origin (S-007 REQ-010). A pure function of the entry name, so the first
+// input is the same each time it is built.
+export function scheduledRunNotice(entry: string): string {
+    return [
+        `This job is a scheduled run of the schedule entry ${entry}.`,
+        `Earlier scheduled runs of ${entry} can be read: call ${READ_SCHEDULE_RUNS} with the name ${entry}.`,
+    ].join(" ");
+}
 
 function renderWorkspaceContext(workspace: string, contextFiles: { path: string; content: string }[]): string {
     const lines = [`Your workspace is ${workspace}.`];
