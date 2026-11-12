@@ -48,12 +48,13 @@ and hyphens, in at most 40 characters in all.
 | `thinking_level` | The role's default thinking level. It must be one the model supports.          | The default thinking level of the pi login. |
 | `workspace`      | The absolute path of the role's default workspace. It must be registered.      | The role's own workspace, described below. |
 
-In a job, every role is also offered `handoff`, `invoke` and `steer` (see [Sharing a job](#sharing-a-job)) and the
-job tools `read_job`, `read_schedule_runs`, `update_job`, `add_worklog`, `create_job`, `relate_jobs`, `block_job` and
+In a job, every role is also offered `handoff`, `invoke` and `steer` (see [Sharing a job](#sharing-a-job)) and the job
+tools `read_job`, `read_schedule_runs`, `update_job`, `add_worklog`, `create_job`, `relate_jobs`, `block_job` and
 `complete_job`. `read_job` reads the agent's own job, or another job when you name it. `read_schedule_runs` reads the
-history of a schedule entry. A tool list can't leave them out, so you don't list them. Only a job's lead can use `block_job` and `complete_job`: an agent
-it invoked gets an error result from either, and its run goes on. `complete_job` must be the only tool call of its
-turn. An agent seated before the job tools existed keeps its tools until its seat changes.
+history of a schedule entry. A tool list can't leave them out, so you don't list them. Only a job's lead can use
+`block_job` and `complete_job`: an agent it invoked gets an error result from either, and its run goes on.
+`complete_job` must be the only tool call of its turn. An agent seated before the job tools existed keeps its tools
+until its seat changes.
 
 For a shipped role, set only the keys you want to change. Any key you leave out keeps its shipped value. For your own
 role, `instructions` and `tools` are required.
@@ -74,9 +75,9 @@ thinking_level = "high"
 model = "anthropic/claude-sonnet-4-5"
 ```
 
-The `desk` role has an empty tool set: it changes no file and runs no command. In the front desk it is offered only
-the tools for reading jobs, conversations, and the daemon's status and usage; for creating and editing jobs; for schedule entries; and for
-passing input to or stopping a job's conversations. See [The front desk and `bob chat`](front_desk.md).
+The `desk` role has an empty tool set: it changes no file and runs no command. In the front desk it is offered only the
+tools for reading jobs, conversations, and the daemon's status and usage; for creating and editing jobs; for schedule
+entries; and for passing input to or stopping a job's conversations. See [The front desk and `bob chat`](front_desk.md).
 
 ### Undo a change to a shipped role
 
@@ -125,9 +126,9 @@ A folder that fails the check is refused, with an error naming the path and the 
 `config.toml`, the service doesn't start. The check happens once, at registration. Later, if the folder disappears,
 the agent's tool calls that need it fail with an ordinary error that the agent sees, and the service keeps running.
 
-You can unregister a registered workspace unless a role's default workspace is that folder or a schedule entry names
-it; the refusal names the role or the entry. Agents already working in an unregistered workspace keep working there until their seat changes. After that,
-nobody can choose it for a new seat.
+You can unregister a registered workspace unless a role's default workspace is that folder or a schedule entry names it;
+the refusal names the role or the entry. Agents already working in an unregistered workspace keep working there until
+their seat changes. After that, nobody can choose it for a new seat.
 
 When you give a role its own workspace, The Intern stops registering that role's default workspace under the data
 directory. If a schedule entry names that path, the service refuses to start at the next start, and names the file and
