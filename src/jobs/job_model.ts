@@ -146,4 +146,5 @@ export const JOB_TOOL_NAMES = [
     "relate_jobs",
     "block_job",
     "complete_job",
+    "read_schedule_runs",
 ] as const;

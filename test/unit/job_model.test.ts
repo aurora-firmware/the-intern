@@ -197,10 +197,19 @@ describe("turn-end rule", () => {
 });
 
 describe("JOB_TOOL_NAMES", () => {
-    it("names the seven tools", () => {
+    it("names the eight tools", () => {
         assert.deepEqual(
             [...JOB_TOOL_NAMES],
-            ["read_job", "update_job", "add_worklog", "create_job", "relate_jobs", "block_job", "complete_job"],
+            [
+                "read_job",
+                "update_job",
+                "add_worklog",
+                "create_job",
+                "relate_jobs",
+                "block_job",
+                "complete_job",
+                "read_schedule_runs",
+            ],
         );
     });
 });
