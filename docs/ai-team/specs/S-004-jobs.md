@@ -1,8 +1,8 @@
 ---
 id: S-004
 title: Jobs
-version: '0.15'
-status: approved  # draft | review | approved | superseded
+version: '0.16'
+status: review  # draft | review | approved | superseded
 created: '2026-11-02'
 author: planner
 ---
@@ -1168,9 +1168,9 @@ setting changes the statuses, the actions or the letters.
 - **S-001 v0.8, the front desk.** S-001 REQ-021 to REQ-025 define the front desk, the one standing conversation of
   an instance that belongs to no job, its `desk` role and its tools; this spec's REQ-021 and REQ-022 define the job
   tools it carries and keep it out of the job rules. S-005 (`bob chat`) and the Web interface spec present it.
-- **Other specs.** S-005 names the import command (`bob import`), and S-006 presents the board. Later specs: Email
-  passes the message ID and sender it observes, and S-007's schedules state their entry and fire time. Until those
-  specs are built, tests and the live checks stand in for those job sources.
+- **Other specs.** S-005 names the import command (`bob import`), and S-006 presents the board. S-007's schedules
+  state their entry and fire time. A later spec, Email, passes the message ID and sender it observes; until it is
+  built, tests and the live checks stand in for that job source.
 - **Node's SQLite.** The daemon's Node 24 SQLite support provides the online backup that REQ-016 uses.
 
 ## Success Criteria
@@ -1226,3 +1226,4 @@ None.
 | 2026-11-07 | spec-truth reconciliation — FAIL | REQ-006 not held after an abort of a Blocked lead, a To do lead's abort unspecified, stale assumption, AC-008.6's neighbouring crash window untested; REQ-008's stop otherwise confirmed against v0.13 | none |
 | 2026-11-07 | spec-truth reconciliation — PASS | v0.14 confirmed for REQ-008 and AC-008.8 against T-271, and the stop mark's crash window against T-275; read limited to S-006's findings and 75c7c946..0604b54f | none |
 | 2026-11-07 | v0.15. Triggers leave the job sources: the origin letter `T` and the trigger origin are gone (Definitions, Interfaces, REQ-002, REQ-003, REQ-015). `jobs.create` and REQ-003: a schedule's origin also records a run on demand and its way in. `jobs.list` gains a filter by schedule entry (S-007 REQ-009). Purpose, Users, Exclusions, Workflow and Assumptions: triggers leave the wording. REQ-013, new AC-013.2 and the job tools table: read job may name another job, read-only, and read schedule runs is added. REQ-014: the schedule entry filter. REQ-002, REQ-007 and REQ-021: a run on demand has the letter `S`, and a schedule entry can name overrides. REQ-016: schedule entries aren't in the export. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
+| 2026-11-13 | v0.16. No behaviour changes. Assumptions, Other specs: S-007's schedules state their entry and fire time, and only Email is still to come, with tests and the live checks standing in for it. No identifier is added, changed or retired. | Cross-spec amendment carried by S-007 v0.4, after the S-007 spec-truth reconciliation of 2026-11-12: S-007 is built, so "until those specs are built" no longer held for schedules. | None; spec text only |
