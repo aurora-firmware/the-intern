@@ -25,8 +25,8 @@ Use a current Chrome or Firefox on a desktop computer. Edge may also work, but i
 Safari isn't a target, though nothing blocks it.
 The pages are made for desktop screens, so phones and tablets aren't supported.
 
-The dark sidebar on every page links to the Board, Front desk, Roles, Workspaces and Status. Each page has an address
-of its own, and the browser's back, forward and reload buttons work across them:
+The dark sidebar on every page links to the Board, Front desk, Roles, Workspaces, Schedules and Status. Each page has an
+address of its own, and the browser's back, forward and reload buttons work across them:
 
 | Address                                | Page          |
 | -------------------------------------- | ------------- |
@@ -35,6 +35,7 @@ of its own, and the browser's back, forward and reload buttons work across them:
 | `/ui/#/desk`                           | Front desk    |
 | `/ui/#/roles`                          | Roles         |
 | `/ui/#/workspaces`                     | Workspaces    |
+| `/ui/#/schedules`                      | Schedules     |
 | `/ui/#/status`                         | Status        |
 
 ## Share a job's address
@@ -61,7 +62,10 @@ The Job page shows one job: its short number, title, description, definition of 
 it is Blocked, where it came from, its related jobs with links, its worklog and history, and, once it is Done, its
 resolution and justification. A job you created on these pages shows the way in and the network address, and one
 created from the command line shows the way in. A job the front desk created for you shows the way in and
-"through the front desk". A follow-up job shows the short number of the job it came from. The page stays current without
+"through the front desk". A scheduled run shows the schedule entry and its fire time, as in "Schedule nightly-backups,
+fire time 2026-11-07T02:00:00.000+01:00". A run started with run now adds "on demand by" and the way in, with the
+network address for a run from these pages, or "through the front desk". A follow-up job shows the short number of the
+job it came from. The page stays current without
 a reload.
 
 ### Answer a Blocked job
@@ -127,6 +131,12 @@ The Workspaces page lists the registered workspaces. To register one, give the a
 on the machine where the service runs, and select **Register**. Select **Unregister** to remove one from the list. The
 service refuses a path that doesn't exist, and the page shows its message.
 
+## Schedules
+
+The Schedules page lists the schedule entries, each with its next due time, its recent scheduled runs linked to their
+Job pages and its skipped fires with the reason. You can add, change, run now and remove an entry there. The page stays
+current without a reload. [Schedules](schedules.md) describes the entries, the skip rules and the run history.
+
 ## Status
 
 The Status page shows the daemon's state (its phase, versions, directories and worker threads), the usage in total and
@@ -165,7 +175,7 @@ your kept text. You don't reload.
 - **No file browsing or editing.** You can't open a workspace's files. An agent's file changes appear only in its tool
   calls and results.
 - **No login and no encryption.** See the warning above.
-- **No pages for skills, instruction files, schedules or knowledge sources.** Each comes with its feature.
+- **No pages for skills, instruction files or knowledge sources.** Each comes with its feature.
 - **No import.** It stays on the command line.
 - **No export to a path on the service's machine.** The browser downloads the file; use
   [`bob export <file>`](commands.md#bob-export-file) for a file on the machine itself.
