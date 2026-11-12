@@ -21,6 +21,7 @@ import type { CreateJobRequest, JobView } from "../service/job_operations.ts";
 import { readJob, refuseFrontDesk } from "../service/job_record_operations.ts";
 import { type Caller, type Catalogue, ServiceError } from "../service/operations.ts";
 import { FRONT_DESK_EXTENSION_NAME } from "./desk_model.ts";
+import { deskScheduleTools } from "./desk_schedule_tools.ts";
 import { deskStateTools, jsonResult, textResult } from "./desk_state_tools.ts";
 import { deskSteeringTools } from "./desk_steering_tools.ts";
 
@@ -47,7 +48,7 @@ async function authorOf(
 }
 
 /** The way in of the latest team member input the front desk took, or `undefined` when it took none. */
-async function latestWayIn(host: HarnessHost, conversationId: string): Promise<string | undefined> {
+export async function latestWayIn(host: HarnessHost, conversationId: string): Promise<string | undefined> {
     let wayIn: string | undefined;
     let after: string | undefined;
     do {
@@ -223,6 +224,7 @@ export function createDeskToolsExtension(options: DeskToolsOptions): Extension {
             relateJobsTool(options),
             ...deskStateTools(options),
             ...deskSteeringTools(options),
+            ...deskScheduleTools(options),
         ],
     });
 }

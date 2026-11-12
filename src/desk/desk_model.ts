@@ -18,6 +18,12 @@ export const FRONT_DESK_TOOL_NAMES = [
     "read_usage",
     "send_to_conversation",
     "stop_conversation",
+    "list_schedules",
+    "read_schedule_runs",
+    "create_schedule",
+    "change_schedule",
+    "remove_schedule",
+    "run_schedule",
 ] as const;
 
 // The creation key of the front desk's conversation (ADR-001 decision 4).
