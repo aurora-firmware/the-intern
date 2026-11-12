@@ -41,6 +41,7 @@ async function startBlockedJob(): Promise<{ daemon: DaemonProcess; port: number;
     daemons.push(daemon);
     await daemon.ready;
     const job = (await daemon.invoke("jobs.create", { text: "which colour" })) as Job;
+    await daemon.invoke("schedules.create", { name: "weekly", cron: "0 3 * * *", request: "Run the weekly review." });
     return { daemon, port: await daemon.networkPort(), job };
 }
 
@@ -54,6 +55,7 @@ const pagesToOpen = (job: Job): PageToOpen[] => [
     { name: "Roles", path: "/ui/#/roles", ready: "main .role" },
     { name: "Workspaces", path: "/ui/#/workspaces", ready: "main .workspace-register" },
     { name: "Status", path: "/ui/#/status", ready: "main .status" },
+    { name: "Schedules", path: "/ui/#/schedules", ready: "main .schedule" },
 ];
 
 /** The contrast violations axe-core finds on the page as drawn now. */
