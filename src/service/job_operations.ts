@@ -13,7 +13,7 @@ import { createSeatedConversation, type Origin, readConversationMeta, type SeatA
 import { type JobAuthor, type JobOrigin, type JobOriginOnDemand, letterFor } from "../jobs/job_model.ts";
 import { type Job, JobNotFoundError, JobRefusedError, OpenScheduledRunError } from "../jobs/job_store.ts";
 import type { JobsComponentOptions } from "../jobs/jobs_component.ts";
-import { LEAD_DUTY } from "../prompt/role_prompt.ts";
+import { LEAD_DUTY, scheduledRunNotice } from "../prompt/role_prompt.ts";
 import { RoleRefusedError } from "../roles/role_catalog.ts";
 import type { Seat } from "../roles/role_model.ts";
 import { DEFAULT_LEAD_ROLE } from "../roles/shipped_roles.ts";
@@ -277,9 +277,11 @@ type StoredLeadStart = { role?: string; overrides: Overrides; actor: SeatActor }
 /** Builds the lead's start from the job and what `createJob` stored with it. Repair uses it too. */
 export async function leadStartFor(ctx: ServiceContext, job: Job): Promise<LeadStart> {
     const stored = (await ctx.jobStore.leadStartOf(job.id)) as StoredLeadStart;
+    const { origin } = job.request;
+    const notice = origin.kind === "schedule" ? `${scheduledRunNotice(origin.entry)}\n\n` : "";
     return {
         jobId: job.id,
-        firstInput: `${job.number}\n\n${job.request.text}\n\n${LEAD_DUTY}`,
+        firstInput: `${job.number}\n\n${job.request.text}\n\n${notice}${LEAD_DUTY}`,
         origin: leadOrigin(job.request.origin),
         ...(stored.role !== undefined && { role: stored.role }),
         overrides: stored.overrides,
