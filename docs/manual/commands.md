@@ -19,12 +19,12 @@ configuration file, cache or history of its own.
 
 A command is a group and a verb, such as `bob jobs list`, or a top-level command, such as `bob chat`. The top-level
 commands are `serve`, `status`, `usage`, `export`, `import`, `follow` and `chat`. The groups are `jobs`,
-`conversations`, `roles`, `workspaces` and `models`.
+`conversations`, `roles`, `workspaces`, `models` and `schedules`.
 
 In the usage lines below, `<name>` is a required argument. Options come after the arguments and take a value unless the
 table says they are switches. Give an option once, except `--tool` and `--skill`, which you repeat for several values.
 
-The groups `schedules`, `skills`, `instructions`, `knowledge` and `mail` are reserved for later features.
+The groups `skills`, `instructions`, `knowledge` and `mail` are reserved for later features.
 They have no command yet: `bob skills list` prints that the group isn't available yet and exits with status 2.
 
 ## Options every command shares
@@ -416,3 +416,41 @@ List models and their thinking levels, one line per model. With `--json` it prin
 `model` and `thinkingLevels`.
 
 Options: `--json`, `--runtime-dir <value>`, `--help`.
+
+## Schedules
+
+`<name>` is a schedule entry's name. Every schedules command takes `--json`, `--runtime-dir <value>` and `--help`.
+
+| Command                        | What it does                                                   |
+| ------------------------------ | -------------------------------------------------------------- |
+| `bob schedules list`           | List the entries.                                              |
+| `bob schedules show <name>`    | Show one entry and its recent runs.                            |
+| `bob schedules create <name>`  | Create an entry.                                               |
+| `bob schedules change <name>`  | Change an entry.                                               |
+| `bob schedules remove <name>`  | Remove an entry.                                               |
+| `bob schedules run <name>`     | Start a scheduled run of the entry now.                        |
+
+`list` prints one line per entry with its name, cron expression, next due time and latest scheduled run. With `--json`
+it prints an object with `schedules`. `show` prints the entry's values and next due time, then its recent runs: each
+run with its short number, fire time, whether it was run on demand, status and resolution, and each skipped fire with
+its reason. With `--json` it prints the keyed object with `schedules.get` and `schedules.runs`; the runs are the first
+page, newest first, with a `cursor` when more follow. When no entry has the name, `show` exits 1 with the service's
+reason.
+
+`create`, `change` and `remove` print one line, such as `nightly created`. With `--json`, `create` and `change` print an
+object with the entry under `schedule`, and `remove` prints the empty object `{}`. `run` prints one line, such as
+`nightly started as S-4`; with `--json` it prints the new job. It starts the entry's scheduled run at once, takes no
+key, and records the way in `command line` in the job's origin. The service refuses it, with exit 1, when the entry has
+an open scheduled run (`busy`), or its model or workspace has gone (`invalid_input`).
+
+`bob schedules create` and `bob schedules change` take these options. `create` needs `--cron` and `--request`. `change`
+sends only the options you give. The service checks every value, and a refusal exits 1.
+
+| Option                    | Meaning                                                  |
+| ------------------------- | -------------------------------------------------------- |
+| `--cron <value>`          | The cron expression that says when the entry fires.      |
+| `--request <value>`       | The request of each scheduled run.                       |
+| `--role <value>`          | The role of the run's lead.                              |
+| `--model <value>`         | The model of the run's lead.                             |
+| `--thinking-level <value>` | The thinking level of the run's lead.                   |
+| `--workspace <value>`     | The workspace of the run.                                |

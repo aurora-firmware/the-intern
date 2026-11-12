@@ -5,7 +5,7 @@
  */
 import { parseArgs } from "node:util";
 
-export const RESERVED_GROUPS: readonly string[] = ["schedules", "skills", "instructions", "knowledge", "mail"];
+export const RESERVED_GROUPS: readonly string[] = ["skills", "instructions", "knowledge", "mail"];
 
 export const EXIT_CODES = { ok: 0, refused: 1, usage: 2, unreachable: 3 } as const;
 
