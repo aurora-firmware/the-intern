@@ -569,7 +569,7 @@ The reading rules are REQ-005's and no more:
 
 Fire times, due times and next due times are text in the machine's local time with its offset:
 `2026-11-08T02:00:00.000+01:00`. A team member reads 02:00 for `0 2 * * *` wherever the browser is, and `Date` parses
-the text to the right instant. The store also keeps each one in UTC for ordering. The zone is the daemon process's own.
+the text to the right instant. History orders by that instant. The zone is the daemon process's own.
 
 ### The scheduler
 
@@ -661,19 +661,24 @@ origin stays refused (S-002 AC-012.5).
 
 Job schema version 3 adds, as one migration in `JOB_MIGRATIONS`:
 
-- `intern_jobs.schedule_entry` and `intern_jobs.schedule_fired_at` (UTC), with an index on the two. No backfill: no job
+- `intern_jobs.schedule_entry` and `intern_jobs.schedule_fired_at` (the local-offset text the run shows), with an index on the two. No backfill: no job
   source has ever written an `S` job.
 - `intern_schedule_skips (entry, due_at, due_time, reason, open_run)`, with the primary key `(entry, due_at)`. `due_at`
   is UTC and `due_time` is the local text. `open_run` is a short number or null.
 
 The table sits in the job store's file, so skips survive a restart and travel with `bob export` and `bob import`, and an
-imported older file migrates at its next start (S-004 REQ-017). `recordSkip` inserts and ignores a row that exists, and
+imported older file migrates at its next start (S-004 REQ-017).
+
+Job schema version 5 adds the index `intern_jobs_by_schedule_instant` on `schedule_entry` and the fire time as epoch
+milliseconds (`unixepoch(schedule_fired_at, 'subsec')`). Fire times are local-offset text and skip due times are UTC
+text, so neither text order nor a mix of the two is instant order. Ordering and the history cursor use the instant, and
+the migration indexes the rows already stored without rewriting them. `recordSkip` inserts and ignores a row that exists, and
 reports a new `JobChange` only when it wrote one.
 
 ### Reading schedules
 
 - **`schedules.runs`** reads the newest `limit + 1` of the entry's jobs and of its skips, each from its index, and
-  merges them by UTC time, a run before a skip at the same minute. The cursor holds the time, the kind and the rowid,
+  merges them by instant, a run before a skip at the same instant. The cursor holds the instant in epoch milliseconds, the kind and the rowid,
   encoded as the job list's cursor is. The limit rules are the job list's. It answers `not_found` when the entry isn't
   in the configuration and the first page is empty, so a removed entry with history works.
 - **`jobs.list`** gains the `schedule` condition on `schedule_entry`.
