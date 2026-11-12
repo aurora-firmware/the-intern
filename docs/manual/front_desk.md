@@ -27,13 +27,18 @@ The front desk is seated as the shipped `desk` role (see
 - **Pass answers and steering to a job's conversations.** Ask it to tell `C-14` to use the staging database, and it
   sends your words to the job's lead conversation. Input to the lead of a Blocked job resumes the job. It can also
   stop a conversation of a job. The conversation's transcript shows that the input came through the front desk.
+- **Set up and run schedules.** When you ask, it lists the schedule entries with the next due time of each, creates,
+  changes and removes an entry, runs an entry now, and reads an entry's history: the jobs it started and the due times
+  it skipped. It acts as you would with `bob schedules` (see [Schedules](commands.md#schedules)). A job an entry
+  already started goes on after the entry is removed.
 - **Maintain jobs.** It can change a job's title, description and definition of done, add to a worklog and relate jobs.
 
 ## What it doesn't do
 
 The front desk never does the work itself. The `desk` role has no `read`, `write`, `edit` or `bash` tool, so it
-changes no file and runs no command. It can't hand off, invoke agents, or block or complete a job. When you ask it for
-work, it creates a job and the job's agents do the work.
+changes no file and runs no command. It edits no schedule file either: it works on schedule entries only with its
+schedule tools. It can't hand off, invoke agents, or block or complete a job. When you ask it for work, it creates a
+job and the job's agents do the work.
 
 ## A Done job
 
