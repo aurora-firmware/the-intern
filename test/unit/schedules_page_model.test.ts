@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
     addSkip,
+    addSkips,
     type ScheduleDelta,
     type ScheduleHistoryItem,
     type SchedulesState,
@@ -28,6 +29,11 @@ const run = (number: string, firedAt: string): ScheduleHistoryItem => ({ kind: "
 
 const skipOf = (state: SchedulesState, entry: string): ScheduleHistoryItem[] =>
     state.find((candidate) => candidate.name === entry)?.history ?? [];
+
+const state = (): SchedulesState => [
+    { name: "nightly", history: [run("S1", "2026-11-07T02:00:00+01:00")] },
+    { name: "weekly", history: [] },
+];
 
 describe("shouldRereadSchedules", () => {
     it("returns true for settings_changed of the schedule section", () => {
@@ -57,11 +63,6 @@ describe("shouldRereadSchedules", () => {
 });
 
 describe("addSkip", () => {
-    const state = (): SchedulesState => [
-        { name: "nightly", history: [run("S1", "2026-11-07T02:00:00+01:00")] },
-        { name: "weekly", history: [] },
-    ];
-
     it("puts the skipped fire first in the history of its entry", () => {
         const history = skipOf(
             addSkip(state(), skipDelta("nightly", "2026-11-08T02:00:00+01:00", { openRun: "S1" })),
@@ -97,5 +98,27 @@ describe("addSkip", () => {
         const before = state();
         assert.deepEqual(addSkip(before, skipDelta("gone", "2026-11-08T02:00:00+01:00")), before);
         assert.deepEqual(addSkip(before, jobDelta("S1")), before);
+    });
+});
+
+describe("addSkips", () => {
+    it("restores the skips seen while a read was in flight to the state that read returned", () => {
+        const read = state();
+        const seen = [skipDelta("nightly", "2026-11-08T02:00:00+01:00", { openRun: "S1" }), jobDelta("S1")];
+        const after = addSkips(read, seen);
+        assert.deepEqual(
+            skipOf(after, "nightly").map((item) => item.kind),
+            ["skip", "run"],
+        );
+    });
+
+    it("keeps each seen skip once, newest first, when the read already holds one of them", () => {
+        const first = skipDelta("nightly", "2026-11-08T02:00:00+01:00");
+        const second = skipDelta("nightly", "2026-11-09T02:00:00+01:00");
+        const after = addSkips(addSkip(state(), first), [first, second]);
+        assert.deepEqual(
+            skipOf(after, "nightly").flatMap((item) => (item.kind === "skip" ? [item.skip.dueTime] : [])),
+            ["2026-11-09T02:00:00+01:00", "2026-11-08T02:00:00+01:00"],
+        );
     });
 });

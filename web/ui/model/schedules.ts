@@ -68,3 +68,7 @@ export const addSkip = (state: SchedulesState, delta: ScheduleDelta): SchedulesS
         return { name: card.name, history: [{ kind: "skip", skip }, ...card.history] };
     });
 };
+
+/** Applies each delta in order with `addSkip`: the skips seen while a read was in flight rejoin what the read returned. */
+export const addSkips = (state: SchedulesState, deltas: readonly ScheduleDelta[]): SchedulesState =>
+    deltas.reduce(addSkip, state);
