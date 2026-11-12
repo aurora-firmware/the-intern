@@ -47,6 +47,7 @@ const pagesToOpen = (job: Job): PageToOpen[] => [
     { name: "Roles", path: "/ui/#/roles", ready: "main .role" },
     { name: "Workspaces", path: "/ui/#/workspaces", ready: "main .workspace-register" },
     { name: "Status", path: "/ui/#/status", ready: "main .status" },
+    { name: "Schedules", path: "/ui/#/schedules", ready: "main .schedule" },
 ];
 
 async function openAndSettle(page: Page, port: number, target: PageToOpen): Promise<void> {
@@ -86,6 +87,7 @@ describe("the pages' independence of anything but the service in chrome", () => 
     }, async (t) => {
         const { daemon, port, proxy } = await startRig();
         const job = (await daemon.invoke("jobs.create", { text: "check the pages" })) as Job;
+        await daemon.invoke("schedules.create", { name: "weekly", cron: "0 3 * * *", request: "Run the weekly review." });
         const browser = await launchBrowser(t, "chrome", { proxyPort: proxy.port });
         if (browser === undefined) return;
         const origin = new URL(pageUrl(port, "/")).origin;
