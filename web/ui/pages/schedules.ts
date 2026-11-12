@@ -14,6 +14,7 @@ import { type Choices, CreateEntry, type Entry, EntryCard } from "../components/
 import { type FeedConnection, pageClient } from "../feed_connection.ts";
 import {
     addSkip,
+    addSkips,
     type ScheduleCard,
     type ScheduleDelta,
     type ScheduleHistoryItem,
@@ -82,18 +83,24 @@ export const SchedulesPage = ({ feed }: { feed: FeedConnection | null | undefine
         // `undefined` means the tab is still connecting: the first read waits for the feed.
         if (feed === undefined) return;
         let isClosed = false;
+        // A read can straddle a skip delta, and the delta does not trigger a reread: the skips seen since the read
+        // began are put back on what it returns.
+        const seenSkips: ScheduleDelta[] = [];
         const reload: Reload = async () => {
+            const seenBefore = seenSkips.length;
             try {
                 const read = await readData();
                 if (isClosed) return;
-                setData(read);
+                setData({ ...read, cards: addSkips(read.cards, seenSkips.slice(seenBefore)) });
                 setFailure(undefined);
             } catch (error) {
                 if (!isClosed) setFailure({ error });
             }
         };
-        const apply: Apply = (delta) =>
+        const apply: Apply = (delta) => {
+            if (delta.type === "schedule_fire_skipped") seenSkips.push(delta);
             setData((held) => (held === undefined ? held : { ...held, cards: addSkip(held.cards, delta) }));
+        };
         mountedReload = reload;
         mountedApply = apply;
         if (feed !== null) attachFeed(feed);

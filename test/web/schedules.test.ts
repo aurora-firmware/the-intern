@@ -146,6 +146,14 @@ describe("the Schedules page in chrome", () => {
         assert.ok(skip?.kind === "skip");
         t.assert.equal(await page.locator(`${SKIPS} .schedule-skip-reason`).textContent(), skip.skip.reason);
         t.assert.equal(await page.getAttribute(`${SKIPS} a`, "href"), `#/jobs/${number}`);
+
+        const nextBefore = await page.locator(`${entryCard} .schedule-next`).textContent();
+        await daemon.invoke("schedules.change", { name: ENTRY, cron: "0 5 * * *" });
+        await waitFor(
+            page,
+            `document.querySelector('${entryCard} .schedule-next')?.textContent !== ${JSON.stringify(nextBefore)}`,
+        );
+        t.assert.equal(await page.locator(SKIPS).count(), 1);
     });
 
     it("updates the list without a reload when an entry is added, changed and removed", {
