@@ -136,4 +136,30 @@ describe("the Schedules page in chrome", () => {
         t.assert.equal(await page.locator(`${SKIPS} .schedule-skip-reason`).textContent(), skip.skip.reason);
         t.assert.equal(await page.getAttribute(`${SKIPS} a`, "href"), `#/jobs/${number}`);
     });
+
+    it("updates the list without a reload when an entry is added, changed and removed", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { daemon, port } = await startServer();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await page.goto(pageUrl(port, "/ui/#/schedules"));
+        await page.waitForSelector(entryCard, { timeout: WAIT_MS });
+        const added = 'main .schedule[data-entry="weekly"]';
+
+        await daemon.invoke("schedules.create", { name: "weekly", cron: "0 3 * * *", request: "Run weekly." });
+        await page.waitForSelector(added, { timeout: WAIT_MS });
+        const nextBefore = await page.locator(`${added} .schedule-next`).textContent();
+
+        await daemon.invoke("schedules.change", { name: "weekly", cron: "0 5 * * *" });
+        await waitFor(
+            page,
+            `document.querySelector('${added} .schedule-next')?.textContent !== ${JSON.stringify(nextBefore)}`,
+        );
+
+        await daemon.invoke("schedules.remove", { name: "weekly" });
+        await waitFor(page, `document.querySelector('${added}') === null`);
+        t.assert.equal(await page.locator(entryCard).count(), 1);
+    });
 });
