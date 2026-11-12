@@ -99,6 +99,7 @@ const list = jobsCommand(
             status: "Only jobs with this status: to_do, in_progress, blocked or done.",
             letter: "Only jobs with this origin letter.",
             related: "Only jobs Related to this job.",
+            schedule: "Only the scheduled runs of this schedule entry.",
             limit: "The most jobs to list.",
             cursor: "Continue after the cursor an earlier listing printed.",
         }),
@@ -108,6 +109,7 @@ const list = jobsCommand(
             status: "status",
             letter: "letter",
             related: "relatedTo",
+            schedule: "schedule",
             cursor: "cursor",
         });
         const limit = stringOption(input, "limit");
