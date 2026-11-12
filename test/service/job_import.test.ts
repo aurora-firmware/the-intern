@@ -197,6 +197,7 @@ describe("the import step", () => {
         const { file, jobs } = await exportedFile();
         const older = new DatabaseSync(file);
         older.exec("DROP TABLE intern_job_keys");
+        older.exec("DROP INDEX intern_jobs_by_schedule_instant");
         older.exec("DROP INDEX intern_jobs_by_schedule");
         older.exec("DROP TABLE intern_schedule_skips");
         older.exec("ALTER TABLE intern_jobs DROP COLUMN schedule_entry");
