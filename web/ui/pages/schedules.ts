@@ -1,12 +1,16 @@
 /**
  * The Schedules page (S-007 REQ-012): each schedule entry with its next due time, its recent scheduled runs linked to
- * their Job pages, and its skipped fires with the reason and any open run's link. The entries are read again after a
- * `shouldRereadSchedules` delta and on each new instance snapshot; a skipped fire joins its entry with `addSkip`.
+ * their Job pages, and its skipped fires with the reason and any open run's link. A team member adds, changes, runs and
+ * removes entries here; the service owns the rules, and its refusal shows next to the form or entry it concerns. The
+ * entries are read again after a `shouldRereadSchedules` delta and on each new instance snapshot; a skipped fire joins
+ * its entry with `addSkip`. Roles, models and workspaces are native choices from `roles.list`, `models.list` and
+ * `workspaces.list`.
  */
 import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { listen } from "../components/activity.ts";
 import { RefusalMessage } from "../components/refusal.ts";
+import { type Choices, CreateEntry, type Entry, EntryCard } from "../components/schedule_entries.ts";
 import { type FeedConnection, pageClient } from "../feed_connection.ts";
 import {
     addSkip,
@@ -17,10 +21,9 @@ import {
     shouldRereadSchedules,
 } from "../model/schedules.ts";
 
-type Entry = { name: string; cron: string; nextDueTime: string };
 type RunsItem = { kind: "run"; firedAt: string; job: { number: string } } | { kind: "skip"; skip: ScheduleSkipText };
 type ScheduleSkipText = { entry: string; dueTime: string; reason: string; openRun: string | null };
-type Data = { entries: Entry[]; cards: SchedulesState };
+type Data = { entries: Entry[]; cards: SchedulesState; choices: Choices };
 type Reload = () => Promise<void>;
 type Apply = (delta: ScheduleDelta) => void;
 
@@ -59,30 +62,16 @@ const readData = async (): Promise<Data> => {
             return { name, history: items.map(historyItemOf) };
         }),
     );
-    return { entries: schedules, cards };
+    const { roles } = (await client.invoke("roles.list")) as { roles: { name: string }[] };
+    const models = (await client.invoke("models.list")) as Choices["models"];
+    const { workspaces } = (await client.invoke("workspaces.list")) as { workspaces: { path: string }[] };
+    const choices = {
+        roles: roles.map((role) => role.name),
+        models,
+        workspaces: workspaces.map((workspace) => workspace.path),
+    };
+    return { entries: schedules, cards, choices };
 };
-
-const jobLink = (number: string) => h("a", { href: `#/jobs/${number}`, "data-verbatim": "" }, number);
-
-const historyRow = (item: ScheduleHistoryItem) =>
-    item.kind === "run"
-        ? h("li", { class: "schedule-run", key: `run-${item.jobNumber}` }, `${item.firedAt} `, jobLink(item.jobNumber))
-        : h(
-              "li",
-              { class: "schedule-skip", key: `skip-${item.skip.dueTime}` },
-              `${item.skip.dueTime} skipped: `,
-              h("span", { class: "schedule-skip-reason" }, item.skip.reason),
-              item.skip.openRun === null ? null : [" ", jobLink(item.skip.openRun)],
-          );
-
-const EntryCard = ({ entry, card }: { entry: Entry; card: ScheduleCard | undefined }) =>
-    h(
-        "section",
-        { class: "schedule", "data-entry": entry.name },
-        h("h3", null, h("span", { "data-verbatim": "" }, entry.name)),
-        h("p", null, "Next due ", h("span", { class: "schedule-next" }, entry.nextDueTime)),
-        h("ul", { class: "schedule-history" }, ...(card?.history ?? []).map(historyRow)),
-    );
 
 /** The schedule entries, each with its next due time, recent scheduled runs and skipped fires. */
 export const SchedulesPage = ({ feed }: { feed: FeedConnection | null | undefined }) => {
@@ -116,18 +105,24 @@ export const SchedulesPage = ({ feed }: { feed: FeedConnection | null | undefine
         };
     }, [feed]);
 
+    const reload: Reload = async () => void (await mountedReload?.());
     return h(
         "div",
         { class: "schedules" },
         failure !== undefined ? h(RefusalMessage, { error: failure.error }) : null,
         data === undefined
             ? null
-            : data.entries.map((entry) =>
-                  h(EntryCard, {
-                      entry,
-                      card: data.cards.find((card) => card.name === entry.name),
-                      key: entry.name,
-                  }),
-              ),
+            : [
+                  ...data.entries.map((entry) =>
+                      h(EntryCard, {
+                          entry,
+                          card: data.cards.find((card) => card.name === entry.name),
+                          choices: data.choices,
+                          reload,
+                          key: entry.name,
+                      }),
+                  ),
+                  h(CreateEntry, { choices: data.choices, reload }),
+              ],
     );
 };
