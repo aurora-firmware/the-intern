@@ -17,11 +17,14 @@ import { localSocketPath } from "../../src/listeners/socket_path.ts";
 import { RoleRefusedError } from "../../src/roles/role_catalog.ts";
 import { localTimeText } from "../../src/schedules/schedule_time.ts";
 import { createSchedulesComponent } from "../../src/schedules/schedules_component.ts";
+import { leadStartFor } from "../../src/service/job_operations.ts";
 import { ServiceError } from "../../src/service/operations.ts";
 import { startDaemon } from "../support/daemon_process.ts";
-import { createFakeModel } from "../support/fake_model.ts";
+import { createFakeModel, type FakeModelOptions, type FakeTranscript } from "../support/fake_model.ts";
 import { createHermeticEnv } from "../support/hermetic_env.ts";
 import { createTestClock, type ScheduleRig, startScheduleRig } from "../support/schedule_rig.ts";
+
+type ReplyFn = Parameters<typeof createFakeModel>[0];
 
 const rigs: ScheduleRig[] = [];
 const TEST_TIMEOUT_MS = 60_000;
@@ -36,9 +39,10 @@ afterEach(async () => {
 });
 
 /** A real daemon with a held fake model, exposing the store for history and fault injection. */
-async function fireRig(t: TestContext, extra = "") {
+async function fireRig(t: TestContext, extra = "", model: FakeModelOptions & { reply?: ReplyFn } = {}) {
     const env = await createHermeticEnv();
-    const fake = createFakeModel(() => "ok", { gate: new Promise<void>(() => {}) });
+    const { reply = () => "ok", ...modelOptions } = model;
+    const fake = createFakeModel(reply, { gate: new Promise<void>(() => {}), ...modelOptions });
     const provider = fake.getModel().provider;
     await writeFile(
         join(env.piAgentDir, "settings.json"),
@@ -712,5 +716,82 @@ describe("missed due times and job endings", { timeout: TEST_TIMEOUT_MS }, () =>
         assert.equal((await rig.ctx.jobStore.listJobs({})).jobs.length, 2);
         await rig.invoke("jobs.create", { text: "A team member's job." });
         assert.equal((await rig.ctx.jobStore.listJobs({})).jobs.length, 3);
+    });
+});
+
+const firstInputOf = (transcript: FakeTranscript): string =>
+    transcript.find((message) => message.role === "user")?.text ?? "";
+
+describe("what a scheduled run's lead is told", { timeout: TEST_TIMEOUT_MS }, () => {
+    it("names the entry and lets the lead read an earlier cancelled run (AC-1, AC-2)", async (t) => {
+        const transcripts: FakeTranscript[] = [];
+        const rig = await fireRig(t, "", {
+            // Only the first run's lead is held; the second follows the script.
+            isGated: (transcript) => firstInputOf(transcript).startsWith("S-1\n"),
+            reply: (transcript) => {
+                if (!firstInputOf(transcript).startsWith("S-2\n")) return "ok";
+                transcripts.push(transcript);
+                const results = transcript.filter((message) => message.role === "toolResult").length;
+                if (results === 0) return { toolCall: { name: "read_schedule_runs", arguments: { name: "nightly" } } };
+                if (results === 1) return { toolCall: { name: "read_job", arguments: { job: "S-1" } } };
+                return "done";
+            },
+        });
+        rig.clock.set(at(1, 1));
+        await waitFor(async () => (await rig.history()).items.length === 1, "the first scheduled run");
+        await rig.invoke("jobs.worklog.add", { job: "S-1", text: "Checked the disk." });
+        await rig.invoke("jobs.cancel", { job: "S-1", justification: "Nothing to back up." });
+        rig.clock.set(at(1, 2));
+        await waitFor(async () => (await rig.history()).items.length === 2, "the second scheduled run");
+        await waitFor(
+            async () => transcripts.some((one) => one.filter((m) => m.role === "toolResult").length === 2),
+            "the script's second tool result",
+        );
+
+        const last = transcripts.at(-1);
+        assert.ok(last);
+        const first = firstInputOf(last);
+        assert.match(first, /nightly/);
+        assert.match(first, /read_schedule_runs/);
+        assert.match(first, /earlier scheduled runs/i);
+        assert.ok(first.indexOf("Run nightly.") < first.indexOf("scheduled run of the schedule entry"));
+        assert.ok(first.indexOf("scheduled run of the schedule entry") < first.indexOf("You are the lead"));
+        const results = last.filter((message) => message.role === "toolResult").map((message) => message.text);
+        assert.match(results[0] ?? "", /S-1/);
+        assert.match(results[1] ?? "", /Nothing to back up\./);
+        assert.match(results[1] ?? "", /cancelled/);
+        assert.match(results[1] ?? "", /Checked the disk\./);
+        const second = await rig.ctx.jobStore.latestScheduledRun("nightly");
+        assert.equal(second?.request.text, "Run nightly.");
+    });
+
+    it("tells the lead of a job from a conversation nothing about a schedule (AC-3)", async (t) => {
+        const inputs: string[] = [];
+        const rig = await fireRig(t, "", {
+            gate: Promise.resolve(),
+            reply: (transcript) => {
+                inputs.push(firstInputOf(transcript));
+                return "ok";
+            },
+        });
+        await rig.invoke("jobs.create", { text: "Plain request." });
+        await waitFor(async () => inputs.length > 0, "the lead's first input");
+
+        assert.match(inputs[0] ?? "", /^C-\d+\n\nPlain request\./);
+        assert.doesNotMatch(inputs[0] ?? "", /schedule/i);
+    });
+
+    it("builds the same first input when the lead start is built again (AC-4)", async (t) => {
+        const rig = await fireRig(t);
+        rig.clock.set(at(1, 1));
+        await waitFor(async () => (await rig.history()).items.length === 1, "the scheduled run");
+        const run = await rig.ctx.jobStore.latestScheduledRun("nightly");
+        assert.ok(run);
+
+        const once = await leadStartFor(rig.ctx, run);
+        const again = await leadStartFor(rig.ctx, run);
+
+        assert.equal(once.firstInput, again.firstInput);
+        assert.match(once.firstInput, /read_schedule_runs/);
     });
 });
