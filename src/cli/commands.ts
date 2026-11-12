@@ -9,6 +9,7 @@ import { followCommand, jobsFollowCommand } from "./follow_commands.ts";
 import { exportCommand, importCommand, statusCommand, usageCommand } from "./instance_commands.ts";
 import { JOBS_COMMANDS } from "./jobs_commands.ts";
 import { ROLES_COMMANDS } from "./roles_commands.ts";
+import { SCHEDULES_COMMANDS } from "./schedules_commands.ts";
 import type { ServeFlags } from "./serve.ts";
 
 const DIRECTORY_FLAG_NAMES = ["config-dir", "state-dir", "data-dir"] as const;
@@ -57,4 +58,5 @@ export const COMMANDS: readonly CommandSpec[] = [
     jobsFollowCommand,
     ...CONVERSATIONS_COMMANDS,
     ...ROLES_COMMANDS,
+    ...SCHEDULES_COMMANDS,
 ];
