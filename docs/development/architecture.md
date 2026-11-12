@@ -633,11 +633,11 @@ the check reads jobs and not entries (REQ-003).
 
 **`schedules.run`.** It reads for its key first, so a repeat returns the original job even if the entry has since gone
 or its folder is missing. It then answers `not_found` for an unknown entry, and calls `startScheduledRun`. Its key is
-stored in the `schedules.run` key space, separate from `jobs.create` and `schedule.fire`. Migration assigns legacy
-keys to the `jobs.create`, `schedules.run` or `schedule.fire` space using the job’s stored origin. The key is optional, as on `jobs.create` and
-`roles.create`. The limit of 200 characters applies to the caller's key, before the prefix: `schedules.run` checks it,
-and `checkBeforeWrite` keeps the check for every caller other than a job source, which only in-process code can be. A
-team member or the front desk can call it; any other actor is refused `invalid_input`.
+stored in the `schedules.run` key space, separate from `jobs.create` and `schedule.fire` (Saved data, job schema
+version 4). The key is optional, as on `jobs.create` and `roles.create`. The limit of 200 characters applies to the
+caller's key, before the prefix: `schedules.run` checks it, and `checkBeforeWrite` keeps the check for every caller
+other than a job source, which only in-process code can be. A team member or the front desk can call it; any other
+actor is refused `invalid_input`.
 
 ### The origin
 
@@ -669,6 +669,13 @@ Job schema version 3 adds, as one migration in `JOB_MIGRATIONS`:
 The table sits in the job store's file, so skips survive a restart and travel with `bob export` and `bob import`, and an
 imported older file migrates at its next start (S-004 REQ-017). `recordSkip` inserts and ignores a row that exists, and
 reports a new `JobChange` only when it wrote one.
+
+Job schema version 4 adds `intern_job_keys (scope, key, job)`, with the primary key `(scope, key)`. Every idempotency
+key of a job is stored there in the space of the operation that wrote it: `jobs.create`, `schedules.run` or
+`schedule.fire`. A caller of one operation can't name a key that returns another operation's job, whatever text it
+sends. The migration copies each existing `intern_jobs.idempotency_key` into its space by the job's stored origin, not
+by the key's text: a schedule origin with `onDemand` goes to `schedules.run`, any other schedule origin to
+`schedule.fire`, and every other job to `jobs.create`. New jobs leave `intern_jobs.idempotency_key` empty.
 
 Job schema version 5 adds the index `intern_jobs_by_schedule_instant` on `schedule_entry` and the fire time as epoch
 milliseconds (`unixepoch(schedule_fired_at, 'subsec')`). Fire times are local-offset text and skip due times are UTC
@@ -755,7 +762,7 @@ id, so the key doesn't match it, and the operation's own rules make it act once.
 | Tool | Acts through | Same call id again | A new call after an interrupted one |
 |---|---|---|---|
 | `list_schedules` | `schedules.list` | Only reads | Only reads |
-| `create_schedule` | `schedules.create` with the key | The recorded result, or the identical entry | `conflict` naming the entry, if the first call wrote it |
+| `create_schedule` | `schedules.create` with the key | The recorded result, or the identical entry | The identical entry, if the first call wrote the same values; otherwise `conflict` naming the entry |
 | `change_schedule` | `settingsResultOnce` around `schedules.change` | The recorded result | Writes the same values, which leaves the same end state |
 | `remove_schedule` | `settingsResultOnce` around `schedules.remove` | The recorded result | `not_found`, if the first call removed it |
 | `run_schedule` | `schedules.run` with the key | The original job: the job and its key are one commit | `busy` naming the run, while it's open |
@@ -768,7 +775,8 @@ member has written. A refusal is an error result and the run goes on.
 `JobChange` gains `schedule_fire_skipped`, and `instance_feed.ts` publishes it after the commit, as it does the job
 deltas. Entry changes arrive as `settings_changed` with the section `schedule`, from the existing config listener. The
 page reads `schedules.list` again after that delta and after a job delta for an `S` number, and adds a skip from its
-delta. `job_record.ts` shows the origin's entry, fire time and `onDemand`.
+delta. A read can straddle a skip delta, so the page keeps the skips it learned of while a read ran and puts them back
+into that read's result with `addSkips` (B-035). `job_record.ts` shows the origin's entry, fire time and `onDemand`.
 
 ### Removing triggers
 
