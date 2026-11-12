@@ -39,7 +39,8 @@ This page comes with its feature.
 
 ## Configuring schedules
 
-This page comes with its feature.
+See [Schedules](schedules.md): the `[[schedule]]` section and its keys, the `bob schedules` commands, the Schedules
+page, run now, the skip rules, how time works, and how to read a schedule's run history.
 
 ## Giving and following jobs
 
@@ -53,5 +54,6 @@ message to its lead resumes it.
 
 ## Using the web interface
 
-See [The web interface](web_interface.md): the Board, Job page, Front desk, Roles, Workspaces and Status pages, how to
-share a job's address and download a backup, and why anyone who can reach the page can act and download everything.
+See [The web interface](web_interface.md): the Board, Job page, Front desk, Roles, Workspaces, Schedules and
+Status pages, how to share a job's address and download a backup, and why anyone who can reach the page can act and
+download everything.

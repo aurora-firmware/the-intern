@@ -13,6 +13,7 @@ export default defineConfig({
             { text: "The Intern user manual", link: "/" },
             { text: "Running The Intern", link: "/running_the_intern" },
             { text: "Roles, workspaces and agents sharing a job", link: "/roles_and_agents" },
+            { text: "Schedules", link: "/schedules" },
             { text: "Giving, following and answering jobs", link: "/jobs" },
             { text: "The front desk and bob chat", link: "/front_desk" },
             { text: "The web interface", link: "/web_interface" },
