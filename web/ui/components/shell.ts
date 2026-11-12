@@ -7,6 +7,7 @@ const LINKS: { page: ShellPage; label: string; href: string }[] = [
     { page: "desk", label: "Front desk", href: "#/desk" },
     { page: "roles", label: "Roles", href: "#/roles" },
     { page: "workspaces", label: "Workspaces", href: "#/workspaces" },
+    { page: "schedules", label: "Schedules", href: "#/schedules" },
     { page: "status", label: "Status", href: "#/status" },
 ];
 

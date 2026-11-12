@@ -11,6 +11,7 @@ const PAGES = [
     { name: "Front desk", hash: "#/desk" },
     { name: "Roles", hash: "#/roles" },
     { name: "Workspaces", hash: "#/workspaces" },
+    { name: "Schedules", hash: "#/schedules" },
     { name: "Status", hash: "#/status" },
     { name: "Board", hash: "#/" },
 ];
