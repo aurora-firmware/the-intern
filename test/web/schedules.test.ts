@@ -265,6 +265,48 @@ describe("the Schedules page in chrome", () => {
     });
 });
 
+describe("a scheduled run's Job page in chrome", () => {
+    const ORIGIN = 'main [data-field="origin"] .job-value';
+
+    it("shows the entry and the fire time of a run started by a fire", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { daemon, port } = await startServer();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await setClock(daemon, at(8, 2));
+        const number = await untilRun(daemon);
+
+        await page.goto(pageUrl(port, `/ui/#/jobs/${number}`));
+        await page.waitForSelector(ORIGIN, { timeout: WAIT_MS });
+
+        const text = (await page.locator(ORIGIN).textContent()) ?? "";
+        t.assert.match(text, new RegExp(`${ENTRY}`));
+        const fireTime = /fire time (\S+)/.exec(text)?.[1];
+        t.assert.equal(new Date(fireTime ?? "").toISOString(), at(8, 2));
+        t.assert.doesNotMatch(text, /on demand/);
+    });
+
+    it("also shows on demand with its way in for a run started from a browser", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { daemon, port } = await startServer();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await page.goto(pageUrl(port, "/ui/#/schedules"));
+        await page.waitForSelector(entryCard, { timeout: WAIT_MS });
+        await page.click(`${entryCard} .schedule-run-now`);
+        const number = await untilRun(daemon);
+
+        await page.goto(pageUrl(port, `/ui/#/jobs/${number}`));
+        await page.waitForSelector(ORIGIN, { timeout: WAIT_MS });
+
+        const text = (await page.locator(ORIGIN).textContent()) ?? "";
+        t.assert.match(text, new RegExp(ENTRY));
+        t.assert.match(text, /on demand by web interface from /);
+    });
+});
+
 describe("the Schedules page when the connection is lost, in chrome", () => {
     it("disables its actions and keeps typed text, then loads fresh data when the service returns", {
         timeout: TEST_TIMEOUT_MS,
