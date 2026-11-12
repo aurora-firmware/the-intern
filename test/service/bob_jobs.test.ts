@@ -158,6 +158,39 @@ describe("bob jobs list and show", () => {
         assert.ok(lines[0]?.includes(BLOCKED_REASON), lines[0]);
     });
 
+    describe("with the schedule filter", () => {
+        async function scheduledRun(daemon: DaemonProcess, name: string): Promise<JobView> {
+            await daemon.invoke("schedules.create", { name, cron: "0 3 * * *", request: `Run ${name}.` });
+            return (await daemon.invoke("schedules.run", { name })) as JobView;
+        }
+
+        it("lists only the scheduled runs of the entry named by --schedule", async () => {
+            const fixture = await readyDaemon();
+            const nightly = await scheduledRun(fixture.daemon, "nightly");
+            const weekly = await scheduledRun(fixture.daemon, "weekly");
+            const plain = (await fixture.daemon.invoke("jobs.create", { text: "plain one" })) as JobView;
+
+            const result = await bob(fixture, ["jobs", "list", "--schedule", "nightly"]);
+
+            assert.equal(result.status, 0, result.stderr);
+            assert.ok(result.stdout.includes(nightly.number), result.stdout);
+            assert.ok(!result.stdout.includes(weekly.number), result.stdout);
+            assert.ok(!result.stdout.includes(plain.number), result.stdout);
+        });
+
+        it("prints the answer of jobs.list unchanged with --json", async () => {
+            const fixture = await readyDaemon();
+            await scheduledRun(fixture.daemon, "nightly");
+            await scheduledRun(fixture.daemon, "weekly");
+
+            const result = await bob(fixture, ["jobs", "list", "--schedule", "nightly", "--json"]);
+
+            assert.equal(result.status, 0, result.stderr);
+            const expected = await fixture.daemon.invoke("jobs.list", { schedule: "nightly" });
+            assert.deepEqual(JSON.parse(result.stdout), expected);
+        });
+    });
+
     it("prints the definition of done, status, worklog and history of a job named in lower case", async () => {
         const fixture = await readyDaemon();
         const job = await startedJob(fixture.daemon, "show me", "The build takes under ten minutes");

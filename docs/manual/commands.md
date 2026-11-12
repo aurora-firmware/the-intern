@@ -233,6 +233,7 @@ prints an object with `jobs` and, when more follow, `cursor`.
 | `--status <value>`   | Only jobs with this status: `to_do`, `in_progress`, `blocked` or `done`. |
 | `--letter <value>`   | Only jobs with this origin letter.                                   |
 | `--related <value>`  | Only jobs Related to this job.                                       |
+| `--schedule <value>` | Only the scheduled runs of this schedule entry.                      |
 | `--limit <value>`    | The most jobs to list.                                               |
 | `--cursor <value>`   | Continue after the cursor an earlier listing printed.                |
 
