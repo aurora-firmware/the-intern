@@ -96,6 +96,27 @@ const readJobTool = (options: JobToolsOptions) =>
         },
     });
 
+// It only reads, so a replayed call is safe to run again (pi-durable knowledge: read-only tools may be replay-safe).
+const readScheduleRunsTool = (options: JobToolsOptions) =>
+    defineTool({
+        name: "read_schedule_runs",
+        description:
+            "Read the history of a schedule entry, newest first: the jobs it started and the due times it skipped. " +
+            "A page ends with a cursor when more follow; pass it back to read the next page.",
+        parameters: Type.Object({
+            name: Type.String({ description: "The name of the schedule entry." }),
+            limit: Type.Optional(Type.Number({ description: "The most items to return." })),
+            cursor: Type.Optional(Type.String({ description: "The cursor of the previous page." })),
+        }),
+        replay: "safe",
+        async execute(args, api) {
+            const caller: Caller = { actor: { kind: "agent", conversationId: String(api.conversationId) } };
+            return refusable("read_schedule_runs", async () =>
+                jsonResult(await options.actions().ctx.catalogue.invoke("schedules.runs", args, caller)),
+            );
+        },
+    });
+
 const updateJobParameters = Type.Object({
     title: Type.Optional(Type.String({ description: "The new title." })),
     description: Type.Optional(Type.String({ description: "The new description: goal, needs, plan and analysis." })),
@@ -277,6 +298,7 @@ export function createJobToolsExtension(options: JobToolsOptions): Extension {
             relateJobsTool(options),
             blockJobTool(options),
             completeJobTool(options),
+            readScheduleRunsTool(options),
         ]
             .map(refusingWithoutJob)
             .map(refusingWhenClosed(options)),

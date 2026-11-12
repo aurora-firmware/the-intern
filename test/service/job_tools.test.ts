@@ -19,6 +19,7 @@ import { createSeatedConversation } from "../../src/host/seating.ts";
 import { JOB_TOOL_NAMES } from "../../src/jobs/job_model.ts";
 import { createJobToolsExtension, JOB_TOOLS_EXTENSION_NAME } from "../../src/jobs/job_tools_extension.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
+import { createSchedulesComponent } from "../../src/schedules/schedules_component.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -95,6 +96,7 @@ async function start() {
     );
     const agents = await createAgentsComponent({ logger: quietLogger });
     const jobs = await createJobsComponent({ agents, logger: quietLogger, turnEndRule: false });
+    const schedules = await createSchedulesComponent({ agents, jobs, logger: quietLogger });
     let captured: ServiceContext | undefined;
     const probe: DaemonComponent = {
         name: "probe",
@@ -107,9 +109,9 @@ async function start() {
         env: env.env,
         homeDir: env.root,
         logger: quietLogger,
-        sections: agents.sections,
+        sections: [...agents.sections, ...schedules.sections],
         components: [agents.component, jobs.component, probe],
-        operations: [...agents.operations, ...jobs.operations],
+        operations: [...agents.operations, ...jobs.operations, ...schedules.operations],
         prepareModels: (runtime) => {
             const implementation = getApiProvider(fake.api);
             if (!implementation) throw new Error("the fake model's api is not registered");
@@ -141,7 +143,7 @@ async function start() {
         },
         frontDesk: () => ensureFrontDesk(ctx.host, agents.runtime().catalog),
         // Seats a conversation of the job whose seat lists the job tools, as T-123 will for every role.
-        async seat(jobId: string, tools = JOB_TOOLS): Promise<string> {
+        async seat(jobId: string, tools: string[] = JOB_TOOLS): Promise<string> {
             const seat = { ...agents.runtime().catalog.seatFor("gp"), tools };
             const { conversationId } = await createSeatedConversation(ctx.host, {
                 scope: "job-tools-test",
@@ -248,6 +250,44 @@ describe("read_job", () => {
             ["checked the expiry"],
         );
         assert.ok(Array.isArray(read.history));
+    });
+});
+
+describe("read_schedule_runs", () => {
+    it("returns what schedules.runs returns for an entry with history", async () => {
+        const started = await start();
+        await started.createJob(sourceCaller, { origin: schedule });
+        const job = await started.createJob();
+        const conversation = await started.seat(job.id, ["read", ...JOB_TOOLS]);
+        const expected = await started.invoke("schedules.runs", { name: "nightly", limit: 1 });
+
+        const { state, results } = await started.run(conversation, [
+            { name: "read_schedule_runs", arguments: { name: "nightly", limit: 1 } },
+        ]);
+
+        assert.equal(state, "done");
+        assert.equal(results[0]?.isError, false);
+        // The job's own timestamps move while its lead runs, so the two reads are compared by what they name.
+        const named = (page: { items: { kind: string; firedAt: string; job: { id: string } }[] }) =>
+            page.items.map(({ kind, firedAt, job }) => ({ kind, firedAt, id: job.id }));
+        assert.equal(jsonOf(results[0]).items.length, 1);
+        assert.deepEqual(named(jsonOf(results[0])), named(expected as never));
+    });
+
+    it("refuses an unknown entry and continues the run", async () => {
+        const started = await start();
+        const job = await started.createJob();
+        const conversation = await started.seat(job.id);
+
+        const { state, results } = await started.run(conversation, [
+            { name: "read_schedule_runs", arguments: { name: "missing" } },
+            { name: "read_job", arguments: {} },
+        ]);
+
+        assert.equal(state, "done");
+        assert.equal(results[0]?.isError, true);
+        assert.match(results[0]?.text ?? "", /missing/);
+        assert.equal(results[1]?.isError, false);
     });
 });
 
