@@ -18,10 +18,12 @@ The Intern ships three roles:
 | ----- | ------------------------------------------------------------------------------------------------------- |
 | `bob` | Leads jobs. It is the default lead: a job starts with `bob` unless its source names another role. `bob` defines the job (goal, needs, plan and definition of done), asks for what is missing, then does the work itself, hands it to a better-suited role or invokes other agents for parts of it, and finally verifies the result against the definition of done. |
 | `gp`  | A general-purpose executor. It carries out a part of a job to completion and reports back. It comes with a shipped skill that describes how. |
-| `desk` | Assists team members in the [front desk](front_desk.md). It answers questions about the work from jobs, conversations, status and usage, turns every request for real work into a job instead of doing it, reports the new job's short number, and passes answers and steering to a job's conversations when a team member asks. |
+| `desk` | Assists team members in the [front desk](front_desk.md). It answers questions about the work from jobs, conversations, status and usage, turns every request for real work into a job instead of doing it, reports the new job's short number, sets up and runs schedules, and passes answers and steering to a job's conversations when a team member asks. |
 
 You can create your own roles, change any role (including `bob`, `gp` and `desk`) and remove the roles you created. You
-can't remove a shipped role.
+can't remove a shipped role. You also can't remove a role that a schedule entry names, or a role whose default
+workspace, the one The Intern creates for it, a schedule entry names. The refusal names the entry. A role whose default
+workspace is one you set isn't held by that.
 
 A change to a role affects only agents seated after the change. An agent that is already working keeps its
 instructions, tools, skills, model, thinking level and workspace until its seat changes.
@@ -47,8 +49,9 @@ and hyphens, in at most 40 characters in all.
 | `workspace`      | The absolute path of the role's default workspace. It must be registered.      | The role's own workspace, described below. |
 
 In a job, every role is also offered `handoff`, `invoke` and `steer` (see [Sharing a job](#sharing-a-job)) and the
-job tools `read_job`, `update_job`, `add_worklog`, `create_job`, `relate_jobs`, `block_job` and `complete_job`. A tool
-list can't leave them out, so you don't list them. Only a job's lead can use `block_job` and `complete_job`: an agent
+job tools `read_job`, `read_schedule_runs`, `update_job`, `add_worklog`, `create_job`, `relate_jobs`, `block_job` and
+`complete_job`. `read_job` reads the agent's own job, or another job when you name it. `read_schedule_runs` reads the
+history of a schedule entry. A tool list can't leave them out, so you don't list them. Only a job's lead can use `block_job` and `complete_job`: an agent
 it invoked gets an error result from either, and its run goes on. `complete_job` must be the only tool call of its
 turn. An agent seated before the job tools existed keeps its tools until its seat changes.
 
@@ -72,7 +75,7 @@ model = "anthropic/claude-sonnet-4-5"
 ```
 
 The `desk` role has an empty tool set: it changes no file and runs no command. In the front desk it is offered only
-the tools for reading jobs, conversations, and the daemon's status and usage; for creating and editing jobs; and for
+the tools for reading jobs, conversations, and the daemon's status and usage; for creating and editing jobs; for schedule entries; and for
 passing input to or stopping a job's conversations. See [The front desk and `bob chat`](front_desk.md).
 
 ### Undo a change to a shipped role
@@ -122,9 +125,13 @@ A folder that fails the check is refused, with an error naming the path and the 
 `config.toml`, the service doesn't start. The check happens once, at registration. Later, if the folder disappears,
 the agent's tool calls that need it fail with an ordinary error that the agent sees, and the service keeps running.
 
-You can unregister a registered workspace unless a role's default workspace is that folder; the refusal names the
-role. Agents already working in an unregistered workspace keep working there until their seat changes. After that,
+You can unregister a registered workspace unless a role's default workspace is that folder or a schedule entry names
+it; the refusal names the role or the entry. Agents already working in an unregistered workspace keep working there until their seat changes. After that,
 nobody can choose it for a new seat.
+
+When you give a role its own workspace, The Intern stops registering that role's default workspace under the data
+directory. If a schedule entry names that path, the service refuses to start at the next start, and names the file and
+the entry. Change the entry or the file, then start again. Changing a role isn't refused for this reason.
 
 ### Instructions and skills from the workspace
 
