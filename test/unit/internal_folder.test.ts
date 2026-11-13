@@ -94,6 +94,29 @@ describe("the internal folder", () => {
         });
     });
 
+    describe("a manifest key that leaves the internal folder", () => {
+        for (const key of [
+            "../outside.txt",
+            "skills/../../outside.txt",
+            "/etc/outside.txt",
+            "skills//a.md",
+            "./a.md",
+        ]) {
+            it(`refuses the key ${key} and deletes nothing`, async () => {
+                const outside = join(base, "outside.txt");
+                await writeFile(outside, "keep");
+                await mkdir(dataDir, { recursive: true });
+                const files = { [key]: sha256("keep") };
+                await writeFile(manifestPath(dataDir), JSON.stringify({ version: 1, files }));
+                await assert.rejects(
+                    prepare(),
+                    (error) => error instanceof InternalFolderError && error.path === manifestPath(dataDir),
+                );
+                assert.equal(await readFile(outside, "utf8"), "keep");
+            });
+        }
+    });
+
     describe("the first start", () => {
         it("copies every shipped file and records each hash", async () => {
             await prepare();

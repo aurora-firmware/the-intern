@@ -63,12 +63,17 @@ async function hashOf(path: string): Promise<string | undefined> {
     return bytes === undefined ? undefined : fingerprintOf(bytes);
 }
 
+// A key is joined onto the data directory, so it has to stay inside it: no absolute path and no empty, "." or ".." part.
+function isInsideRelativePath(key: string): boolean {
+    return !key.startsWith("/") && key.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+}
+
 function isHashRecord(value: unknown): value is Record<string, string> {
     return (
         typeof value === "object" &&
         value !== null &&
         !Array.isArray(value) &&
-        Object.values(value).every((hash) => typeof hash === "string")
+        Object.entries(value).every(([key, hash]) => typeof hash === "string" && isInsideRelativePath(key))
     );
 }
 
@@ -84,7 +89,10 @@ export async function readManifest(dataDir: string): Promise<ShippedManifest> {
     }
     const manifest = parsed as { version?: unknown; files?: unknown };
     if (manifest?.version !== MANIFEST_VERSION || !isHashRecord(manifest.files)) {
-        throw new InternalFolderError(path, `the manifest isn't version ${MANIFEST_VERSION} with a files table`);
+        throw new InternalFolderError(
+            path,
+            `the manifest isn't version ${MANIFEST_VERSION} with a files table of hashes keyed by paths inside the data directory`,
+        );
     }
     return { version: MANIFEST_VERSION, files: manifest.files };
 }
