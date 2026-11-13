@@ -8,6 +8,8 @@ export type ConfigSection<T> = {
     name: string;
     defaults(): T;
     parse(table: unknown): T;
+    /** Runs after `parse`, on the parsed or default value, for what only an async look can decide. */
+    check?(value: T): Promise<void>;
     serialize(value: T): Record<string, unknown> | Record<string, unknown>[];
 };
 
@@ -76,9 +78,13 @@ function parseTomlTable(file: string, text: string): Record<string, unknown> {
     }
 }
 
-function parseSection(file: string, section: ConfigSection<unknown>, table: unknown): unknown {
+async function guardSection<T>(
+    file: string,
+    section: ConfigSection<unknown>,
+    action: () => T | Promise<T>,
+): Promise<T> {
     try {
-        return section.parse(table);
+        return await action();
     } catch (error) {
         if (error instanceof ConfigValueError) {
             throw new ConfigError(file, error.reason, `${section.name}.${error.key}`);
@@ -87,21 +93,35 @@ function parseSection(file: string, section: ConfigSection<unknown>, table: unkn
     }
 }
 
+async function resolveSection(file: string, section: ConfigSection<unknown>, table: unknown): Promise<unknown> {
+    const value = await guardSection(file, section, () =>
+        table === undefined ? section.defaults() : section.parse(table),
+    );
+    await guardSection(file, section, () => section.check?.(value));
+    return value;
+}
+
 export async function loadConfig(file: string, sections: readonly ConfigSection<unknown>[]): Promise<LoadedConfig> {
     const read = await readConfigFile(file);
     if (read === undefined) {
-        const defaults = new Map(sections.map((section) => [section.name, section.defaults()] as const));
-        return { values: defaults, fingerprint: ABSENT_FINGERPRINT };
+        return { values: await resolveSections(file, sections, {}), fingerprint: ABSENT_FINGERPRINT };
     }
     const document = parseTomlTable(file, read.text);
     const owned = new Set(sections.map((section) => section.name));
     for (const key of Object.keys(document)) {
         if (!owned.has(key)) throw new ConfigError(file, "no configuration section owns this key", key);
     }
+    return { values: await resolveSections(file, sections, document), fingerprint: read.fingerprint };
+}
+
+async function resolveSections(
+    file: string,
+    sections: readonly ConfigSection<unknown>[],
+    document: Record<string, unknown>,
+): Promise<Map<string, unknown>> {
     const values = new Map<string, unknown>();
     for (const section of sections) {
-        const table = document[section.name];
-        values.set(section.name, table === undefined ? section.defaults() : parseSection(file, section, table));
+        values.set(section.name, await resolveSection(file, section, document[section.name]));
     }
-    return { values, fingerprint: read.fingerprint };
+    return values;
 }
