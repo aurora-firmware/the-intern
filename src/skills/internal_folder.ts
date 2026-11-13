@@ -2,7 +2,7 @@ import { mkdir, readdir, readFile, rename, rm, rmdir } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fingerprintOf } from "../config/config_file.ts";
-import { type FileStore, writeFileAtomic } from "./file_store.ts";
+import { type FileChangeKind, type FileStore, writeFileAtomic } from "./file_store.ts";
 
 export const DEFAULT_SHIPPED_ROOT = fileURLToPath(new URL("../shipped", import.meta.url));
 
@@ -225,8 +225,13 @@ export function restoreShippedFile(options: {
     shippedRoot: string;
     store: FileStore;
     relativePath: string;
+    announce?: FileChangeKind;
 }): Promise<void> {
-    return options.store.enqueue(() => runFileRestore(options.dataDir, options.shippedRoot, options.relativePath));
+    return options.store.enqueue(async () => {
+        await runFileRestore(options.dataDir, options.shippedRoot, options.relativePath);
+        if (options.announce !== undefined)
+            options.store.announce(join(options.dataDir, options.relativePath), options.announce);
+    });
 }
 
 let skillCopyCounter = 0;

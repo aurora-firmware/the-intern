@@ -389,4 +389,15 @@ describe("the role operations", () => {
             [expected, expected, expected],
         );
     });
+
+    it("announces files_changed with kind role for the file roles.restore writes", async () => {
+        const env = await hermetic();
+        const { invoke, announced } = await start(env);
+        await invoke("roles.change", { name: "gp", instructions: "Something else." });
+        announced.length = 0;
+
+        await invoke("roles.restore", { name: "gp" });
+
+        assert.deepEqual(announced, [{ path: roleInstructionPath(env.dataDir, "gp"), kind: "role" }]);
+    });
 });

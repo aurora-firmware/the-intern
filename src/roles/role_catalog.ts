@@ -247,6 +247,7 @@ export function createRoleCatalog(options: RoleCatalogOptions): RoleCatalog {
                 shippedRoot,
                 store: fileStore,
                 relativePath: `instructions/roles/${name}.md`,
+                announce: "role",
             });
             return requireRole(name);
         },
