@@ -18,6 +18,7 @@ import type { Operation } from "../service/operations.ts";
 import { roleOperations } from "../service/role_operations.ts";
 import { seatOperations } from "../service/seat_operations.ts";
 import { workspaceOperations } from "../service/workspace_operations.ts";
+import { createSkillsComponent, type SkillsComponent } from "../skills/skills_component.ts";
 import { shippedToolsExtension } from "../tools/shipped_tools_extension.ts";
 import { roleWorkspacePath } from "../workspaces/workspace_folder.ts";
 import {
@@ -34,9 +35,14 @@ export type AgentsComponent = {
     // biome-ignore lint/suspicious/noExplicitAny: the operations have differing input and output types
     operations: Operation<ServiceContext, any, any>[];
     runtime(): AgentsRuntime;
+    skills: SkillsComponent;
 };
 
-export async function createAgentsComponent(options: { logger: Logger }): Promise<AgentsComponent> {
+export async function createAgentsComponent(options: {
+    logger: Logger;
+    skills?: SkillsComponent;
+}): Promise<AgentsComponent> {
+    const skills = options.skills ?? createSkillsComponent({ logger: options.logger });
     const shipped = await loadShippedRoles();
     const preamble = await loadPreamble();
     const loader = createWorkspaceContextLoader({ logger: options.logger });
@@ -83,16 +89,22 @@ export async function createAgentsComponent(options: { logger: Logger }): Promis
     const component: DaemonComponent = {
         name: "agents",
         extensions: [
+            ...(skills.component.extensions ?? []),
             createRolePromptExtension({ preamble, loader }),
             shippedToolsExtension,
             createCoordinationExtension({ host: requireHost, runtime: requireRuntime }),
         ],
+        async prepareFiles(input) {
+            return skills.component.prepareFiles?.(input);
+        },
         async checkModels(ctx) {
+            await skills.component.checkModels?.(ctx);
             host = ctx.host;
             runtime = buildRuntime(ctx);
             runtime.catalog.checkConfigured();
         },
         async ensureWorkspaces(ctx) {
+            await skills.component.ensureWorkspaces?.(ctx);
             const { catalog, workspaces } = requireRuntime();
             await workspaces.checkConfigured();
             for (const role of catalog.list()) {
@@ -100,21 +112,31 @@ export async function createAgentsComponent(options: { logger: Logger }): Promis
             }
             checkRoleWorkspacesRegistered({ catalog, workspaces }, ctx.dirs.dataDir);
         },
+        async repair(ctx) {
+            await skills.component.repair?.(ctx);
+        },
+        async afterResume(ctx) {
+            await skills.component.afterResume?.(ctx);
+        },
         async start(ctx) {
+            await skills.component.start?.(ctx);
             reportDelivery = await startReportDelivery(ctx.host, { logger: options.logger });
         },
         async stop() {
             reportDelivery?.stop();
             reportDelivery = undefined;
+            await skills.component.stop?.();
         },
     };
 
     const agents: AgentsComponent = {
         component,
-        sections: [rolesSection, workspacesSection],
-        operations: [],
+        sections: [...skills.sections, rolesSection, workspacesSection],
+        operations: [...skills.operations],
         runtime: requireRuntime,
+        skills,
     };
+    skills.connectAgents(requireRuntime);
     agents.operations.push(...roleOperations(agents), ...workspaceOperations(agents), ...seatOperations(agents));
     return agents;
 }

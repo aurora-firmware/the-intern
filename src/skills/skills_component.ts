@@ -3,6 +3,7 @@
  * folder (instructions and skills) at step 3, before the configuration store is built.
  */
 
+import type { AgentsRuntime } from "../agents/agents_component.ts";
 import type { ConfigSection } from "../config/config_file.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
@@ -26,6 +27,10 @@ export type SkillsComponent = {
     shippedRoot: string;
     /** The data directory; throws before startup step 3 has run. */
     dataDir(): string;
+    /** Called by the agents component, which holds this one: the operations reach the roles and workspaces lazily. */
+    connectAgents(runtime: () => AgentsRuntime): void;
+    /** The agents runtime; throws before the agents component has connected, and before startup step 5. */
+    agentsRuntime(): AgentsRuntime;
 };
 
 export function createSkillsComponent(options: SkillsComponentOptions): SkillsComponent {
@@ -33,6 +38,7 @@ export function createSkillsComponent(options: SkillsComponentOptions): SkillsCo
     let hub: FileChangeHub | undefined;
     const fileStore = createFileStore({ changes: () => hub });
     let recordedDataDir: string | undefined;
+    let connectedRuntime: (() => AgentsRuntime) | undefined;
 
     const component: DaemonComponent = {
         name: "skills",
@@ -58,6 +64,13 @@ export function createSkillsComponent(options: SkillsComponentOptions): SkillsCo
                 throw new Error("the data directory is not known before startup step 3 has run");
             }
             return recordedDataDir;
+        },
+        connectAgents(runtime) {
+            connectedRuntime = runtime;
+        },
+        agentsRuntime() {
+            if (connectedRuntime === undefined) throw new Error("the skills component isn't connected to the agents");
+            return connectedRuntime();
         },
     };
 }
