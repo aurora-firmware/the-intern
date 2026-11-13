@@ -7,7 +7,9 @@ import type { AgentsRuntime } from "../agents/agents_component.ts";
 import type { ConfigSection } from "../config/config_file.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
+import { rolesSection, workspacesSection } from "../roles/roles_section.ts";
 import type { Operation } from "../service/operations.ts";
+import { migrateOlderKeys } from "./config_migration.ts";
 import { createFileStore, type FileChangeHub, type FileStore } from "./file_store.ts";
 import { DEFAULT_SHIPPED_ROOT, prepareInternalFolder } from "./internal_folder.ts";
 import { skillsSection } from "./skills_section.ts";
@@ -42,10 +44,16 @@ export function createSkillsComponent(options: SkillsComponentOptions): SkillsCo
 
     const component: DaemonComponent = {
         name: "skills",
-        async prepareFiles({ dirs }) {
+        async prepareFiles({ dirs, config }) {
             recordedDataDir = dirs.dataDir;
             await prepareInternalFolder({ dataDir: dirs.dataDir, shippedRoot, store: fileStore });
-            return undefined;
+            const owned = [skillsSection, rolesSection, workspacesSection] as ConfigSection<unknown>[];
+            return migrateOlderKeys({
+                dirs,
+                config,
+                sections: owned.filter((section) => config.values.has(section.name)),
+                store: fileStore,
+            });
         },
         // Writes before this step announce nothing: the start rule of step 3 has no feed to tell.
         async checkModels(ctx) {
