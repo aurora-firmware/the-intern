@@ -1,6 +1,7 @@
 import { formatSkillsForPrompt, type Skill } from "@earendil-works/pi-coding-agent";
 import type { JOB_TOOL_NAMES } from "../jobs/job_model.ts";
 import type { Seat } from "../roles/role_model.ts";
+import type { CatalogSkill } from "../skills/skill_resolution.ts";
 
 export type PromptSection = { key: string; text: string };
 
@@ -57,6 +58,60 @@ export function renderRolePrompt(input: RolePromptInput): PromptSection[] {
             text: renderWorkspaceContext(input.seat.workspace, input.contextFiles),
         },
         { key: "intern.workspace-skills", text: formatSkillsForPrompt(input.workspaceSkills).trim() },
+    ];
+    return candidates.filter((section) => section.text !== "");
+}
+
+export type PromptParts = {
+    common?: string;
+    role?: string;
+    isLead: boolean;
+    workspace: string;
+    contextFiles: { path: string; content: string }[];
+    skills: CatalogSkill[];
+};
+
+// Escapes as pi agent's formatSkillsForPrompt does.
+function escapeXml(text: string): string {
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&apos;");
+}
+
+const SKILL_LISTING_INTRO = [
+    "The following skills provide specialized instructions for specific tasks.",
+    "When the task matches a skill's description, load the skill with the `skill` tool and its `name`.",
+    "To read a file the skill names, call the `skill` tool with the skill's `name` and `file`, relative to the skill's folder.",
+].join("\n");
+
+// Sorted by name in byte order (UTF-8), so equal skills render byte-identical text.
+export function renderSkillListing(skills: CatalogSkill[]): string {
+    const sorted = [...skills].sort((a, b) => Buffer.compare(Buffer.from(a.name), Buffer.from(b.name)));
+    const lines = [SKILL_LISTING_INTRO, "", "<available_skills>"];
+    for (const skill of sorted) {
+        lines.push(
+            "  <skill>",
+            `    <name>${escapeXml(skill.name)}</name>`,
+            `    <description>${escapeXml(skill.description)}</description>`,
+            `    <location>${escapeXml(skill.file)}</location>`,
+            "  </skill>",
+        );
+    }
+    lines.push("</available_skills>");
+    return lines.join("\n");
+}
+
+// Pure: equal parts render byte-identical sections, and the skills are the only part that varies with the catalog.
+export function renderPromptSections(parts: PromptParts): PromptSection[] {
+    const candidates: PromptSection[] = [
+        { key: "intern-common", text: parts.common ?? "" },
+        { key: "intern-role", text: parts.role ?? "" },
+        { key: "intern-lead-duty", text: parts.isLead ? LEAD_DUTY : "" },
+        { key: "intern-workspace-context", text: renderWorkspaceContext(parts.workspace, parts.contextFiles) },
+        { key: "intern-skills", text: parts.skills.length === 0 ? "" : renderSkillListing(parts.skills) },
     ];
     return candidates.filter((section) => section.text !== "");
 }
