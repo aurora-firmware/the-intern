@@ -66,6 +66,8 @@ export type ConversationMeta = JobLinks & {
     closed?: boolean;
     /** The entry ID a team member's abort of the job's lead marked; a document without it reads as not marked. */
     stopped?: string;
+    /** The skill names enabled for the agent; every seat write resets it to the role's defaults. A document written before S-008 has none. */
+    enabledSkills?: string[];
 };
 export type SeatChange = { seat: Seat; actor: SeatActor; contextMode?: ContextMode; note?: string };
 
@@ -149,6 +151,7 @@ async function writeSeat(
         extensions: extensionSelectionFor(meta.origin) ?? null,
     });
     meta.seat = toStoredJson(seat);
+    meta.enabledSkills = [...seat.skills];
     const record: SeatRecord = {
         previous: previous === null ? null : summarize(previous),
         next: summarize(seat),
