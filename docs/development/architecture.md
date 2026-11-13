@@ -842,8 +842,8 @@ model request) and ADR-001 decision 4 (the enabled set and its upgrade write). L
 | Pages | `web/ui/components/skills_panel.ts`, `web/ui/components/file_editor.ts`, `web/ui/model/skills.ts`, `web/ui/pages/roles.ts` | The panel, the editor, their pure model, and the Roles page's Skills and instructions section |
 
 The agents component holds the skills component, so every daemon that composes the agents component has it, and
-`serve.ts` and the test fixtures don't change. `createAgentsComponent({ logger, skills? })` takes a skills component,
-or creates one with `createSkillsComponent({ logger })` when none is given; a test that needs a test-only switch, such as
+`serve.ts` and the test fixtures don't change. `createAgentsComponent({ logger, skills? })` takes a skills component, or
+creates one with `createSkillsComponent({ logger })` when none is given; a test that needs a test-only switch, such as
 `shippedRoot`, passes its own. The agents component's `sections`, `operations` and `extensions` begin with the skills
 component's, and each of its daemon hooks first runs the skills component's hook of the same name (`prepareFiles`,
 `checkModels`, `ensureWorkspaces`, `repair`, `afterResume`, `start`); `stop` runs the skills component's last. So step
@@ -852,8 +852,8 @@ the agents component comes before the jobs component in every composition. The s
 `DaemonComponent` of its own, which a test may run without the agents component. Its operations reach the role catalog
 and the workspace registry through the agents component's `runtime()`, which `createAgentsComponent` hands it with
 `connectAgents`, read lazily, as the coordination extension does. The role catalog takes the internal folder's paths and
-the file store from the skills component. The module rule holds: only `src/host/` and the-intern's extensions import pi-durable, and
-`skill_resolution.ts`, `role_prompt.ts` and the internal folder's start rule decide without a harness.
+the file store from the skills component. The module rule holds: only `src/host/` and the-intern's extensions import
+pi-durable, and `skill_resolution.ts`, `role_prompt.ts` and the internal folder's start rule decide without a harness.
 
 ### Startup
 
