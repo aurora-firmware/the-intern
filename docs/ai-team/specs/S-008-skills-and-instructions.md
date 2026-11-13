@@ -34,7 +34,9 @@ service operation, page, way in) and the shared vocabulary of `docs/system_overv
 | Internal folder | The folder under the instance's data directory that holds the live copy of the shipped content and the team roles' instruction files (REQ-002). |
 | Skill search path | A folder of skills the team names in the configuration (REQ-004). |
 | Skill catalog | Every skill found in the internal folder and the skill search paths, resolved by name (REQ-004). |
-| Enabled skills | The skills an agent is offered: its own enabled set plus its workspace's skills (REQ-005, REQ-006). |
+| Enabled set | The skill names an agent has enabled. It is a fact of the agent, kept with its conversation and separate from its seat: changing it is not a seat change (REQ-006). |
+| Enabled skills | The skills an agent is offered: those of its enabled set that the catalog holds, plus its workspace's skills (REQ-005, REQ-006). |
+| Role catalog | The skill catalog as an agent of that role would see it in the role's default workspace (REQ-005). |
 | Shadowed skill | A skill found under a name that a higher-priority source also holds; it is not used (REQ-004). |
 | Edited | A shipped file in the internal folder whose content differs from what The Intern last copied there, or that was deleted (REQ-003). |
 
@@ -68,8 +70,9 @@ Journeys, in priority order:
 
 - **Adding and removing skills through The Intern.** A team member adds or removes a skill folder with their own tools.
   The command line and the web change the configuration and the text of files that exist (REQ-010, REQ-012, REQ-013).
-- **Printing file text on the command line.** Commands print names, paths and states only, because file text can hold
-  characters a terminal mishandles; the files are read directly.
+- **Printing skill and instruction file text on the command line.** The `bob skills` and `bob instructions` commands
+  print names, paths and states only, because file text can hold characters a terminal mishandles; the files are read
+  directly. `bob roles show` keeps printing a role's instructions as S-005 REQ-012 states.
 - **Fetching skills remotely.** No installing from a URL, git or a marketplace: the team puts folders on the machine and
   adds a search path.
 - **Edit history.** No versions or undo of edits, apart from restoring a shipped file (REQ-003).
@@ -131,7 +134,7 @@ Team members may read and edit these files with their own tools (REQ-002).
 
 ```toml
 [skills]
-paths = ["/srv/team-skills", "/home/intern/more-skills"]   # optional, absolute folders, searched in this order
+paths = ["/srv/team-skills", "/home/intern/more-skills"]   # optional, absolute folders; a later path wins on a name
 
 [roles.reviewer]
 skills = ["code-review", "about-the-intern"]   # skill names, no longer folder paths
@@ -142,31 +145,49 @@ says how an older file is read.
 
 ### Exposed: the workspace
 
-A workspace's `AGENTS.md`/`CLAUDE.md` files, from the workspace and its parent folders, and its skills under
-`<workspace>/.pi/skills` (S-001), as today. **Contract**: the `.pi/skills` location.
+A workspace's `AGENTS.md`/`CLAUDE.md` files, from the workspace and its parent folders (S-001), and its skills under
+`<workspace>/.pi/skills`. **Contract**: this spec makes the `.pi/skills` location, which the code already uses, part of
+the product's contract.
 
 ### Exposed: service operations
 
 All are reachable through both listeners at `POST /operations/<name>` (S-003 REQ-003) and return S-002's errors. An
-agent is named by its conversation id; a role by its name.
+agent is named by its conversation id; a role by its name. Where the input is "`role` or `conversation`", exactly one
+is required, and none or both is refused `invalid_input`.
 
 | Operation | Kind | Input | Result | Requirement |
 |---|---|---|---|---|
 | `skills.list` | read | `role` or `conversation` | the catalog for that role or agent: per skill its name, description, source, path, enabled flag, shipped and edited marks, the shadowed copies, and the skills left out with the reason; for a conversation also its seat | REQ-009 |
 | `skills.enable`, `skills.disable` | control | `name`, and `role` or `conversation` | the new enabled set; `not_found`, `invalid_input`, `conflict` | REQ-005, REQ-006 |
-| `skills.paths.list` | read | none | the search paths in order, each with whether it is reachable | REQ-004 |
-| `skills.paths.add`, `skills.paths.remove` | control | `path`, and for add an optional position | the search paths; `invalid_input`, `not_found`, `conflict` | REQ-004 |
+| `skills.paths.list` | read | none | the search paths in priority order, lowest first, each with whether it passes REQ-004's check | REQ-004 |
+| `skills.paths.add` | control | `path` | the search paths, the new one last; a path already listed returns them unchanged; `invalid_input`, `conflict` (file changed on disk) | REQ-004 |
+| `skills.paths.remove` | control | `path` | the search paths; `not_found`, `conflict` (file changed on disk) | REQ-004 |
 | `skills.restore` | control | `name` of a shipped skill | the skill; `not_found` | REQ-003 |
 | `instructions.list` | read | `role` or `conversation` | the instruction files that build that prompt, in order, each with its kind, path and shipped, edited or missing mark | REQ-009 |
 | `instructions.restore` | control | `common` or a shipped role's name | the file; `not_found` | REQ-003 |
 | `files.read` | read | `path` of a skill file or instruction file | the text and a version token; `not_found`, `invalid_input` | REQ-010 |
 | `files.write` | control | `path`, `text`, the version token read | the new version token; `not_found`, `invalid_input`, `conflict` | REQ-010 |
 
-`roles.list` keeps returning each role's instructions, now read from its file, and its skills as names. `roles.create`
-and `roles.change` write the instructions they are given to the role's file, `roles.restore` also restores a shipped
-role's file, and `roles.remove` deletes the removed role's file (REQ-007). `settings_changed` on the instance feed
-(S-002 REQ-022) carries skill and path changes; a conversation's enabled skills change appears in its seat as
-`conversations.get` and the instance feed show it (REQ-006).
+`skills.paths.add` takes no idempotency key: adding a listed path again changes nothing and succeeds, so a retry is
+safe.
+
+`roles.list` keeps returning each role's instructions, now read from its file, with a version token, and its skills as
+names; a role whose file is missing is returned with no instructions and marked missing. `roles.create` and
+`roles.change` write the instructions they are given to the role's file, `roles.change` only with the version token
+`roles.list` returned. `roles.restore` also restores a shipped role's file and default skills, and `roles.remove`
+deletes the removed role's file (REQ-007).
+
+Feed, on the instance scope (S-002 REQ-014):
+
+| Delta | Carries | Requirement |
+|---|---|---|
+| `settings_changed` (existing, S-002 REQ-022) | that a role's skills or the search paths changed | REQ-004, REQ-005 |
+| `files_changed` (new) | the path and kind of a file changed through `files.write`, a restore or a role operation | REQ-010 |
+| `skills_changed` (new) | a conversation id and its new enabled set | REQ-006 |
+
+`conversations.get`, `conversations.list` and the instance feed snapshot return each conversation's enabled set beside
+its seat. A file changed by hand is not announced: pages show it when they next read it, and a save over it is refused
+`conflict` (REQ-010).
 
 ### Exposed: the `bob skills` and `bob instructions` commands
 
@@ -178,7 +199,7 @@ prints file text.
 | `bob skills list --role <role>`, `bob skills list --conversation <id>` | `skills.list` | REQ-012 |
 | `bob skills enable <name> --role <role>`, `bob skills disable <name> --role <role>` | `skills.enable`, `skills.disable` | REQ-012 |
 | `bob skills enable <name> --conversation <id>`, `bob skills disable <name> --conversation <id>` | `skills.enable`, `skills.disable` | REQ-012 |
-| `bob skills paths list`, `bob skills paths add <path>`, `bob skills paths remove <path>` | `skills.paths.*` | REQ-012 |
+| `bob skills paths`, `bob skills add-path <path>`, `bob skills remove-path <path>` | `skills.paths.list`, `skills.paths.add`, `skills.paths.remove` | REQ-012 |
 | `bob skills restore <name>` | `skills.restore` | REQ-012 |
 | `bob instructions list --role <role>`, `bob instructions list --conversation <id>` | `instructions.list` | REQ-012 |
 | `bob instructions restore common`, `bob instructions restore <role>` | `instructions.restore` | REQ-012 |
@@ -268,8 +289,10 @@ invocation. The shipped text may change in later versions without amending this 
 
 ### REQ-002 — The internal folder
 
-On every start, the daemon SHALL create any part of the internal folder that is missing and copy into it each shipped
-file it has never copied before, so that the internal folder is the only live copy of the shipped content. The daemon
+On every start, right after it takes single ownership (S-002 REQ-002 step 3) and before it reads the configuration
+file's older keys (REQ-011), the daemon SHALL create any part of the internal folder that is missing, apply REQ-003's
+upgrade rule, and copy into it each shipped file it has never copied before, so that the internal folder is the only
+live copy of the shipped content. A failure to write it SHALL stop startup with an error naming the path. The daemon
 SHALL never write to the installed package. Folders it creates SHALL be accessible only to the service account, and
 files it writes readable and writable only by it (ADR-002). A team member's edits to the internal folder, made by any
 means, SHALL be used as they are.
@@ -327,16 +350,21 @@ count as not edited. A restore of a name that is not shipped SHALL be refused `n
 
 ### REQ-004 — Skill search paths and the catalog
 
-The skill catalog SHALL be built from the internal folder's `skills` folder, then each skill search path in its
-configured order, and, for an agent, its workspace's `.pi/skills` folder. A skill is a folder holding `SKILL.md`, found
-at any depth. When two sources hold the same name, the later source SHALL win and the earlier copy is shadowed; inside
-one source the first found wins and the others are shadowed with a diagnostic. A `SKILL.md` that can't be parsed or has
-no description SHALL be left out with the reason, and nothing else is affected. A skill folder added to or removed from
-a source SHALL be seen from the next catalog read, without a restart.
+The skill catalog SHALL be built from these sources, in rising priority: the internal folder's `skills` folder, each
+skill search path in its configured order, and, for an agent, its workspace's `.pi/skills` folder. A later path in
+`[skills] paths` therefore wins over an earlier one, and the workspace wins over all. A source is either a folder that
+is itself a skill (it holds `SKILL.md`) or a folder whose skills are found at any depth below it. When two sources hold
+the same name, the higher-priority copy SHALL be used and the other is shadowed. Inside one source, the copy whose
+folder path sorts first by byte order SHALL be used, and the others are shadowed with a diagnostic. A `SKILL.md` that
+can't be parsed or has no description SHALL be left out with the reason, and nothing else is affected. A skill folder
+added to or removed from a source SHALL be seen from the next catalog read, without a restart.
 
-`skills.paths.add` and `skills.paths.remove` SHALL change the configuration file as S-002 REQ-022 states for settings.
-A search path SHALL be an absolute path to an existing folder that only the service account can access, as a workspace
-is checked (S-001 REQ-018); one that fails is refused `invalid_input`, and a duplicate `conflict`.
+`skills.paths.add` and `skills.paths.remove` SHALL change the configuration file as S-002 REQ-022 states for settings,
+including its `conflict` refusal when the file changed on disk. `skills.paths.add` appends the path, which then has the
+highest priority among the search paths; adding a path already listed SHALL change nothing and succeed. A search path
+SHALL be an absolute path to an existing folder that only the service account can access, as a workspace is checked
+(S-001 REQ-018); one that fails is refused `invalid_input`, and one in the file stops startup at S-002 REQ-002 step 1
+with an error naming it.
 
 #### AC-004.1 — Priority and shadowing
 
@@ -360,7 +388,17 @@ is checked (S-001 REQ-018); one that fails is refused `invalid_input`, and a dup
 - **Given:** a running daemon
 - **When:** a team member adds, in turn, a relative path, a missing folder, a folder other accounts can read, and a path
   already listed
-- **Then:** the first three are refused `invalid_input` and the last `conflict`, and the file is unchanged
+- **Then:** the first three are refused `invalid_input` and the file is unchanged; the last succeeds and the list is
+  unchanged
+
+**Verification:** test — `test/service/skill_operations.test.ts`.
+
+#### AC-004.4 — Order inside one source and between paths
+
+- **Given:** search paths `/a` then `/b`, where `/a` holds `x/lint` and `y/lint`, and `/b` holds `lint`
+- **When:** the catalog is listed
+- **Then:** `/b/lint` is used; `/a/x/lint` and `/a/y/lint` are shadowed, and a diagnostic names `/a/y/lint` as shadowed
+  inside its source
 
 **Verification:** test — `test/service/skill_operations.test.ts`.
 
@@ -368,10 +406,14 @@ is checked (S-001 REQ-018); one that fails is refused `invalid_input`, and a dup
 
 A role's `skills` SHALL be a list of skill names. An agent seated with a role SHALL start with that list as its
 enabled set. `skills.enable` and `skills.disable` with a `role` SHALL change that list in the configuration file as
-S-002 REQ-022 states; enabling a name the catalog doesn't hold SHALL be refused `not_found`, and nothing changes. A
+S-002 REQ-022 states; enabling a name the role catalog doesn't hold SHALL be refused `not_found`, and nothing changes. A
 change SHALL apply to agents seated with the role afterwards, and agents already seated keep their own enabled set
 (REQ-006). A name in the file that the catalog doesn't hold SHALL NOT stop startup: it is listed as missing, and the
 agent goes without it.
+
+A shipped role with no `skills` key SHALL get the defaults of the running version (REQ-001), so a later version's new
+default reaches it. Once a team member changes a shipped role's skills, the file holds its full list, which an upgrade
+SHALL NOT change; `roles.restore` SHALL remove the key, bringing the version's defaults back.
 
 #### AC-005.1 — Enable for a role
 
@@ -392,12 +434,17 @@ agent goes without it.
 
 ### REQ-006 — The skills of a running agent
 
-Each agent SHALL have its own enabled set, starting from its role's defaults when it is seated. `skills.enable` and
-`skills.disable` with a `conversation` SHALL change that agent's set, from its next model request, whoever calls them:
-a team member through a way in, or an agent through `bob`. A conversation that is closed, or unknown, SHALL be refused
-`not_found`, and an unknown skill name `not_found`. The set SHALL survive a daemon restart, and SHALL reset to the new
-role's defaults on any seat change (S-001 REQ-004, REQ-006). A workspace's skills SHALL always be enabled and can't be
-disabled; disabling one is refused `invalid_input`.
+Each agent SHALL have its own enabled set, starting from its role's defaults when it is seated. The enabled set is not
+part of the seat: changing it records no seat change. `skills.enable` and `skills.disable` with a `conversation` SHALL
+change that agent's set, from its next model request, whoever calls them: a team member through a way in, or an agent
+through `bob`. Each change SHALL be recorded in the conversation's entries with its actor, the skill and the new set,
+outside the model's context, and published as `skills_changed`. An unknown conversation or skill name SHALL be refused
+`not_found`, and a closed conversation `conflict`, naming it as closed (S-001 REQ-026). A workspace's skills SHALL
+always be enabled; disabling a name the agent's workspace supplies is refused `invalid_input`.
+
+The set SHALL survive a daemon restart, a reset (S-001 REQ-011) and a compaction. It SHALL reset to the new role's
+defaults on any seat change (S-001 REQ-004, REQ-006), in the same durable step as the seat change, so that after a crash
+the conversation never holds the new seat with the old set.
 
 #### AC-006.1 — Enable for a working agent
 
@@ -424,18 +471,47 @@ disabled; disabling one is refused `invalid_input`.
 
 **Verification:** test — `test/service/agent_skills.test.ts`.
 
+#### AC-006.4 — A crash during a handoff
+
+- **Given:** an agent with `code-review` enabled that hands off to `gp`
+- **When:** the daemon is killed with `kill -9` at each point of the handoff and restarted
+- **Then:** the conversation holds either the old seat with `code-review` or `gp`'s seat with `gp`'s defaults, never a
+  mix
+
+**Verification:** test — `test/service/agent_skills_crash.test.ts`.
+
+#### AC-006.5 — Refusals and the record
+
+- **Given:** a closed conversation, an open one in a workspace whose `.pi/skills` holds `lint`, and an unknown id
+- **When:** a team member enables a skill for each, then disables `lint` for the open one
+- **Then:** the closed one is refused `conflict` naming it as closed, the unknown one `not_found`, and disabling `lint`
+  `invalid_input`; the successful enable is in the open conversation's entries with the team member as actor, and a
+  `skills_changed` delta carries it
+
+**Verification:** test — `test/service/agent_skills.test.ts`.
+
 ### REQ-007 — Instruction files and the system prompt
 
 An agent's system prompt SHALL be built, in this order, from the common prompt, its role's instruction file, its
-workspace's context files, and the listing of its enabled skills (REQ-008), with the parts S-001 and S-004 add. Each
-part SHALL be read again before each model request, so that an edit to an instruction file, an enabled-set change or a
-skill folder added or removed reaches every running agent it touches from its next model request.
+workspace's context files, and the listing of its enabled skills (REQ-008), with the parts S-001, S-004 and S-007 add.
+Those added parts, such as the lead's first duty (S-004 REQ-008), the scheduled run notice (S-007 REQ-010), the
+workspace line and the wording of the skill listing, are not instruction files: an edit to `common.md` can't remove
+them. Each instruction file SHALL be read again before each model request, so that an edit to it, an enabled-set change
+or a skill folder added or removed reaches every running agent it touches from its next model request.
 
-`roles.create` and `roles.change` SHALL write the instructions they are given to the role's instruction file in the
-internal folder; `roles.remove` SHALL delete it; `roles.restore` SHALL also restore a shipped role's file (REQ-003). A
-missing common prompt, or a missing shipped role's file, SHALL leave that part out with a diagnostic, and agents carry
-on. A team role whose file is missing or empty SHALL NOT be seated: the seat is refused `invalid_input` naming the file,
-and an agent already seated with it goes without that part, with a diagnostic.
+A team role is defined by its `[roles.<name>]` table. An instruction file with no table is not a role and is not
+listed. `roles.create` SHALL write the instructions it is given to the role's instruction file in the internal folder,
+replacing a file left there without a table. `roles.change` SHALL write new instructions only with the version token
+from `roles.list`, and SHALL refuse `conflict` when the file changed since that token, so a hand edit is never
+overwritten (S-002 REQ-022). `roles.restore` SHALL also restore a shipped role's file (REQ-003). `roles.remove` SHALL be
+refused `conflict`, naming the conversations, while an open conversation has an agent seated with the role, and
+otherwise SHALL delete the file.
+
+A missing common prompt, or a missing shipped role's file, SHALL leave that part out with a diagnostic, and agents carry
+on. A team role whose file is missing or empty SHALL NOT be seated, and the refusal names the file: `conversations.seat`
+is refused `invalid_input`, a handoff or invocation returns an error result to the calling agent, `jobs.create` is
+refused `invalid_input` and creates nothing (S-001 REQ-012), and a schedule fire is skipped with that reason (S-007
+REQ-006). An agent already seated with it goes without that part, with a diagnostic.
 
 #### AC-007.1 — A live edit
 
@@ -451,6 +527,16 @@ and an agent already seated with it goes without that part, with a diagnostic.
 - **When:** a team member creates role `reviewer` with instructions, changes them, then removes the role
 - **Then:** `instructions/roles/reviewer.md` holds the first text, then the second, then is gone, and `config.toml`
   holds no instruction text
+
+**Verification:** test — `test/service/role_operations.test.ts`.
+
+#### AC-007.4 — A hand edit and a seated agent protect the file
+
+- **Given:** team role `reviewer`, read with `roles.list`, then its file edited by hand, and a running agent seated as
+  `reviewer`
+- **When:** a team member calls `roles.change` with new instructions and the old token, then `roles.remove`
+- **Then:** both are refused `conflict`, the change naming the file and the removal naming the conversation, and the
+  file keeps the hand edit
 
 **Verification:** test — `test/service/role_operations.test.ts`.
 
@@ -489,15 +575,25 @@ Frontmatter fields other than `name` and `description` SHALL be ignored.
 
 **Verification:** test — `test/service/skill_tool.test.ts`.
 
+#### AC-008.3 — A real model uses skills
+
+- **Given:** a daemon with a real low-cost model over the service account's pi agent login
+- **When:** `npm run test:live:skills -- --model <provider/id>` asks the front desk how to add a skill search path, then
+  starts a `gp` job asked to enable a search-path skill `lint` for itself through `bob` and use it
+- **Then:** it exits 0; the front desk's transcript shows a `skill` call for `about-the-intern` and an answer naming
+  `bob skills add-path`; the job's transcript shows the `bob skills enable` command and a later `skill` call for `lint`
+
+**Verification:** demonstration — the command above, its output recorded in the task's Work Log.
+
 ### REQ-009 — Listing skills and instructions
 
-`skills.list` SHALL return, for a role or a conversation, every skill in the catalog with its name, description, source
-(internal, a search path, or the workspace), path, whether it is enabled for that role or agent, and for a shipped skill
-whether it is edited; the shadowed copies with their paths; the enabled names the catalog doesn't hold, marked
-missing; and the skills left out, with the reason. For a conversation it SHALL also return the agent's seat.
-`instructions.list` SHALL return the instruction files that build that prompt in REQ-007's order, the workspace's
-parent folders included, each with its kind, path and whether it is shipped, edited or missing. Neither SHALL return
-file text.
+`skills.list` SHALL return, for a role (its role catalog) or a conversation (its agent's catalog), every skill with its
+name, description, source (internal, a search path, or the workspace), path, whether it is enabled for that role or
+agent, and for a shipped skill whether it is edited; the shadowed copies with their paths; the enabled names the catalog
+doesn't hold, marked missing; and the skills left out, with the reason. For a conversation it SHALL also return the
+agent's seat. `instructions.list` SHALL return the instruction files that build that prompt in REQ-007's order, the
+workspace's parent folders included, each with its kind, path and whether it is shipped, edited or missing. Neither
+SHALL return file text.
 
 #### AC-009.1 — An agent's view
 
@@ -512,10 +608,17 @@ file text.
 
 `files.read` SHALL return the text of a skill file or an instruction file with a version token, and `files.write` SHALL
 replace it when the token still matches the file on disk, writing atomically and keeping the file's permissions. A file
-changed since the token was read SHALL be refused `conflict`. Both SHALL accept only a file in the catalog's skills, in
-the internal folder's `instructions`, or a workspace's context file; any other path, a file that isn't UTF-8 text, or a
-file that doesn't exist SHALL be refused. Neither SHALL create or delete a file. An edit SHALL take effect as REQ-007
-states.
+changed since the token was read SHALL be refused `conflict`. Both SHALL accept only these files, symbolic links
+resolved first:
+
+- a file inside a skill folder found in the internal folder, a search path, or a registered workspace's `.pi/skills`
+- a file in the internal folder's `instructions` folder
+- the `AGENTS.md` or `CLAUDE.md` file directly inside a registered workspace; parent folders' files are listed by
+  `instructions.list` but are neither read nor written here, because nobody checks who owns them
+
+Any other path SHALL be refused `invalid_input`, a file that doesn't exist `not_found`, and a file that isn't UTF-8 text
+or is larger than 1 MiB `invalid_input`. Neither SHALL create or delete a file. An edit SHALL take effect as REQ-007
+states, and SHALL be published as `files_changed`.
 
 #### AC-010.1 — A write after a hand edit
 
@@ -535,19 +638,36 @@ states.
 
 ### REQ-011 — Reading an older configuration
 
-When the configuration file gives a role an `instructions` value, the daemon SHALL, at startup, write it to that role's
-instruction file and remove the key from the file. When a role's `skills` holds an absolute path, the daemon SHALL add
-the folder that holds the skill as a search path, if not already one, and replace the path with the skill's name. The
-file SHALL be rewritten once, atomically, before the daemon reports ready, and the role SHALL behave as before. A path
-that holds no valid skill SHALL stop startup with an error naming the role and the path, as an invalid value does.
+S-002 REQ-002 step 1 SHALL accept the two older forms below and check them as before. Right after the internal folder
+is seeded (REQ-002), the daemon SHALL convert them:
+
+- A role's `instructions` value is written to that role's instruction file, and the key is removed. For a shipped role
+  the file then counts as edited, because it holds the team's text.
+- An absolute path in a role's `skills` is replaced by the skill's name, and the skill's own folder is added as a
+  search path, after the existing ones, if not already one. Only that skill joins the catalog, not its siblings.
+
+The file SHALL be rewritten once, atomically, before the daemon reports ready, and the role SHALL get the same
+instructions and skills as before. The daemon SHALL stop startup with an error naming the role and the path, before it
+rewrites anything, when a path holds no valid skill, when two migrated paths give the same skill name, or when a path
+fails REQ-004's check for a search path; the error says that the folder must be accessible only to the service account.
 
 #### AC-011.1 — An instance from S-007's version
 
 - **Given:** a `config.toml` with `[roles.reviewer]` holding `instructions = "..."` and `skills =
-  ["/home/you/skills/code-review"]`
+  ["/home/you/skills/code-review"]`, where `/home/you/skills` also holds `carry-out-a-part` and both folders are `0700`
 - **When:** this version starts
-- **Then:** `instructions/roles/reviewer.md` holds the text, `[skills] paths` holds `/home/you/skills`, the role's
-  `skills` is `["code-review"]`, and a `reviewer` agent's prompt holds the same instructions and skill as before
+- **Then:** `instructions/roles/reviewer.md` holds the text, `[skills] paths` holds `/home/you/skills/code-review`, the
+  role's `skills` is `["code-review"]`, a `reviewer` agent's prompt holds the same instructions and skill as before,
+  and `gp` still uses the internal `carry-out-a-part`
+
+**Verification:** test — `test/service/config_migration.test.ts`.
+
+#### AC-011.2 — A migration that can't keep behaviour stops
+
+- **Given:** in turn, a role skill path whose folder other accounts can read, and two roles whose paths give the same
+  skill name from different folders
+- **When:** this version starts
+- **Then:** startup stops with an error naming the role and the path, and `config.toml` is unchanged
 
 **Verification:** test — `test/service/config_migration.test.ts`.
 
@@ -582,7 +702,8 @@ The web interface SHALL offer a Skills panel for a role, from the Roles page and
 entry's role), and for an agent, from each conversation on a Job page, To do and In progress jobs included. The panel
 SHALL show what `skills.list` returns, with a check box per skill that calls `skills.enable` or `skills.disable`, and
 SHALL open any listed skill file and any instruction file in `instructions.list` to show and edit its text through
-`files.read` and `files.write`. A refused save SHALL show the reason, and a `conflict` SHALL reload the current text. The
+`files.read` and `files.write`. A refused save SHALL show the reason and keep what the team member typed (S-006
+REQ-013); on a `conflict` the page SHALL also offer the current text from disk to load in its place. The
 Roles page SHALL offer the common prompt for editing, the search paths with add and remove, and restore for each
 shipped file. The web interface SHALL NOT create or delete skill folders. The pages SHALL meet S-006's style, words,
 accessibility and browser requirements.
@@ -599,7 +720,8 @@ accessibility and browser requirements.
 
 - **Given:** the common prompt open in the editor
 - **When:** the file is edited by hand, then the team member saves
-- **Then:** the page shows the conflict and reloads the hand-edited text
+- **Then:** the page shows the conflict, keeps the typed text, and loads the hand-edited text when the team member
+  chooses it
 
 **Verification:** test — `test/web/skills_panel.test.ts`.
 
@@ -660,7 +782,7 @@ manual, and a check in `npm run check` SHALL fail when the skill and the manual 
 - **When:** `npm run check` runs
 - **Then:** it fails naming the page
 
-**Verification:** test — the check named in the task plan; inspection of `docs/manual/`.
+**Verification:** test — `test/unit/about_the_intern_skill.test.ts`, run by `npm run check`.
 
 ## Configuration Requirements
 
@@ -668,15 +790,15 @@ manual, and a check in `npm run check` SHALL fail when the skill and the manual 
   - **What:** the folders, besides the internal folder, that skills come from (REQ-004).
   - **Where:** `[skills] paths` in `config.toml`, changeable while the daemon runs (S-002 REQ-022).
   - **Constraints:** absolute, existing folders accessible only to the service account; no duplicates; order is
-    priority.
+    priority, a later path winning over an earlier one (REQ-004).
   - **Missing:** only the internal folder and workspaces. An invalid path in the file stops startup with an error
     naming it.
 - **A role's skills.**
   - **What:** the skill names a role enables by default (REQ-005).
   - **Where:** `skills` in `[roles.<name>]`.
   - **Constraints:** names; an absolute path is read as REQ-011 states.
-  - **Missing:** an empty list for a team role; the shipped defaults for a shipped role (REQ-001). A name the catalog
-    doesn't hold is listed missing and doesn't stop startup.
+  - **Missing:** an empty list for a team role; the running version's defaults for a shipped role (REQ-001, REQ-005). A
+    name the catalog doesn't hold is listed missing and doesn't stop startup.
 - **Instruction files.**
   - **What:** the common prompt and each role's instructions (REQ-007).
   - **Where:** the internal folder (Interfaces).
@@ -704,7 +826,8 @@ manual, and a check in `npm run check` SHALL fail when the skill and the manual 
    (REQ-004, REQ-009, REQ-012).
 5. A team member enables a skill for a running agent from the web and from `bob`, and the next model request lists it
    (REQ-006, REQ-012, REQ-013).
-6. The front desk answers a question from `about-the-intern` through `skill` in the live test (REQ-001, REQ-008).
+6. `npm run test:live:skills` exits 0 with a real model: the front desk answers from `about-the-intern` through
+   `skill`, and a `gp` agent enables a skill for itself through `bob` (AC-008.3; REQ-001, REQ-008, REQ-014).
 7. An instance whose configuration has role instructions and skill paths starts with the same prompts as before
    (REQ-011).
 8. `npm run check` passes with the manual-and-skill check in place (REQ-017).
@@ -720,8 +843,8 @@ manual, and a check in `npm run check` SHALL fail when the skill and the manual 
    commands. Outcome: the command line inspects and changes everything above. Depends on 2.
 4. **Web interface.** The Skills panel, file editing, the Roles page section. Outcome: the same from the browser.
    Depends on 3.
-5. **Shipped skills and documentation.** `about-the-intern`, `bob-command-line`, the manual, the sync check, and a live
-   test. Depends on 3; the manual covers 4.
+5. **Shipped skills and documentation.** `about-the-intern`, `bob-command-line`, the manual, the sync check, and the
+   live test `npm run test:live:skills`. Depends on 3; the manual covers 4.
 
 ## Open Questions
 
