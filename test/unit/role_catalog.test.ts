@@ -439,11 +439,23 @@ describe("createRoleCatalog", () => {
         assert.equal(catalog.seatFor("reviewer").instructions, "Edited on disk.");
     });
 
-    it("refuses a seat for a role whose file is missing, naming the file's path", async () => {
+    for (const [state, damage] of [
+        ["missing", (path: string) => rm(path)],
+        ["empty", (path: string) => writeFile(path, "")],
+        ["only white space", (path: string) => writeFile(path, " \n\t\n")],
+    ] as const) {
+        it(`refuses a seat for a team role whose file is ${state}, naming the file's path`, async () => {
+            await createReviewer();
+            await damage(instructionFile("reviewer"));
+            const error = refusal(() => catalog.seatFor("reviewer"));
+            assert.deepEqual([error.kind, error.role, error.field], ["invalid", "reviewer", "instructions"]);
+            assert.match(error.message, new RegExp(instructionFile("reviewer")));
+        });
+    }
+
+    it("seats a shipped role whose file is missing with no instructions", async () => {
         await rm(instructionFile("bob"));
-        const error = refusal(() => catalog.seatFor("bob"));
-        assert.deepEqual([error.kind, error.role, error.field], ["invalid", "bob", "instructions"]);
-        assert.match(error.message, new RegExp(instructionFile("bob")));
+        assert.equal(catalog.seatFor("bob").instructions, "");
     });
 
     it("names the roles whose own workspace is a path, so the registry refuses to unregister it", async () => {
