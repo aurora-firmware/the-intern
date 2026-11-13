@@ -188,7 +188,7 @@ Feed, on the instance scope (S-002 REQ-014):
 **Contract** (transcript entry): each enabled-set change is stored as an `intern.skills` entry in the conversation,
 read through `conversations.entries` and the conversation feed. It carries the actor, the skill, whether it was enabled
 or disabled, and the new set. It is not part of the model's context. The Job page shows it in the conversation's
-activity, as it shows a seat record (S-006 REQ-005).
+activity (REQ-013).
 
 `conversations.get`, `conversations.list` and the instance feed snapshot return each conversation's enabled set beside
 its seat. A file changed by hand is not announced: pages show it when they next read it, and a save over it is refused
@@ -726,14 +726,15 @@ or both is a usage error.
 
 The web interface SHALL offer a Skills panel for a role, from the Roles page and from a Schedules page entry (the
 entry's role, or `bob` when the entry names none, S-001 REQ-012), and for an agent, from each conversation on a Job
-page, To do and In progress jobs included. The panel
-SHALL show what `skills.list` returns, with a check box per skill that calls `skills.enable` or `skills.disable`, and
-SHALL open any listed skill file and any instruction file in `instructions.list` to show and edit its text through
-`files.read` and `files.write`. A refused save SHALL show the reason and keep what the team member typed (S-006
-REQ-013); on a `conflict` the page SHALL also offer the current text from disk to load in its place. The
-Roles page SHALL offer the common prompt for editing, the search paths with add and remove, and restore for each
-shipped file. The web interface SHALL NOT create or delete skill folders. The pages SHALL meet S-006's style, words,
-accessibility and browser requirements.
+page, To do and In progress jobs included. The panel SHALL show what `skills.list` returns, with a check box per skill
+that calls `skills.enable` or `skills.disable`, and SHALL open any listed skill file and any instruction file in
+`instructions.list` to show and edit its text through `files.read` and `files.write`. A refused save SHALL show the
+reason and keep what the team member typed (S-006 REQ-013); on a `conflict` the page SHALL also offer the current text
+from disk to load in its place. The Roles page SHALL offer the common prompt for editing, the search paths with add and
+remove, and restore for each shipped file. The Job page SHALL show each `intern.skills` entry in the conversation's
+activity, in order with its other entries, with its actor, the skill and whether it was enabled or disabled. The web
+interface SHALL NOT create or delete skill folders. The pages SHALL meet S-006's style, words, accessibility and browser
+requirements.
 
 #### AC-013.1 — Switch a skill for a working agent
 
@@ -749,6 +750,15 @@ accessibility and browser requirements.
 - **When:** the file is edited by hand, then the team member saves
 - **Then:** the page shows the conflict, keeps the typed text, and loads the hand-edited text when the team member
   chooses it
+
+**Verification:** test — `test/web/skills_panel.test.ts`.
+
+#### AC-013.3 — A skill change in the activity
+
+- **Given:** a Job page open on job W-12
+- **When:** a team member enables `code-review` for its lead through `bob skills enable`
+- **Then:** the lead conversation's activity shows the change at once, naming the team member, `code-review` and
+  enabled
 
 **Verification:** test — `test/web/skills_panel.test.ts`.
 
