@@ -11,7 +11,7 @@ import {
     SHIPPED_ROLE_NAMES,
 } from "../../src/roles/shipped_roles.ts";
 
-const shippedFolder = fileURLToPath(new URL("../../src/roles/shipped/", import.meta.url));
+const shippedFolder = fileURLToPath(new URL("../../src/shipped/", import.meta.url));
 
 describe("loadShippedRoles", () => {
     it("returns exactly bob, gp and desk, each valid with non-empty instructions", async () => {
@@ -26,7 +26,7 @@ describe("loadShippedRoles", () => {
     it("reads each role's instructions from its file in the package", async () => {
         const roles = await loadShippedRoles();
         for (const role of roles) {
-            const text = await readFile(join(shippedFolder, `${role.name}.md`), "utf8");
+            const text = await readFile(join(shippedFolder, "instructions", "roles", `${role.name}.md`), "utf8");
             assert.equal(role.instructions, text);
         }
     });
@@ -59,7 +59,7 @@ describe("loadPreamble", () => {
     it("returns the non-empty text of the shipped preamble", async () => {
         const preamble = await loadPreamble();
         assert.notEqual(preamble.trim(), "");
-        assert.equal(preamble, await readFile(join(shippedFolder, "preamble.md"), "utf8"));
+        assert.equal(preamble, await readFile(join(shippedFolder, "instructions", "common.md"), "utf8"));
     });
 });
 

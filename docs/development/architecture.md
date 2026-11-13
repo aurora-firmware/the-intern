@@ -789,7 +789,7 @@ The trigger origin and the letter `T` leave these places. The letter lists don't
 - `Origin` in `src/host/seating.ts`
 - the reserved groups in `src/cli/command_line.ts`; `schedules` leaves that list later, in the change that adds
   `bob schedules` (`docs/development/coding_guidelines.md`, Command line)
-- `src/roles/shipped/bob.md` and `web/ui/components/job_record.ts`
+- `src/shipped/instructions/roles/bob.md` and `web/ui/components/job_record.ts`
 
 `sourceOrigin` then refuses anything but a schedule origin, so a trigger origin is `invalid_input` and uses no number
 (AC-014.2). A short number such as `T-1` then reads as an ID and names no job.
