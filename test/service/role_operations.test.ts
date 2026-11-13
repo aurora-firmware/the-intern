@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { type FauxProviderRegistration, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/compat";
+import { createProvider } from "@earendil-works/pi-ai/models";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
-import { type DaemonComponent, type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
+import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
+import { abortJobConversations } from "../../src/host/invocation.ts";
+import { createSeatedConversation, readConversationMeta } from "../../src/host/seating.ts";
 import { ServiceError } from "../../src/service/operations.ts";
 import { roleInstructionPath } from "../../src/skills/internal_folder.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
@@ -15,9 +20,11 @@ const quietLogger = createLogger({ stream: { write: () => true } });
 
 const envs: HermeticEnv[] = [];
 const daemons: RunningDaemon[] = [];
+const fakes: FauxProviderRegistration[] = [];
 
 afterEach(async () => {
     for (const daemon of daemons.splice(0)) await daemon.stop();
+    for (const fake of fakes.splice(0)) fake.unregister();
     for (const env of envs.splice(0)) await env.dispose();
 });
 
@@ -36,15 +43,29 @@ type Started = {
     invoke(name: string, input: unknown): Promise<unknown>;
     roles(): Promise<Role[]>;
     announced: FileAnnouncement[];
+    ctx(): ServiceContext;
+    seatConversation(role: string, jobId: string): Promise<string>;
 };
 
 async function start(env: HermeticEnv): Promise<Started> {
+    const fake = registerFauxProvider({ models: [{ id: "model-one", reasoning: true }] });
+    fakes.push(fake);
+    fake.setResponses([() => fauxAssistantMessage("ok")]);
+    const provider = fake.getModel().provider;
+    await writeFile(
+        join(env.piAgentDir, "settings.json"),
+        JSON.stringify({ defaultProvider: provider, defaultModel: "model-one" }),
+    );
     const agents = await createAgentsComponent({ logger: quietLogger });
     const announced: FileAnnouncement[] = [];
+    let captured: ServiceContext | undefined;
     const listener: DaemonComponent = {
         name: "file-change-listener",
         async checkModels(ctx) {
             ctx.fileChanges.onChange((change) => announced.push(change));
+        },
+        async start(ctx) {
+            captured = ctx;
         },
     };
     const daemon = runDaemon({
@@ -55,6 +76,19 @@ async function start(env: HermeticEnv): Promise<Started> {
         sections: agents.sections,
         components: [agents.component, listener],
         operations: agents.operations,
+        prepareModels: (runtime) => {
+            const implementation = getApiProvider(fake.api);
+            if (!implementation) throw new Error("the fake model's api is not registered");
+            runtime.models.registerNativeProvider(
+                createProvider({
+                    id: provider,
+                    auth: { apiKey: { name: "Fake", resolve: async () => ({ auth: {} }) } },
+                    models: fake.models,
+                    api: { stream: implementation.stream, streamSimple: implementation.streamSimple },
+                }),
+            );
+            return runtime.models;
+        },
     });
     daemons.push(daemon);
     const deadline = Date.now() + WAIT_TIMEOUT_MS;
@@ -63,11 +97,28 @@ async function start(env: HermeticEnv): Promise<Started> {
         await new Promise((resolve) => setTimeout(resolve, 10));
     }
     const invoke = (name: string, input: unknown) => daemon.catalogue.invoke(name, input, caller);
+    let conversationCount = 0;
+    const ctx = () => {
+        if (captured === undefined) throw new Error("the daemon has not started");
+        return captured;
+    };
     return {
         agents,
         daemon,
         invoke,
         announced,
+        ctx,
+        async seatConversation(role, jobId) {
+            conversationCount += 1;
+            const { conversationId } = await createSeatedConversation(ctx().host, {
+                scope: "role-operations",
+                key: `conversation-${conversationCount}`,
+                job: { jobId, isLead: true, origin: { kind: "request", wayIn: "cli" }, depth: 0 },
+                seat: agents.runtime().catalog.seatFor(role),
+                actor: { kind: "team_member", wayIn: "cli" },
+            });
+            return conversationId;
+        },
         roles: async () => ((await invoke("roles.list", {})) as { roles: Role[] }).roles,
     };
 }
@@ -399,5 +450,68 @@ describe("the role operations", () => {
         await invoke("roles.restore", { name: "gp" });
 
         assert.deepEqual(announced, [{ path: roleInstructionPath(env.dataDir, "gp"), kind: "role" }]);
+    });
+
+    it("refuses conflict naming the conversation and keeps the role and its file while an open conversation is seated with it", async () => {
+        const env = await hermetic();
+        const { invoke, roles, seatConversation } = await start(env);
+        await invoke("roles.create", reviewer);
+        const conversationId = await seatConversation("reviewer", "job-1");
+
+        const error = await refusal(invoke("roles.remove", { name: "reviewer" }));
+
+        assert.equal(error.code, "conflict");
+        assert.match(error.message, /reviewer/);
+        assert.ok(error.message.includes(conversationId));
+        assert.ok((await roles()).some((role) => role.name === "reviewer"));
+        assert.equal(await readFile(instructionFile(env), "utf8"), "Review the work.");
+    });
+
+    it("removes the role and deletes its file when the only conversations seated with it are closed", async () => {
+        const env = await hermetic();
+        const { invoke, roles, seatConversation, ctx } = await start(env);
+        await invoke("roles.create", reviewer);
+        await seatConversation("reviewer", "job-1");
+        await abortJobConversations(ctx().host, "job-1");
+
+        await invoke("roles.remove", { name: "reviewer" });
+
+        assert.ok(!(await roles()).some((role) => role.name === "reviewer"));
+        await assert.rejects(readFile(instructionFile(env), "utf8"), { code: "ENOENT" });
+    });
+
+    it("removes the role when an open conversation is seated with another role", async () => {
+        const env = await hermetic();
+        const { invoke, roles, seatConversation } = await start(env);
+        await invoke("roles.create", reviewer);
+        await seatConversation("gp", "job-1");
+
+        await invoke("roles.remove", { name: "reviewer" });
+
+        assert.ok(!(await roles()).some((role) => role.name === "reviewer"));
+    });
+
+    it("leaves the seated agent's tools, model, thinking level and workspace unchanged when its role is changed", async () => {
+        const env = await hermetic();
+        const { agents, invoke, seatConversation, ctx } = await start(env);
+        await invoke("roles.create", reviewer);
+        const conversationId = await seatConversation("reviewer", "job-1");
+        const folder = join(env.root, "other-workspace");
+        await mkdir(folder, { mode: 0o700 });
+        await chmod(folder, 0o700);
+        await agents.runtime().workspaces.register(folder);
+        const before = (await readConversationMeta(ctx().host, conversationId))?.seat;
+
+        await invoke("roles.change", {
+            name: "reviewer",
+            tools: ["bash"],
+            model: `${before?.model}`,
+            thinkingLevel: "low",
+            workspace: folder,
+        });
+
+        const after = (await readConversationMeta(ctx().host, conversationId))?.seat;
+        assert.deepEqual(after, before);
+        assert.notEqual(before?.thinkingLevel, "low");
     });
 });
