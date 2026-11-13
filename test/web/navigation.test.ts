@@ -41,7 +41,6 @@ async function startRig(): Promise<{ port: number; job: Job }> {
 }
 
 const hashOf = (page: Page) => new URL(page.url()).hash;
-const heading = (page: Page) => page.locator("main h2.page-heading").textContent();
 const jobTitle = (page: Page) => page.locator("main .job-field[data-field='title'] .job-value");
 
 const waitForHeading = (page: Page, text: string) =>
