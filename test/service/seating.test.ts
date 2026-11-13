@@ -151,6 +151,7 @@ describe("createSeatedConversation", () => {
             parked: null,
             held: [],
             aborted: false,
+            enabledSkills: [...seat.skills],
         });
         assert.deepEqual(await seatRecordsOf(host, conversationId), [
             {
