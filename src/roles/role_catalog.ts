@@ -29,11 +29,14 @@ export type RoleReferenceSource = { name: string; referrersOf(role: string): str
 
 export type InstructionText = { instructions: string };
 
+/** The instructions of a change, with the version token of the file they replace when the caller guards it. */
+export type InstructionChange = Partial<InstructionText> & { instructionsVersion?: string };
+
 export type RoleCatalog = {
     list(): CatalogRole[];
     get(name: string): CatalogRole | undefined;
     create(role: RoleDefinition, text: InstructionText): Promise<CatalogRole>;
-    change(name: string, change: RoleChange, text?: Partial<InstructionText>): Promise<CatalogRole>;
+    change(name: string, change: RoleChange, text?: InstructionChange): Promise<CatalogRole>;
     restore(name: string): Promise<CatalogRole>;
     remove(name: string): Promise<void>;
     addReferenceSource(source: RoleReferenceSource): void;
@@ -168,9 +171,11 @@ export function createRoleCatalog(options: RoleCatalogOptions): RoleCatalog {
         }
     };
 
-    const writeInstructions = async (role: string, instructions: string | undefined): Promise<void> => {
-        if (instructions !== undefined)
-            await fileStore.write(instructionPath(role), instructions, { announce: "role" });
+    // A token makes the write refuse, inside the file store's queue, a file changed since the token was read.
+    const writeInstructions = async (role: string, instructions: string | undefined, version?: string) => {
+        if (instructions === undefined) return;
+        const options = version === undefined ? { announce: "role" as const } : { announce: "role" as const, version };
+        await fileStore.write(instructionPath(role), instructions, options);
     };
 
     const readInstructions = (role: string): string => {
@@ -214,12 +219,12 @@ export function createRoleCatalog(options: RoleCatalogOptions): RoleCatalog {
                 teamRoles: { ...current().teamRoles, [role.name]: definition },
             });
         },
-        async change(name, change, { instructions } = {}) {
+        async change(name, change, { instructions, instructionsVersion } = {}) {
             const role = requireRole(name);
             const { shipped: _shipped, changed: _changed, ...definition } = role;
             checkDefinition(applyRoleChange(definition, change));
             checkInstructions(name, instructions);
-            await writeInstructions(name, instructions);
+            await writeInstructions(name, instructions, instructionsVersion);
             if (role.shipped) {
                 if (Object.keys(change).length === 0) return role;
                 const merged = { ...current().shippedChanges[name], ...change };

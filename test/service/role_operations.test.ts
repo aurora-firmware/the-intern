@@ -3,7 +3,7 @@ import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
-import { type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
+import { type DaemonComponent, type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { ServiceError } from "../../src/service/operations.ts";
 import { roleInstructionPath } from "../../src/skills/internal_folder.ts";
@@ -21,23 +21,39 @@ afterEach(async () => {
     for (const env of envs.splice(0)) await env.dispose();
 });
 
-type Role = { name: string; instructions: string; changed: boolean; shipped: boolean };
+type Role = {
+    name: string;
+    instructions?: string;
+    instructionsVersion?: string;
+    instructionsMissing?: boolean;
+    changed: boolean;
+    shipped: boolean;
+};
+type FileAnnouncement = { path: string; kind: string };
 type Started = {
     agents: Awaited<ReturnType<typeof createAgentsComponent>>;
     daemon: RunningDaemon;
     invoke(name: string, input: unknown): Promise<unknown>;
     roles(): Promise<Role[]>;
+    announced: FileAnnouncement[];
 };
 
 async function start(env: HermeticEnv): Promise<Started> {
     const agents = await createAgentsComponent({ logger: quietLogger });
+    const announced: FileAnnouncement[] = [];
+    const listener: DaemonComponent = {
+        name: "file-change-listener",
+        async checkModels(ctx) {
+            ctx.fileChanges.onChange((change) => announced.push(change));
+        },
+    };
     const daemon = runDaemon({
         flags: { configDir: env.configDir, stateDir: env.stateDir, dataDir: env.dataDir, runtimeDir: env.runtimeDir },
         env: env.env,
         homeDir: env.root,
         logger: quietLogger,
         sections: agents.sections,
-        components: [agents.component],
+        components: [agents.component, listener],
         operations: agents.operations,
     });
     daemons.push(daemon);
@@ -47,7 +63,13 @@ async function start(env: HermeticEnv): Promise<Started> {
         await new Promise((resolve) => setTimeout(resolve, 10));
     }
     const invoke = (name: string, input: unknown) => daemon.catalogue.invoke(name, input, caller);
-    return { agents, daemon, invoke, roles: async () => ((await invoke("roles.list", {})) as { roles: Role[] }).roles };
+    return {
+        agents,
+        daemon,
+        invoke,
+        announced,
+        roles: async () => ((await invoke("roles.list", {})) as { roles: Role[] }).roles,
+    };
 }
 
 async function hermetic(): Promise<HermeticEnv> {
@@ -136,8 +158,11 @@ describe("the role operations", () => {
 
         const result = await invoke("roles.create", { ...reviewer, idempotencyKey: "k1" });
 
-        assert.deepEqual(result, { role: { ...written, instructions } });
-        assert.equal((await roles()).filter((role) => role.name === "reviewer").length, 1);
+        const listed = (await roles()).filter((role) => role.name === "reviewer");
+        assert.deepEqual(result, {
+            role: { ...written, instructions, instructionsVersion: listed[0]?.instructionsVersion },
+        });
+        assert.equal(listed.length, 1);
     });
 
     it("still refuses a key with a different definition for an existing name as a conflict", async () => {
@@ -284,5 +309,84 @@ describe("the role operations", () => {
         assert.equal(error.code, "internal");
         assert.ok(error.message.includes(configFile(env)));
         assert.ok(!(await roles()).some((role) => role.name === "reviewer"));
+    });
+
+    it("guards a role's instructions with the token roles.list returned", async () => {
+        const env = await hermetic();
+        const { invoke, roles } = await start(env);
+        await invoke("roles.create", reviewer);
+        const token = (await roles()).find((role) => role.name === "reviewer")?.instructionsVersion;
+        assert.equal(typeof token, "string");
+
+        await invoke("roles.change", { name: "reviewer", instructions: "Review hard.", instructionsVersion: token });
+        assert.equal(await readFile(instructionFile(env), "utf8"), "Review hard.");
+        assert.doesNotMatch(await fileText(env), /Review hard/);
+
+        await invoke("roles.remove", { name: "reviewer" });
+        await assert.rejects(readFile(instructionFile(env), "utf8"), { code: "ENOENT" });
+    });
+
+    it("refuses conflict naming the file and keeps a hand edit when the token is old", async () => {
+        const env = await hermetic();
+        const { invoke, roles } = await start(env);
+        await invoke("roles.create", reviewer);
+        const token = (await roles()).find((role) => role.name === "reviewer")?.instructionsVersion;
+        await writeFile(instructionFile(env), "Edited by hand.");
+
+        const error = await refusal(
+            invoke("roles.change", { name: "reviewer", instructions: "Review hard.", instructionsVersion: token }),
+        );
+
+        assert.equal(error.code, "conflict");
+        assert.ok(error.message.includes(instructionFile(env)));
+        assert.equal(await readFile(instructionFile(env), "utf8"), "Edited by hand.");
+    });
+
+    it("changes nothing in the table when the token is old", async () => {
+        const env = await hermetic();
+        const { invoke, roles } = await start(env);
+        await invoke("roles.create", reviewer);
+        const token = (await roles()).find((role) => role.name === "reviewer")?.instructionsVersion;
+        await writeFile(instructionFile(env), "Edited by hand.");
+        const before = await fileText(env);
+
+        await refusal(
+            invoke("roles.change", {
+                name: "reviewer",
+                instructions: "Review hard.",
+                tools: ["bash"],
+                instructionsVersion: token,
+            }),
+        );
+
+        assert.equal(await fileText(env), before);
+    });
+
+    it("lists a team role whose file is missing with no instructions and marked missing", async () => {
+        const env = await hermetic();
+        const { invoke, roles } = await start(env);
+        await invoke("roles.create", reviewer);
+        await rm(instructionFile(env));
+
+        const listed = (await roles()).find((role) => role.name === "reviewer");
+
+        assert.equal(listed?.instructionsMissing, true);
+        assert.equal("instructions" in (listed ?? {}), false);
+        assert.equal("instructionsVersion" in (listed ?? {}), false);
+    });
+
+    it("announces files_changed with kind role for each file a role operation writes or removes", async () => {
+        const env = await hermetic();
+        const { invoke, announced } = await start(env);
+
+        await invoke("roles.create", reviewer);
+        await invoke("roles.change", { name: "reviewer", instructions: "Review hard." });
+        await invoke("roles.remove", { name: "reviewer" });
+
+        const expected = { path: instructionFile(env), kind: "role" };
+        assert.deepEqual(
+            announced.filter((change) => change.path === expected.path),
+            [expected, expected, expected],
+        );
     });
 });
