@@ -178,14 +178,21 @@ export function createRoleCatalog(options: RoleCatalogOptions): RoleCatalog {
         await fileStore.write(instructionPath(role), instructions, options);
     };
 
-    const readInstructions = (role: string): string => {
-        const path = instructionPath(role);
+    // A shipped role's file that is gone leaves its part out of the prompt; a team role's is refused, naming the file.
+    const readInstructions = (role: CatalogRole): string => {
+        const path = instructionPath(role.name);
+        let text: string;
         try {
-            return readFileSync(path, "utf8");
+            text = readFileSync(path, "utf8");
         } catch (error) {
+            if (role.shipped && (error as NodeJS.ErrnoException).code === "ENOENT") return "";
             const reason = `the instruction file ${path} can't be read: ${(error as Error).message}`;
-            throw new RoleRefusedError("invalid", role, reason, "instructions");
+            throw new RoleRefusedError("invalid", role.name, reason, "instructions");
         }
+        if (!role.shipped && text.trim() === "") {
+            throw new RoleRefusedError("invalid", role.name, `the instruction file ${path} is empty`, "instructions");
+        }
+        return text;
     };
 
     // A file already gone is the state a removal wants; any other failure stays.
@@ -269,9 +276,10 @@ export function createRoleCatalog(options: RoleCatalogOptions): RoleCatalog {
             referenceSources.push(source);
         },
         seatFor(name, overrides = {}, place = "job") {
-            const { shipped: _shipped, changed: _changed, ...definition } = requireRole(name);
+            const found = requireRole(name);
+            const { shipped: _shipped, changed: _changed, ...definition } = found;
             checkDefinition(definition);
-            const role: SeatRole = { ...definition, instructions: readInstructions(name) };
+            const role: SeatRole = { ...definition, instructions: readInstructions(found) };
             const defaults = models.defaultChoice();
             checkChoices(name, {
                 model: overrides.model ?? role.model,
