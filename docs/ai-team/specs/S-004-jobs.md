@@ -1,7 +1,7 @@
 ---
 id: S-004
 title: Jobs
-version: '0.16'
+version: '0.17'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-02'
 author: planner
@@ -903,7 +903,8 @@ publish one "related changed" delta with both short numbers, and one that change
 the given absolute path while the daemon keeps working, and refuse a relative path or an existing file with
 `invalid_input`. It refuses `busy` when the database stays in a transaction. Work in progress SHALL go on during the
 export. The copy SHALL be created owner-only (S-002 REQ-006; ADR-002 decision 6). It holds the database only; the
-configuration file (roles, registered workspaces, `[network]`, schedule entries) isn't in it.
+configuration file (roles, registered workspaces, `[network]`, schedule entries, `[skills]`) and the internal folder of
+instruction files and shipped skills (S-008 REQ-002) aren't in it.
 
 #### AC-016.1 — A copy while working
 
@@ -1227,3 +1228,4 @@ None.
 | 2026-11-07 | spec-truth reconciliation — PASS | v0.14 confirmed for REQ-008 and AC-008.8 against T-271, and the stop mark's crash window against T-275; read limited to S-006's findings and 75c7c946..0604b54f | none |
 | 2026-11-07 | v0.15. Triggers leave the job sources: the origin letter `T` and the trigger origin are gone (Definitions, Interfaces, REQ-002, REQ-003, REQ-015). `jobs.create` and REQ-003: a schedule's origin also records a run on demand and its way in. `jobs.list` gains a filter by schedule entry (S-007 REQ-009). Purpose, Users, Exclusions, Workflow and Assumptions: triggers leave the wording. REQ-013, new AC-013.2 and the job tools table: read job may name another job, read-only, and read schedule runs is added. REQ-014: the schedule entry filter. REQ-002, REQ-007 and REQ-021: a run on demand has the letter `S`, and a schedule entry can name overrides. REQ-016: schedule entries aren't in the export. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
 | 2026-11-13 | v0.16. No behaviour changes. Assumptions, Other specs: S-007's schedules state their entry and fire time, and only Email is still to come, with tests and the live checks standing in for it. No identifier is added, changed or retired. | Cross-spec amendment carried by S-007 v0.4, after the S-007 spec-truth reconciliation of 2026-11-12: S-007 is built, so "until those specs are built" no longer held for schedules. Approved by the product owner at Gate 1 with S-007 v0.4, 2026-11-13. | None; spec text only |
+| 2026-11-13 | v0.17. REQ-016: the export also leaves out the internal folder of instruction files and shipped skills and the `[skills]` section of the configuration file, as it leaves out the rest of the configuration file. No identifier added or retired. | S-008 architecture consistency review, finding C3: S-008 adds the internal folder under the data directory. | S-008's tasks |
