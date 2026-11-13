@@ -1,6 +1,6 @@
 ---
 title: Agent roles and conversations
-version: '0.17'
+version: '0.18'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-15'
 author: planner
@@ -28,9 +28,9 @@ members and turns their requests into jobs. Success Criteria lists the observabl
 | the-intern | The product. It runs as a daemon. |
 | bob | The name of the default lead role (REQ-001) and of the CLI. |
 | Team member | Anyone who can reach one of the-intern's ways in (S-000). All team members are equal: each can give jobs, follow and steer work, and configure the-intern. |
-| Role | A set of parameters that an agent is made from: instructions (system prompt), tools and skills, plus default values for the pi-durable agent parameters: model, thinking level and workspace (the pi-durable `cwd`). If a role is a class, an agent is an object of that class. |
+| Role | A set of parameters that an agent is made from: instructions (system prompt, kept in the role's instruction file, S-008 REQ-007), tools and default skills (skill names, S-008 REQ-005), plus default values for the pi-durable agent parameters: model, thinking level and workspace (the pi-durable `cwd`). If a role is a class, an agent is an object of that class. |
 | Agent | The actor that interacts with the model and carries out a conversation. A conversation has one agent at a time and can be a succession of agents: each role change ends the current agent and seats a new one in the same conversation. An agent keeps its role for its whole life. It is not an operating-system process: the daemon runs every agent, and the current agent's configuration is the pi-durable agent of its conversation. |
-| Seat | The place of the current agent in a conversation, with the role, model, thinking level and workspace it runs with: the role's defaults, or overrides given when the agent was seated or invoked. |
+| Seat | The place of the current agent in a conversation, with the role, model, thinking level and workspace it runs with: the role's defaults, or overrides given when the agent was seated or invoked. The agent's enabled set of skills (S-008 REQ-006) is not part of the seat: changing it is not a seat change, and a seat change resets it to the new role's default skills. |
 | Job | The product's unit of work (S-000): it has a description, a definition of done, a status, a Blocked reason while blocked, a resolution with its justification, a worklog, a history and Related jobs (S-004), kept in the job record. The job record and the job's steps belong to the Jobs component and its own spec. This spec defines only how agents and conversations work on a job. |
 | Lead conversation, lead agent | Each job has one lead conversation. Its current agent is the job's lead agent, which carries the job from definition to verification and is the only agent that completes it (S-004 REQ-005). A handoff in the lead conversation passes the lead to the new agent, so a job has exactly one lead at a time. |
 | Specialist agent | An agent invoked for a part of a job. It works in its own conversation, finishes its part and reports back. It never completes the job. |
@@ -66,8 +66,8 @@ models, login, settings, skills and context files. Where a term exists in both, 
 | Root conversation | None | Conversation 1, created by the host's first `root()` call. Not a parent of other conversations. | Not used by the-intern. Every conversation belongs to a job, except the front desk (REQ-021), which is not a root conversation either. |
 | Turn, run | A turn is one assistant message and its tool calls; a prompt runs until the agent ends | A turn is one model response and its tool calls; a run is the turns from an input to its final answer | Model turn and agent run, as defined above. |
 | Task | Not a pi agent concept | A durable state machine: generation, tool call, compaction | Only the pi-durable meaning. The work the-intern does is a job. |
-| Extension | A module pi agent loads from its agent folder, a trusted project's `.pi/extensions` or a flag | Tools, prompt sections and hooks that the host installs in its registry | Only the-intern's own pi-durable extensions. pi agent extensions are not loaded, neither the account's nor a workspace's, so an agent is offered exactly its role's tools (REQ-005). |
-| Skills | Loaded from pi agent's agent folder, `~/.agents/skills` and trusted project folders. The prompt lists name and description, and the model reads the file when needed. | No skill loading of its own | The role's skills plus the workspace skills, listed the same way as in pi agent. The account's own pi agent skills are not loaded. |
+| Extension | A module pi agent loads from its agent folder, a trusted project's `.pi/extensions` or a flag | Tools, prompt sections and hooks that the host installs in its registry | Only the-intern's own pi-durable extensions. pi agent extensions are not loaded, neither the account's nor a workspace's, so an agent is offered exactly the tools REQ-005 names. |
+| Skills | Loaded from pi agent's agent folder, `~/.agents/skills` and trusted project folders. The prompt lists name and description, and the model reads the file when needed. | No skill loading of its own | The agent's enabled skills, which start as its role's default skill names resolved through the skill catalog, plus its workspace's skills. The prompt lists them by name and description, and the agent loads them with the `skill` tool (S-008 REQ-004 to REQ-008). The account's own pi agent skill folders are not loaded unless the team adds them as skill search paths (S-008 REQ-004). |
 | Context files | `AGENTS.md`/`CLAUDE.md` from pi agent's agent folder, the cwd and its parent directories | None; the host supplies prompt sections | Those of the workspace and its parent directories. |
 | cwd | The working directory of the `pi` process | The `cwd` of the pi-durable agent | The seat's workspace. |
 | New, fork, reset | `/new` starts a new pi agent session file; `/fork` copies one | A reset entry clears the model's context inside the same conversation; creating a conversation starts an empty one; a fork copies entries up to a point | A Clean handoff and a reset stay in the same conversation. Only job sources, agent invocations and the creation of the front desk (REQ-021) create conversations. A Full-context invocation may be built on a pi-durable fork. |
@@ -134,9 +134,9 @@ What this specification explicitly does NOT cover:
   Team members also follow, answer and steer jobs directly through the command line, the web interface and email.
 - **Email to the front desk.** Mail doesn't reach the front desk; the Email spec sorts mail into jobs and answers.
 - **Work in the front desk.** The front desk invokes no agents, hands off to no role, edits no files itself and is
-  offered no workspace tools (REQ-022); its schedule tools act as the operations do. Real work always becomes a job. A
-  team member who reseats the front desk with a role
-  whose tool set names more tools makes that choice; the front desk can't make it itself.
+  offered no workspace tools (REQ-022); its schedule tools act as the operations do, and its `skill` tool only reads
+  its enabled skills (S-008 REQ-008). Real work always becomes a job. A team member who reseats the front desk with a
+  role whose tool set names more tools makes that choice; the front desk can't make it itself.
 - **A job record for the front desk.** The front desk is never on the board, has no definition of done, and the Jobs
   spec's turn-end rule, actions and repair rules don't apply to it (REQ-025).
 - **How the front desk is presented.** `bob chat` belongs to the command-line spec, and the web chat to the Web
@@ -164,8 +164,9 @@ What this specification explicitly does NOT cover:
   them, because an invoked agent is a peer that its invoker doesn't own. Whether invocation is built on pi-durable
   task-owned conversations is an implementation choice.
 - **Loading pi agent extensions and the account's skills.** Rejected: neither the account's nor a workspace's pi agent
-  extensions are loaded, nor the account's own pi agent skills, so an agent is offered exactly its role's tools and
-  skills plus the workspace's (REQ-005).
+  extensions are loaded, nor the account's own pi agent skill folders unless the team adds them as skill search paths
+  (S-008 REQ-004), so an agent is offered exactly the tools REQ-005 names, and its enabled skills plus the
+  workspace's.
 
 ## Interfaces
 
@@ -185,6 +186,9 @@ front-desk tools instead (REQ-022).
 | `handoff` | `role`; optional `model`, `thinkingLevel`, `workspace`; `contextMode` (`full`, `compact`, `clean`); `note` (required for `compact` and `clean`) | The handing-off agent's work ends; an error result leaves the seat unchanged (REQ-006) |
 | `invoke` | `agents`: one or more of { `role`; optional `model`, `thinkingLevel`, `workspace`; `contextMode`; `jobPrompt` }; `then` (`steerable`, `parked`) | The invoked conversation ids when steerable; the run ends when parked; an error result for a refused invocation, and the run continues (REQ-008, REQ-009) |
 | `steer` | `conversationId`; `message`; `mode` (`steer`, `followUp`) | The message is injected or queued; an error result for an unknown conversation (REQ-020) |
+
+Every agent, in a job's conversation or in the front desk, is also offered the `skill` tool, whatever its role's tool
+set names (S-008 REQ-008, which owns its contract).
 
 The tools the-intern ships for a role's tool set are `read`, `write`, `edit` and `bash`; a tool set naming anything
 else is refused (REQ-003).
@@ -239,7 +243,10 @@ Each assistant entry is returned with the seat that produced it (REQ-007).
 ### Consumed
 
 - The configuration file's `[roles.<name>]` and `[workspaces]` tables, through S-002's configuration loading (S-002
-  REQ-021, REQ-022). The keys are documented in the user manual (`docs/manual/roles_and_agents.md`).
+  REQ-021, REQ-022). The keys are documented in the user manual (`docs/manual/roles_and_agents.md`). A role table
+  holds no instruction text and names its default skills by name (S-008 REQ-005, REQ-011).
+- The common prompt and each role's instruction file in the internal folder, the skill catalog, each agent's enabled
+  set and the `skill` tool, from S-008 (S-008 REQ-002, REQ-004 to REQ-008).
 - The pi agent login, model registry and default model and thinking level of the account the-intern runs as (S-002
   REQ-018).
 - A workspace's `AGENTS.md`/`CLAUDE.md` files, from the workspace and its parent directories, and its skills.
@@ -254,7 +261,8 @@ Job source: request, schedule fire or follow-up (role named, default bob)       
   ↓
 Schedule fire skipped or refused? → S-007; stop
   ↓
-Unknown role or unresolvable override? → refused, nothing created                           REQ-012
+Unknown role, unresolvable override or team role with no instruction file?               REQ-012,
+  → refused, nothing created                                                                S-008 REQ-007
   ↓
 Jobs creates the job → the daemon starts its lead conversation, origin = job source         REQ-012
   ↓
@@ -332,8 +340,8 @@ the transcript.
 
 The-intern SHALL ship three roles, `bob`, `gp` and `desk`, and `bob` SHALL be the default lead role. `desk` is the
 role the front desk is created with (REQ-021). Every role, shipped or created by a team member, MUST have a name,
-instructions, a tool set (possibly empty), a skill set (possibly empty), a default model, a default thinking level and
-a default workspace.
+instructions, a tool set (possibly empty), default skills (possibly none, S-008 REQ-005), a default model, a default
+thinking level and a default workspace.
 
 #### AC-001.1 — The shipped roles are bob, gp and desk
 
@@ -360,35 +368,41 @@ The shipped roles' instructions MUST satisfy these descriptions:
   it, to report the new job's short number, to set up and run schedules when a team member asks, and to pass answers and
   steering to a job's conversations when a team
   member asks. Its tool set names none of the tools the-intern ships, so in the front desk it is offered only the
-  front-desk tools (REQ-022).
+  front-desk tools and `skill` (REQ-022; S-008 REQ-008).
 
-The shipped text of the instructions, the tool lists and `gp`'s skill content are set during implementation and may
-change in later versions without amending this spec.
+The shipped text of the instructions, the tool lists and the shipped skills' content are set during implementation and
+may change in later versions without amending this spec. S-008 REQ-001 names the shipped skills and the roles that
+enable each by default.
 
 #### AC-002.1 — The shipped instructions match the descriptions
 
-- **Given:** the shipped `bob`, `gp` and `desk` instruction files and `gp`'s skill
+- **Given:** the shipped `bob`, `gp` and `desk` instruction files and the `carry-out-a-part` skill
 - **When:** a reviewer reads them against this requirement
-- **Then:** `bob`'s text covers defining, asking, doing, delegating and verifying; `gp`'s text and skill cover
-  carrying out a part to completion and reporting back; and `desk`'s text covers answering about the work, turning
-  requests for work into jobs with their number, setting up and running schedules, and passing answers and steering on
+- **Then:** `bob`'s text covers defining, asking, doing, delegating and verifying; `gp`'s text and `carry-out-a-part`
+  cover carrying out a part to completion and reporting back; and `desk`'s text covers answering about the work,
+  turning requests for work into jobs with their number, setting up and running schedules, and passing answers and
+  steering on
 
-**Verification:** inspection — the shipped role files under `src/roles/shipped/`; `test/unit/shipped_roles.test.ts`
-checks
-that `gp` has its skill folder, `bob` none and `desk` none, and that `desk`'s tool set is empty.
+**Verification:** inspection — the shipped instruction files and skills as the package carries them (S-008 REQ-001);
+`test/unit/shipped_roles.test.ts` checks that each shipped role's default skills are those S-008 REQ-001 names
+(`bob`: `about-the-intern` and `bob-command-line`; `gp`: `carry-out-a-part` and `bob-command-line`; `desk`:
+`about-the-intern`), and that `desk`'s tool set is empty.
 
 ### REQ-003 — Role settings
 
 The-intern SHALL let a team member, in its configuration or while the daemon runs (S-002 REQ-022):
 
-- **create** a role with a name, instructions, a tool set chosen from the tools the-intern ships, skills, and
+- **create** a role with a name, instructions, a tool set chosen from the tools the-intern ships, default skills, and
   optionally a default model, thinking level and workspace
-- **change** any role's instructions, tool set, skills, default model, thinking level and workspace, including the
-  shipped roles'. A change to a shipped role is kept in the-intern's settings and never edits the installed copy, and
-  it can be undone to restore the shipped role.
+- **change** any role's instructions, tool set, default skills, default model, thinking level and workspace, including
+  the shipped roles'. A role's instructions are kept in its instruction file in the internal folder, and its other
+  settings in the configuration file (S-008 REQ-002, REQ-007). A change to a shipped role never edits the installed
+  copy, and restoring the role undoes it: the configuration file loses the change and the instruction file gets the
+  shipped text back (S-008 REQ-003, REQ-005).
 - **remove** a role the team created. Removing a shipped role, `desk` included, is refused. Removing a role that a
   schedule entry names, or whose per-role default workspace (REQ-018) an entry names, is refused, with an error naming
-  them.
+  them. Removing a role while an open conversation has an agent seated with it is refused `conflict`, naming the
+  conversations (S-008 REQ-007).
 - **register and unregister** workspaces (REQ-018)
 
 Defaults and changes MUST follow these rules:
@@ -400,15 +414,22 @@ Defaults and changes MUST follow these rules:
 - A tool set can name only tools the-intern ships. A change naming an unknown tool is refused.
 - The coordination capabilities (REQ-006 to REQ-008, REQ-019, REQ-020) and the job tools (S-004 REQ-013) are part of
   every role in a job's conversations. A tool set can't leave them out. In the front desk they are replaced by the
-  front-desk tools, whatever the role (REQ-022).
-- A change to a role, or its removal, affects only agents seated after the change. Agents already seated keep
-  their instructions, tools, skills, model, thinking level and workspace until their seat changes.
+  front-desk tools, whatever the role (REQ-022). The `skill` tool is part of every role, in a job's conversations and
+  in the front desk (S-008 REQ-008).
+- A change to a role's tool set, default skills, default model, thinking level or workspace affects only agents seated
+  after the change. Agents already seated keep their tools, enabled set, model, thinking level and workspace until
+  their seat changes.
+- An edit to the common prompt or to a role's instructions reaches every running agent it applies to from that agent's
+  next model request, without a seat change (S-008 REQ-007). A change to one agent's enabled set follows S-008 REQ-006.
+- A team role whose instruction file is missing or empty can't be seated: a seat change and a lead start are refused,
+  and a handoff or invocation returns an error result, each naming the file (S-008 REQ-007).
 
 #### AC-003.1 — Create, change and remove a team role
 
 - **Given:** a running daemon
 - **When:** a team member creates a role, changes it and removes it
-- **Then:** each change is written to the configuration file, listed at once and kept after a restart
+- **Then:** each change is listed at once and kept after a restart; the instructions are written to the role's
+  instruction file and every other setting to the configuration file, which holds no instruction text (S-008 AC-007.2)
 
 **Verification:** test — `test/unit/role_catalog.test.ts`, `test/service/role_operations.test.ts`.
 
@@ -417,7 +438,7 @@ Defaults and changes MUST follow these rules:
 - **Given:** the shipped role `bob`
 - **When:** a team member changes it, then restores it
 - **Then:** the changed values are listed, the installed copy is untouched, and after the restore the shipped values
-  are listed and the change is gone from the file
+  are listed, the change is gone from the configuration file, and the role's instruction file holds the shipped text
 
 **Verification:** test — `test/unit/role_catalog.test.ts`, `test/service/role_operations.test.ts`.
 
@@ -457,14 +478,17 @@ created role without a workspace its per-role default workspace"), `test/service
 **Verification:** test — `test/service/steer.test.ts` ("offers steer, handoff and invoke to an agent of a role that
 lists none of them"), `test/unit/role_model.test.ts`.
 
-#### AC-003.7 — Seated agents keep their role
+#### AC-003.7 — Seated agents keep their seat values
 
-- **Given:** an agent seated in a conversation
-- **When:** a team member changes or removes its role
-- **Then:** the agent keeps the instructions, tools, skills, model, thinking level and workspace it was seated with
+- **Given:** an agent seated in a conversation with a team role
+- **When:** a team member changes the role's tools, default skills, model, thinking level and workspace, then tries to
+  remove the role
+- **Then:** the agent keeps the tools, enabled set, model, thinking level and workspace it was seated with, and the
+  removal is refused `conflict` naming the conversation; an edit to the role's instructions reaches it from its next
+  model request instead (S-008 AC-007.1)
 
 **Verification:** test — `test/unit/role_catalog.test.ts` ("leaves a seat already resolved unchanged by a later role
-change"), `test/service/role_prompt_extension.test.ts`.
+change"), `test/service/role_prompt_extension.test.ts`, `test/service/role_operations.test.ts`.
 
 ### REQ-018 — Workspace registration
 
@@ -561,31 +585,35 @@ model turn finish with the old seat and runs the next turn with the new one").
 After a seat is applied, every model turn in that conversation MUST:
 
 - use the seat's model and thinking level
-- see the role's instructions and skills
+- see the common prompt and its role's instructions as their files hold them at that model request, and the listing of
+  the agent's enabled skills (S-008 REQ-006, REQ-007)
 - be offered exactly the role's tools, the coordination capabilities and the job tools (S-004 REQ-013) in a job's
-  conversation, or exactly the role's tools and the front-desk tools in the front desk (REQ-022)
+  conversation, or exactly the role's tools and the front-desk tools in the front desk (REQ-022), and in both the
+  `skill` tool (S-008 REQ-008)
 - run its tools in the seat's workspace
 - see that workspace's instructions and skills
 
-Nothing of the previous seat's instructions, skills or workspace stays in the system prompt. The transcript stays
-visible to the new agent unless a Clean handoff or a reset (REQ-011) cleared the context.
+Nothing of the previous seat's instructions, enabled skills or workspace stays in the system prompt: a seat change
+resets the enabled set to the new role's default skills (S-008 REQ-006). The transcript stays visible to the new agent
+unless a Clean handoff or a reset (REQ-011) cleared the context.
 
 #### AC-005.1 — The prompt carries the new seat only
 
 - **Given:** a conversation seated as one role in one workspace
 - **When:** it is reseated as another role in another workspace
-- **Then:** the next system prompt holds the new role's instructions and skills and the new workspace's context files
-  and skills, and nothing of the previous seat
+- **Then:** the next system prompt holds the new role's instructions, the new role's default skills as the enabled
+  set, and the new workspace's context files and skills, and nothing of the previous seat
 
 **Verification:** test — `test/service/role_prompt_extension.test.ts`, `test/unit/role_prompt.test.ts`,
 `test/unit/workspace_context.test.ts`.
 
 #### AC-005.2 — Exactly the role's tools are offered
 
-- **Given:** a role whose tool set is `read` plus the coordination tools
+- **Given:** a role whose tool set is `read` plus the coordination tools, and no skill search path in the pi agent
+  folder
 - **When:** an agent of it takes a turn
-- **Then:** the model is offered `read`, the coordination tools and the job tools (S-004 REQ-013), and none of
-  `write`, `edit` and `bash`; nothing is loaded from the pi agent folder
+- **Then:** the model is offered `read`, the coordination tools, the job tools (S-004 REQ-013) and `skill` (S-008
+  REQ-008), and none of `write`, `edit` and `bash`; nothing is loaded from the pi agent folder
 
 **Verification:** test — `test/service/shipped_tools.test.ts`, `test/unit/workspace_context.test.ts` ("returns no
 context file or skill from the pi agent folder").
@@ -601,7 +629,8 @@ in").
 
 #### AC-005.4 — The prompt is byte-stable
 
-- **Given:** a conversation whose seat and role don't change
+- **Given:** a conversation whose seat doesn't change, and no instruction file, enabled set or skill folder its agent
+  uses changes (S-008 REQ-015)
 - **When:** it takes two consecutive turns
 - **Then:** both turns send byte-identical system prompt sections
 
@@ -1005,6 +1034,9 @@ When a job is created (Jobs spec), the daemon SHALL start its lead conversation:
 - with an origin that records the job source: the team member's request and its way in, the schedule entry and fire
   time, or the conversation that created the follow-up job
 
+A start that names a team role whose instruction file is missing or empty is refused like an unknown role, and creates
+nothing (REQ-003; S-008 REQ-007).
+
 Every conversation except the front desk (REQ-021) MUST record the job it belongs to and whether it is the job's
 lead conversation.
 
@@ -1105,8 +1137,9 @@ REQ-012, REQ-014), without the daemon interrupting any running work. The command
 command-line spec (product owner ruling, 2026-10-31).
 
 - list all conversations with id, job, whether it is the job's lead conversation, whether it is the front desk,
-  seat (role, model, thinking level, workspace), origin (job source, invoking conversation or front desk), status
-  (running, idle, parked, waiting for a worker thread or closed, REQ-026) and last activity
+  seat (role, model, thinking level, workspace), enabled set (S-008 REQ-006), origin (job source, invoking
+  conversation or front desk), status (running, idle, parked, waiting for a worker thread or closed, REQ-026) and last
+  activity
 - list the conversations of a job
 - show the conversations a conversation invoked, recursively
 - read a transcript with seat records and attribution (REQ-007), including entries from before a reset
@@ -1116,8 +1149,8 @@ command-line spec (product owner ruling, 2026-10-31).
 
 - **Given:** conversations of several jobs, in each status, `closed` included
 - **When:** a team member lists them, and lists one job's
-- **Then:** each is returned with its job, lead flag, seat, origin, status, last activity and depth, and the job filter
-  returns only that job's
+- **Then:** each is returned with its job, lead flag, seat, enabled set, origin, status, last activity and depth, and
+  the job filter returns only that job's
 
 **Verification:** test — `test/service/conversation_read_operations.test.ts`.
 
@@ -1224,10 +1257,11 @@ only fact the daemon adds for it is its conversation id.
 
 ### REQ-022 — The front-desk tools
 
-In the front desk, every model turn SHALL be offered exactly the tools of its seat's role and the front-desk tools. It
-SHALL NOT be offered the coordination tools (`handoff`, `invoke`, `steer`) or the job tools that act on a
-conversation's own job (S-004 REQ-013), `block_job` and `complete_job` included. The front-desk tools are offered in no
-other conversation, except read schedule runs, which S-004 REQ-013 also offers in a job's conversations. They are:
+In the front desk, every model turn SHALL be offered exactly the tools of its seat's role, the front-desk tools and
+`skill` (S-008 REQ-008). It SHALL NOT be offered the coordination tools (`handoff`, `invoke`, `steer`) or the job
+tools that act on a conversation's own job (S-004 REQ-013), `block_job` and `complete_job` included. The front-desk
+tools are offered in no other conversation, except read schedule runs, which S-004 REQ-013 also offers in a job's
+conversations. They are:
 
 - **Jobs:** `read_job`, `list_jobs`, `create_job`, `update_job`, `add_worklog` and `relate_jobs`, each naming the job
   it acts on, as S-004 REQ-021 defines.
@@ -1245,14 +1279,14 @@ The front desk itself takes input only from team members (REQ-020). A steering t
 or a conversation that doesn't exist returns an error result, and the run goes on. Only a team member changes the
 front desk's seat (REQ-004); the agent in it can't hand off or reseat itself. The `desk` role's tool set names none
 of the tools the-intern ships (REQ-002), so an agent of it in the front desk edits no file itself and runs no command;
-its schedule tools act as the operations do.
+its schedule tools act as the operations do, and `skill` only reads the text of its enabled skills.
 
 #### AC-022.1 — Exactly the front-desk tools
 
 - **Given:** the front desk seated as `desk`
 - **When:** it takes a turn
-- **Then:** the model is offered exactly the front-desk tools, and none of `handoff`, `invoke`, `steer`, `block_job`,
-  `complete_job`, `read`, `write`, `edit` and `bash`
+- **Then:** the model is offered exactly the front-desk tools and `skill`, and none of `handoff`, `invoke`, `steer`,
+  `block_job`, `complete_job`, `read`, `write`, `edit` and `bash`
 
 **Verification:** test — a service test on the fake model.
 
@@ -1298,8 +1332,8 @@ its schedule tools act as the operations do.
 
 - **Given:** the front desk seated as `desk`
 - **When:** a team member seats `gp` in it, and the agent in it calls a steering tool on the front desk itself
-- **Then:** the next turn runs as `gp`, offered `gp`'s tools and the front-desk tools and none of the coordination
-  tools, and the steering call returns an error result while the run goes on
+- **Then:** the next turn runs as `gp`, offered `gp`'s tools, the front-desk tools and `skill` and none of the
+  coordination tools, and the steering call returns an error result while the run goes on
 
 **Verification:** test — a service test on the fake model.
 
@@ -1372,7 +1406,9 @@ not a job conversation, and change nothing. In this spec that is the capability 
 job (REQ-008); S-004 REQ-022 applies the same refusal to the job operations. The front desk never becomes a job's
 lead conversation. Aborting and closing a job's conversations, by a cancel, a complete or a repair (S-004), never
 reaches the front desk, and the front desk never closes (REQ-026). Removing the `desk` role is refused like removing
-any shipped role (REQ-003), and changing it affects only seats made after the change.
+any shipped role (REQ-003). Changing its tools, default skills, model, thinking level or workspace affects only seats
+made after the change, and an edit to its instructions reaches the front desk from its next model request (S-008
+REQ-007).
 
 #### AC-025.1 — Refused as not a job conversation
 
@@ -1546,13 +1582,14 @@ which a team member or an agent of any job may create and may relate to the firs
 
 ### REQ-017 — Durability
 
-Seats, seat records, resets, job links, invocation links, depth, origins, parked state, undelivered reports, whether a
-conversation is closed (REQ-026) and the front desk's conversation id (REQ-021) MUST survive a daemon kill and restart.
-A seat change, handoff, reset, invocation, park or report interrupted by a crash either completed before the crash or
-completes on resume, unless its job is Done, when the close withdraws what is queued (REQ-026). It is never
-half-applied: never a new seat without its record, never an invoked conversation without its invocation link, never a
-lead conversation without its job, and never a report lost or delivered twice. Work waiting for a worker thread is still
-waiting after the restart, in the same order.
+Seats, seat records, each agent's enabled set (S-008 REQ-006), resets, job links, invocation links, depth, origins,
+parked state, undelivered reports, whether a conversation is closed (REQ-026) and the front desk's conversation id
+(REQ-021) MUST survive a daemon kill and restart. A seat change, handoff, reset, invocation, park or report
+interrupted by a crash either completed before the crash or completes on resume, unless its job is Done, when the close
+withdraws what is queued (REQ-026). It is never half-applied: never a new seat without its record or with the previous
+agent's enabled set, never an invoked conversation without its invocation link, never a lead conversation without its
+job, and never a report lost or delivered twice. Work waiting for a worker thread is still waiting after the restart,
+in the same order.
 
 #### AC-017.1 — Kill during a seat change, a handoff, an invocation and a lead start
 
@@ -1577,13 +1614,16 @@ report exactly once when the host closed before it was delivered").
 ## Configuration Requirements
 
 - **Roles.**
-  - **What:** the team's own roles, and the changes made to the shipped roles: instructions, tool set, skills,
-    default model, thinking level and workspace (REQ-003).
+  - **What:** the team's own roles, and the changes made to the shipped roles: instructions, tool set, default
+    skills, default model, thinking level and workspace (REQ-003).
   - **Where:** the-intern's configuration (described in the daemon spec), also changeable while the daemon runs
-    (REQ-003, S-002 REQ-022).
-  - **Constraints:** role names are unique; a tool set names only shipped tools; a model must be one that the pi
-    agent login and model registry can resolve; a thinking level must be one pi-durable accepts; a default workspace
-    must be registered.
+    (REQ-003, S-002 REQ-022). A role's instructions are not in the configuration: they are its instruction file in
+    the internal folder (S-008 REQ-002, REQ-007).
+  - **Constraints:** role names are unique; a tool set names only shipped tools; default skills are skill names,
+    resolved through the skill catalog, and a name the catalog doesn't hold doesn't stop startup (S-008 REQ-005); a
+    model must be one that the pi agent login and model registry can resolve; a thinking level must be one pi-durable
+    accepts; a default workspace must be registered; a team role's instruction file must exist and be non-empty for
+    the role to be seated (S-008 REQ-007).
   - **Missing:** only the shipped roles, with pi agent's default model and thinking level and their per-role default
     workspaces. A configured model that can't be resolved, an invalid thinking level, an unknown tool or a reference
     to an unregistered workspace stops the daemon at startup with an error naming the role and the value. An
@@ -1656,6 +1696,9 @@ the file stops the daemon at startup, an invalid runtime change is refused with 
 - **Assumption, confirmed in the pinned pi-durable 1.4.0 and `src/host/conversation_control.ts`: a reset keeps the
   conversation id.** `conversations.reset` calls the pi-durable conversation's `reset`, which writes a `pi.reset` entry
   into the same conversation, so `desk.get` names the same front desk after a reset (REQ-024).
+- **S-008, Skills and instructions.** It holds the common prompt and the roles' instruction files, resolves skill names
+  through the skill catalog, keeps each agent's enabled set and offers the `skill` tool (REQ-001 to REQ-005, REQ-016,
+  REQ-017, REQ-022).
 - **S-005 and the Web interface spec (not yet written).** They present the front desk: `bob chat` and
   the web chat call `desk.get` and then the operations of REQ-021. S-003's listeners carry `desk.get` with no change,
   as they carry every catalogue operation.
@@ -1743,3 +1786,4 @@ behaviour. Deciding it is a scope amendment of this spec.
 | 2026-11-07 | spec-truth reconciliation — PASS | v0.15 confirmed for REQ-008 and AC-008.7 against T-270; read limited to S-006's findings and 75c7c946..0604b54f | none |
 | 2026-11-07 | v0.16. Triggers leave the job sources (Definitions, Exclusions, Workflow, REQ-003, AC-003.3, REQ-012, REQ-013, AC-013.1, Configuration, Dependencies, Implementation Order). REQ-013 and the closed Open Question: an entry can name a model, thinking level and workspace as well as a role (S-007 REQ-001). REQ-018: unregistering a workspace an entry names is refused. REQ-022 and the Interfaces table: the front desk gains schedule tools. Definitions and Users: the front desk sets up and runs schedules. Configuration: an entry's seat values. Users. REQ-012 and AC-012.3: a schedule entry can name those values. REQ-002, AC-002.1 and REQ-022: `desk` sets up and runs schedules, and edits no file itself. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
 | 2026-11-07 | v0.17. REQ-003: removing a role is refused when a schedule entry names its per-role default workspace, because that path stops being registered and the next start would stop on the entry. | S-007 Feature Architecture finding. | S-007's tasks |
+| 2026-11-13 | v0.18. Skills and instructions (S-008). A role's instructions live in its instruction file in the internal folder, not in the configuration file, and its skills are default skill names resolved through the skill catalog (Definitions, Role and Skills; Interfaces, Consumed; Configuration Requirements, Roles; REQ-001; REQ-002; AC-002.1, which no longer names `src/roles/shipped/` and checks S-008 REQ-001's default skills; REQ-003, create and change; AC-003.1; AC-003.2). The account's own pi agent skill folders are not loaded unless the team adds them as skill search paths (Definitions, Skills; Alternatives Considered; AC-005.2). Each agent has an enabled set, separate from its seat, that a seat change resets in the same durable step (Definitions, Seat; REQ-005; AC-005.1; REQ-016 and AC-016.1 list it; REQ-017 keeps it across a crash). REQ-003's last rule splits by field: an edit to instructions reaches running agents from their next model request, while tools, default skills, model, thinking level and workspace still apply only to agents seated afterwards (AC-003.7, REQ-025, AC-005.4). `skill` is offered to every agent, the front desk included (Interfaces, agent tools; Definitions, Extension; Exclusions, Work in the front desk; REQ-002; REQ-003; REQ-005; AC-005.2; REQ-022; AC-022.1; AC-022.6). Removing a team role is refused `conflict` while an open conversation has an agent seated with it (REQ-003, AC-003.7). A team role whose instruction file is missing or empty can't be seated (REQ-003, REQ-012, Workflow, Configuration Requirements). Assumptions name S-008. No identifier added or retired. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, findings B1, B3 to B6. | S-008's tasks |
