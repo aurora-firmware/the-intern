@@ -1,7 +1,7 @@
 ---
 id: S-006
 title: Web interface
-version: '0.6'
+version: '0.7'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-06'
 author: planner
@@ -19,8 +19,9 @@ a browser needs. With the daemon, jobs and command line built, this is the next 
 every job on a board, answer blocked jobs, follow an agent live, stop or redirect it, talk to the front desk, shape
 roles and workspaces, and download a backup, from a desktop browser and in the Aurora Firmware style.
 
-S-000 lists more for this component than this spec delivers. Pages for schedules and knowledge sources come
-with those components' own specs, and skills and instruction files with the Skills and instructions spec.
+S-000 lists more for this component than this spec delivers. S-007 adds the Schedules page. S-008 adds the Skills
+panel, the editing of skill and instruction files, and a Skills and instructions section of the Roles page (S-008
+REQ-013). A page for knowledge sources comes with that component's own spec.
 
 ## Definitions
 
@@ -77,10 +78,12 @@ What this specification explicitly does NOT cover:
 - **Names on actions.** Nobody enters a name. The record shows the way in, and the network address or the front desk
   where the origin has them (REQ-015).
 - **Workspace file browsing and editing.** No operation offers it, and S-000 says this interface adds no capabilities.
-  An agent's file changes appear only through its tool activity. The product owner expects browser editing of agents'
-  system prompts held in files to come in a later revision.
-- **Instruction files and skills editing.** The Skills and instructions spec owns these. A role's own instructions are
-  in scope (REQ-009).
+  An agent's file changes appear only through its tool activity. The one exception is S-008's: it edits a registered
+  workspace's own `AGENTS.md` and `CLAUDE.md` files and its skill files, through `files.read` and `files.write`
+  (S-008 REQ-010, REQ-013).
+- **Instruction files and skills editing.** S-008 owns the Skills panel and the editing of instruction and skill files
+  (S-008 REQ-013). A role's own instructions are in scope here (REQ-009); they are read from and written to the role's
+  instruction file (S-008 REQ-007).
 - **Import.** It stays on the command line, because it refuses to run while a daemon owns the instance (S-005 REQ-013).
 - **Exporting to a path on the service's machine from the browser.** The browser offers only the export download;
   `bob export` stays as it is.
@@ -137,15 +140,17 @@ these addresses must do.
 ### Service calls consumed
 
 Every page calls the service through the client library for browsers (S-003 REQ-009). This table names the existing
-operations and feed each page relies on. No page calls anything else, apart from the export route below.
+operations and feed each page relies on. No page calls anything else, apart from the export route below and the
+operations S-008 adds for its Skills panel, file editing and the Roles page's Skills and instructions section, which
+S-008 Interfaces lists and this table names.
 
 | Page | Reads | Actions |
 |---|---|---|
 | Every page | `daemon.status`, to check the connection and the version (ADR-007 decisions 6 and 9) | — |
 | Board | `jobs.list`, instance feed (`GET /feed?scope=instance`) | — |
-| Job page | `jobs.get`, `jobs.history.list`, `jobs.worklog.list`, `conversations.get`, `conversations.entries`, `conversations.invocations`, `models.list`, `roles.list`, `workspaces.list`, instance feed, the job's conversations on the shared stream (`GET /feed?scope=conversations`, S-003 REQ-006; ADR-007) | `jobs.update`, `jobs.complete`, `jobs.cancel`, `jobs.resume`, `jobs.relate`, `jobs.unrelate`, `conversations.submit`, `conversations.abort`, `conversations.compact`, `conversations.reset`, `conversations.seat` |
+| Job page | `jobs.get`, `jobs.history.list`, `jobs.worklog.list`, `conversations.get`, `conversations.entries`, `conversations.invocations`, `models.list`, `roles.list`, `workspaces.list`, instance feed, the job's conversations on the shared stream (`GET /feed?scope=conversations`, S-003 REQ-006; ADR-007); for the Skills panel, `skills.list`, `instructions.list` and `files.read` (S-008 REQ-013) | `jobs.update`, `jobs.complete`, `jobs.cancel`, `jobs.resume`, `jobs.relate`, `jobs.unrelate`, `conversations.submit`, `conversations.abort`, `conversations.compact`, `conversations.reset`, `conversations.seat`; for the Skills panel, `skills.enable`, `skills.disable` and `files.write` (S-008 REQ-013) |
 | Front desk | `desk.get`, `conversations.entries`, `submissions.get`, conversation feed, which reaches the page on the shared stream (`GET /feed?scope=conversations`, S-003 REQ-006; ADR-007) | `conversations.submit`, `conversations.abort`, `jobs.create` |
-| Roles | `roles.list`, `models.list`, `workspaces.list`, instance feed | `roles.create`, `roles.change`, `roles.remove`, `roles.restore` |
+| Roles | `roles.list`, `models.list`, `workspaces.list`, instance feed; for the Skills panel and the Skills and instructions section, `skills.list`, `skills.paths.list`, `instructions.list` and `files.read` (S-008 REQ-013) | `roles.create`, `roles.change`, `roles.remove`, `roles.restore`; for the Skills panel and the Skills and instructions section, `skills.enable`, `skills.disable`, `skills.paths.add`, `skills.paths.remove`, `skills.restore`, `instructions.restore` and `files.write` (S-008 REQ-013) |
 | Workspaces | `workspaces.list`, instance feed | `workspaces.register`, `workspaces.unregister` |
 | Status | `daemon.status`, `usage.get`, `models.list`, `conversations.list`, instance feed | Export download |
 
@@ -495,8 +500,9 @@ and still holds. The page SHALL also let a team member create a job directly, wi
 
 The Roles page SHALL list every role with its settings, and SHALL let a team member create a role, change any role's
 instructions, tools, skills, default model, thinking level and workspace, restore a changed shipped role and remove a
-role they created, under S-001 REQ-003's rules. The page SHALL state that a change affects only agents seated
-afterwards.
+role they created, under S-001 REQ-003's rules. The page SHALL state that a change to a role's tools, default skills,
+default model, thinking level or workspace affects only agents seated afterwards, and that a change to its
+instructions reaches running agents from their next model request (S-001 REQ-003; S-008 REQ-007).
 
 #### AC-009.1 — Change and restore
 
@@ -905,3 +911,4 @@ Both were for the Architect, and Feature Architecture resolved them. Neither cha
 | 2026-11-07 | v0.5. REQ-021, AC-021.1's Verification and Success Criterion 1: in CI, every browser test runs on Chrome, and AC-021.1's journey and the tests `docs/development/architecture.md` names also run on Firefox, and on Edge where it is installed. An Edge failure on a machine that has Edge still fails, and a missing Chrome or Firefox still fails the CI run. No identifier retired. | Architect's completion review of 2026-11-07, finding F1: "the browser tests" overstated what runs beyond Chrome. The main session, holding the product owner role for this ruling, decided the narrower wording. | T-280 |
 | 2026-11-07 | spec-truth reconciliation — FAIL | v0.5 confirmed for REQ-021, AC-021.1 and Success Criterion 1 against run 42367063537; F1, F2, F4, G1, G2 and the export comment closed; tech_stack.md states the 2026-11-06 probe as a test run, follow-up routed; read limited to c0f21644..31b11221, with no CI run at 31b11221 | none |
 | 2026-11-07 | v0.6. Purpose, Users and Exclusions: triggers get no page, and S-007 adds the Schedules page. No behaviour change in this spec. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
+| 2026-11-13 | v0.7. Purpose: S-008 adds the Skills panel, file editing and the Roles page's Skills and instructions section. Exclusions: "Workspace file browsing and editing" names S-008's exception, a registered workspace's own `AGENTS.md`, `CLAUDE.md` and skill files; "Instruction files and skills editing" names S-008 as owner, and a role's instructions are its instruction file. Interfaces, Service calls consumed: pages may also call the operations S-008 adds, and the Roles and Job page rows name them. REQ-009: the page says which role fields apply only to agents seated afterwards and that instructions reach running agents from their next model request. No identifier added or retired. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, findings B5 and B8. | S-008's tasks |
