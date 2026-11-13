@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { isAbsolute } from "node:path";
 import type { ConfigStore } from "../config/config_writer.ts";
 import type { SeatPlace } from "../desk/desk_model.ts";
 import { JOB_TOOL_NAMES } from "../jobs/job_model.ts";
@@ -11,6 +10,7 @@ import type { WorkspaceRegistry } from "../workspaces/workspace_registry.ts";
 import {
     applyRoleChange,
     COORDINATION_TOOL_NAMES,
+    isSkillName,
     type RoleChange,
     type RoleDefinition,
     RoleInvalidError,
@@ -91,7 +91,7 @@ const KNOWN_TOOLS: readonly string[] = [...SHIPPED_TOOL_NAMES, ...COORDINATION_T
 // For a list field the value is the offending entry, so the refusal names what to fix.
 const offendingValue = (role: RoleDefinition, field: string): string | undefined => {
     if (field === "tools") return role.tools.find((tool) => !KNOWN_TOOLS.includes(tool));
-    if (field === "skills") return role.skills.find((skill) => !isAbsolute(skill));
+    if (field === "skills") return role.skills.find((skill) => !isSkillName(skill));
     return describeValue(role[field as keyof RoleDefinition]);
 };
 

@@ -8,13 +8,10 @@ export const DEFAULT_LEAD_ROLE = "bob";
 const readShippedText = (relativePath: string): Promise<string> =>
     readFile(fileURLToPath(new URL(`../shipped/${relativePath}`, import.meta.url)), "utf8");
 
-const shippedSkillFolder = (name: string): string =>
-    fileURLToPath(new URL(`../shipped/skills/${name}`, import.meta.url));
-
 const SKILLS_BY_ROLE: Record<(typeof SHIPPED_ROLE_NAMES)[number], string[]> = {
-    bob: [],
-    gp: [shippedSkillFolder("carry-out-a-part")],
-    desk: [],
+    bob: ["about-the-intern", "bob-command-line"],
+    gp: ["carry-out-a-part", "bob-command-line"],
+    desk: ["about-the-intern"],
 };
 
 const TOOLS_BY_ROLE: Record<(typeof SHIPPED_ROLE_NAMES)[number], string[]> = {

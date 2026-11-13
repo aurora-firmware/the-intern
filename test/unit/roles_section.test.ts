@@ -15,7 +15,7 @@ const failure = (run: () => unknown): ConfigValueError => {
 
 const reviewerTable = {
     tools: ["read", "bash"],
-    skills: ["/skills/review"],
+    skills: ["review"],
     model: "provider/id",
     thinking_level: "low",
     workspace: "/work/review",
@@ -29,7 +29,7 @@ describe("rolesSection", () => {
                 reviewer: {
                     name: "reviewer",
                     tools: ["read", "bash"],
-                    skills: ["/skills/review"],
+                    skills: ["review"],
                     model: "provider/id",
                     thinkingLevel: "low",
                     workspace: "/work/review",
@@ -78,7 +78,7 @@ describe("rolesSection", () => {
             reviewer: reviewerTable,
             writer: { instructions: "Write.", tools: ["write"] },
             editor: { tools: ["read"] },
-            bob: { thinking_level: "high", skills: ["/skills/x"] },
+            bob: { thinking_level: "high", skills: ["x"] },
         });
         assert.deepEqual(rolesSection.parse(rolesSection.serialize(value)), value);
     });
@@ -97,9 +97,39 @@ describe("rolesSection", () => {
         assert.equal(error.key, "reviewer.tools");
     });
 
-    it("names the role and the field when a skill path is relative", () => {
-        const error = failure(() => rolesSection.parse({ reviewer: { ...reviewerTable, skills: ["skills/x"] } }));
-        assert.equal(error.key, "reviewer.skills");
+    it("names the role, the field and the name when a skill name holds a slash or is empty", () => {
+        for (const skill of ["skills/x", ""]) {
+            const error = failure(() => rolesSection.parse({ reviewer: { ...reviewerTable, skills: [skill] } }));
+            assert.equal(error.key, "reviewer.skills");
+            assert.match(error.reason, new RegExp(`"${skill}"`));
+        }
+        assert.equal(failure(() => rolesSection.parse({ bob: { skills: ["a/b"] } })).key, "bob.skills");
+    });
+
+    it("keeps an absolute skill path of a team role as an older key and leaves it out of its skills", () => {
+        const value = rolesSection.parse({ reviewer: { tools: ["read"], skills: ["review", "/skills/old"] } });
+        assert.deepEqual(value.teamRoles.reviewer?.skills, ["review"]);
+        assert.deepEqual(value.older, { reviewer: { skillPaths: ["/skills/old"] } });
+    });
+
+    it("keeps an absolute skill path of a shipped role as an older key", () => {
+        const value = rolesSection.parse({ bob: { skills: ["/skills/old"] } });
+        assert.deepEqual(value.shippedChanges.bob, { skills: [] });
+        assert.deepEqual(value.older, { bob: { skillPaths: ["/skills/old"] } });
+    });
+
+    it("writes the skill names, then the older skill paths, back unchanged", () => {
+        const table = {
+            reviewer: { tools: ["read"], skills: ["review", "/skills/old"] },
+            bob: { skills: ["about-the-intern", "/skills/older"] },
+            gp: { skills: ["/skills/only"] },
+        };
+        assert.deepEqual(rolesSection.serialize(rolesSection.parse(table)), table);
+    });
+
+    it("leaves a shipped role's skills unchanged when its table has no skills key", () => {
+        const value = rolesSection.parse({ bob: { model: "provider/id" } });
+        assert.equal("skills" in (value.shippedChanges.bob ?? {}), false);
     });
 
     it("names the role and the field when a change holds a relative workspace", () => {
