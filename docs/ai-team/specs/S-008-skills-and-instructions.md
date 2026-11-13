@@ -517,7 +517,8 @@ A missing common prompt, or a missing shipped role's file, SHALL leave that part
 on. A team role whose file is missing or empty SHALL NOT be seated, and the refusal names the file: `conversations.seat`
 is refused `invalid_input`, a handoff or invocation returns an error result to the calling agent, `jobs.create` is
 refused `invalid_input` and creates nothing (S-001 REQ-012), a schedule fire is skipped with that reason (S-007
-REQ-006), and `schedules.run` is refused `invalid_input` naming the file (S-007 REQ-008). An agent already seated with it goes without that part, with a diagnostic.
+REQ-006), and `schedules.run` is refused `invalid_input` naming the file (S-007 REQ-008). An agent already seated
+with it goes without that part, with a diagnostic.
 
 #### AC-007.1 — A live edit
 
@@ -724,7 +725,8 @@ or both is a usage error.
 ### REQ-013 — The Skills panel and file editing on the web
 
 The web interface SHALL offer a Skills panel for a role, from the Roles page and from a Schedules page entry (the
-entry's role, or `bob` when the entry names none, S-001 REQ-012), and for an agent, from each conversation on a Job page, To do and In progress jobs included. The panel
+entry's role, or `bob` when the entry names none, S-001 REQ-012), and for an agent, from each conversation on a Job
+page, To do and In progress jobs included. The panel
 SHALL show what `skills.list` returns, with a check box per skill that calls `skills.enable` or `skills.disable`, and
 SHALL open any listed skill file and any instruction file in `instructions.list` to show and edit its text through
 `files.read` and `files.write`. A refused save SHALL show the reason and keep what the team member typed (S-006
