@@ -1,6 +1,15 @@
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, join, relative, sep } from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import type { Logger } from "../daemon/logger.ts";
+import { type ShippedFileState, shippedFileStates, skillsFolderPath } from "./internal_folder.ts";
+import {
+    type Catalog,
+    type DeletedShippedSkill,
+    resolveCatalog,
+    type ScannedSource,
+    type SkillSource,
+} from "./skill_resolution.ts";
 
 const SKILL_FILE = "SKILL.md";
 const MAX_NAME_LENGTH = 64;
@@ -111,4 +120,100 @@ export async function discoverSkills(source: string): Promise<SourceScan> {
     }
     await visit(source, { scan, visited: new Set() });
     return scan;
+}
+
+export type ReadCatalogOptions = {
+    dataDir: string;
+    shippedRoot: string;
+    searchPaths: readonly string[];
+    workspace?: string;
+};
+
+const WORKSPACE_SKILLS = join(".pi", "skills");
+
+/** The shipped files of each skill, keyed by the skill's folder name. */
+function groupBySkill(states: Record<string, ShippedFileState>): Map<string, ShippedFileState[]> {
+    const groups = new Map<string, ShippedFileState[]>();
+    for (const [key, state] of Object.entries(states)) {
+        const [prefix, name] = key.split("/");
+        if (prefix !== "skills" || name === undefined) {
+            continue;
+        }
+        groups.set(name, [...(groups.get(name) ?? []), state]);
+    }
+    return groups;
+}
+
+function markShipped(catalog: Catalog, dataDir: string, states: Record<string, ShippedFileState>): void {
+    const groups = groupBySkill(states);
+    const internalRoot = skillsFolderPath(dataDir);
+    const present = new Set<string>();
+    for (const skill of catalog.skills) {
+        if (skill.source.kind !== "internal") {
+            continue;
+        }
+        const [top] = relative(internalRoot, skill.folder).split(sep);
+        const files = top === undefined ? undefined : groups.get(top);
+        if (top === undefined || files === undefined) {
+            continue;
+        }
+        present.add(top);
+        skill.shipped = true;
+        skill.edited = files.some((file) => file.edited);
+    }
+    const deleted: DeletedShippedSkill[] = [];
+    for (const [name, files] of groups) {
+        if (!present.has(name) && files.every((file) => file.missing)) {
+            deleted.push({ name, folder: join(internalRoot, name) });
+        }
+    }
+    catalog.deletedShipped = deleted.sort((left, right) => byteOrder(left.name, right.name));
+}
+
+async function scanSource(source: SkillSource, path: string): Promise<ScannedSource> {
+    const scan = await discoverSkills(path);
+    if (scan.missing && source.kind === "path") {
+        scan.diagnostics.push(`${path}: search path doesn't exist`);
+    }
+    return { source, scan };
+}
+
+/** Reads every skill source, in rising priority, and resolves their names. Nothing is cached between calls. */
+export async function readCatalog(options: ReadCatalogOptions): Promise<Catalog> {
+    const sources: { source: SkillSource; path: string }[] = [
+        { source: { kind: "internal" }, path: skillsFolderPath(options.dataDir) },
+        ...options.searchPaths.map((path): { source: SkillSource; path: string } => ({
+            source: { kind: "path", path },
+            path,
+        })),
+    ];
+    if (options.workspace !== undefined) {
+        const path = join(options.workspace, WORKSPACE_SKILLS);
+        sources.push({ source: { kind: "workspace", path }, path });
+    }
+    const [scanned, states] = await Promise.all([
+        Promise.all(sources.map(({ source, path }) => scanSource(source, path))),
+        shippedFileStates({ dataDir: options.dataDir, shippedRoot: options.shippedRoot }),
+    ]);
+    const catalog = resolveCatalog(scanned);
+    markShipped(catalog, options.dataDir, states);
+    return catalog;
+}
+
+export type DiagnosticLog = { report(diagnostics: readonly string[]): void };
+
+/** Logs each diagnostic once, and again only after it has gone and come back. */
+export function createDiagnosticLog(logger: Logger): DiagnosticLog {
+    let logged = new Set<string>();
+    return {
+        report(diagnostics) {
+            const current = new Set(diagnostics);
+            for (const diagnostic of current) {
+                if (!logged.has(diagnostic)) {
+                    logger.error(`skill problem: ${diagnostic}`);
+                }
+            }
+            logged = current;
+        },
+    };
 }
