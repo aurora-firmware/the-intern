@@ -6,10 +6,10 @@ export const SHIPPED_ROLE_NAMES = ["bob", "gp", "desk"] as const;
 export const DEFAULT_LEAD_ROLE = "bob";
 
 const readShippedText = (relativePath: string): Promise<string> =>
-    readFile(fileURLToPath(new URL(`./shipped/${relativePath}`, import.meta.url)), "utf8");
+    readFile(fileURLToPath(new URL(`../shipped/${relativePath}`, import.meta.url)), "utf8");
 
 const shippedSkillFolder = (name: string): string =>
-    fileURLToPath(new URL(`./shipped/skills/${name}`, import.meta.url));
+    fileURLToPath(new URL(`../shipped/skills/${name}`, import.meta.url));
 
 const SKILLS_BY_ROLE: Record<(typeof SHIPPED_ROLE_NAMES)[number], string[]> = {
     bob: [],
@@ -28,11 +28,11 @@ export const loadShippedRoles = (): Promise<RoleDefinition[]> =>
         SHIPPED_ROLE_NAMES.map(
             async (name): Promise<RoleDefinition> => ({
                 name,
-                instructions: await readShippedText(`${name}.md`),
+                instructions: await readShippedText(`instructions/roles/${name}.md`),
                 tools: TOOLS_BY_ROLE[name],
                 skills: SKILLS_BY_ROLE[name],
             }),
         ),
     );
 
-export const loadPreamble = (): Promise<string> => readShippedText("preamble.md");
+export const loadPreamble = (): Promise<string> => readShippedText("instructions/common.md");

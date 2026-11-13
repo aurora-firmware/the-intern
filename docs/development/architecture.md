@@ -789,7 +789,7 @@ The trigger origin and the letter `T` leave these places. The letter lists don't
 - `Origin` in `src/host/seating.ts`
 - the reserved groups in `src/cli/command_line.ts`; `schedules` leaves that list later, in the change that adds
   `bob schedules` (`docs/development/coding_guidelines.md`, Command line)
-- `src/roles/shipped/bob.md` and `web/ui/components/job_record.ts`
+- `src/shipped/instructions/roles/bob.md` and `web/ui/components/job_record.ts`
 
 `sourceOrigin` then refuses anything but a schedule origin, so a trigger origin is `invalid_input` and uses no number
 (AC-014.2). A short number such as `T-1` then reads as an ID and names no job.
@@ -825,7 +825,7 @@ model request) and ADR-001 decision 4 (the enabled set and its upgrade write). L
 
 | Part | Where | Holds |
 |---|---|---|
-| Shipped text | `src/shipped/` | `instructions/common.md`, `instructions/roles/{bob,gp,desk}.md` and `skills/{carry-out-a-part,about-the-intern,bob-command-line}/`, laid out as the internal folder is (ADR-009 decision 1). It replaces `src/roles/shipped/`; `preamble.md` becomes `common.md` |
+| Shipped text | `src/shipped/` | `instructions/common.md`, `instructions/roles/{bob,gp,desk}.md` and `skills/{carry-out-a-part,about-the-intern,bob-command-line}/`, laid out as the internal folder is (ADR-009 decision 1). `instructions/common.md` is the common prompt, formerly `preamble.md` |
 | Shipped roles | `src/roles/shipped_roles.ts` | The shipped role names, their tools and their default skill names (REQ-001's table). It no longer reads any text |
 | Internal folder | `src/skills/internal_folder.ts` | The paths (`instructions/common.md`, `roleInstructionPath(dataDir, role)`, `skills/`), the manifest, ADR-009's start rule and the restores |
 | File store | `src/skills/file_store.ts` | The one serial queue for every write to an instruction or skill file, the version token, the atomic write, the allowed files of REQ-010 and the `files_changed` events |
