@@ -41,6 +41,8 @@ export type FileStore = {
     read(path: string): Promise<FileText>;
     write(path: string, text: string, options?: WriteOptions): Promise<string>;
     remove(path: string, options?: { announce?: FileChangeKind }): Promise<void>;
+    /** Tells the feed a file changed, for a writer that changed it inside the queue without `write`. */
+    announce(path: string, kind: FileChangeKind): void;
 };
 
 export function createFileChangeHub(): FileChangeHub {
@@ -166,6 +168,7 @@ export function createFileStore(options: { changes?: () => FileChangeHub | undef
 
     return {
         enqueue,
+        announce,
         async read(path) {
             const bytes = await readBytes(path);
             return { text: decodeUtf8(path, bytes), version: fingerprintOf(bytes) };

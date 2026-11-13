@@ -14,8 +14,12 @@ import { roleInstructionPath } from "../skills/internal_folder.ts";
 import { defineOperation, type Operation, ServiceError } from "./operations.ts";
 
 type CreateInput = { role: RoleDefinition; instructions: string; idempotencyKey?: string };
-type ChangeInput = { name: string; change: RoleChange; instructions?: string };
-type ListedRole = CatalogRole & { instructions?: string };
+type ChangeInput = { name: string; change: RoleChange; instructions?: string; instructionsVersion?: string };
+type ListedRole = CatalogRole & {
+    instructions?: string;
+    instructionsVersion?: string;
+    instructionsMissing?: true;
+};
 type NameInput = { name: string };
 
 const CREATE_SCOPE = "roles.create";
@@ -75,6 +79,9 @@ function parseChange(raw: unknown): ChangeInput {
     const record = asRecord(raw);
     const input: ChangeInput = { name: requireString(record, "name"), change: parseRoleFields(record) };
     if (record.instructions !== undefined) input.instructions = requireString(record, "instructions");
+    if (record.instructionsVersion !== undefined) {
+        input.instructionsVersion = requireString(record, "instructionsVersion");
+    }
     return input;
 }
 
@@ -92,6 +99,10 @@ async function mappingRefusals<T>(action: () => Promise<T>): Promise<T> {
             const codes = { invalid: "invalid_input", conflict: "conflict", write_failed: "internal" } as const;
             throw new ServiceError(codes[error.kind], error.message);
         }
+        if (error instanceof FileRefusedError) {
+            const codes = { not_found: "not_found", invalid: "invalid_input", conflict: "conflict" } as const;
+            throw new ServiceError(codes[error.kind], error.message);
+        }
         if (error instanceof HostInvalidKeyError) throw new ServiceError("invalid_input", error.message);
         throw error;
     }
@@ -99,7 +110,7 @@ async function mappingRefusals<T>(action: () => Promise<T>): Promise<T> {
 
 // Compared through JSON, as the catalog's role and the parsed input may differ in absent versus undefined fields.
 const sameDefinition = (existing: ListedRole, role: RoleDefinition, instructions: string): boolean => {
-    const { shipped, changed, instructions: existingText, ...definition } = existing;
+    const { shipped, changed, instructions: existingText, instructionsVersion, ...definition } = existing;
     return (
         !shipped &&
         existingText === instructions &&
@@ -113,12 +124,14 @@ export function roleOperations(component: AgentsComponent) {
     // A role without a readable file is listed with no text; the file store refuses any other failure on it.
     const withInstructions = async (role: CatalogRole): Promise<ListedRole> => {
         try {
-            const { text } = await component.skills.fileStore.read(
+            const { text, version } = await component.skills.fileStore.read(
                 roleInstructionPath(component.skills.dataDir(), role.name),
             );
-            return { ...role, instructions: text };
+            return { ...role, instructions: text, instructionsVersion: version };
         } catch (error) {
-            if (error instanceof FileRefusedError && error.kind === "not_found") return role;
+            if (error instanceof FileRefusedError && error.kind === "not_found") {
+                return { ...role, instructionsMissing: true };
+            }
             throw error;
         }
     };
@@ -163,9 +176,9 @@ export function roleOperations(component: AgentsComponent) {
         name: "roles.change",
         kind: "control",
         parse: parseChange,
-        run: (_ctx, { name, change, instructions }) =>
+        run: (_ctx, { name, change, instructions, instructionsVersion }) =>
             mappingRefusals(async () => {
-                const changed = await catalog().change(name, change, { instructions });
+                const changed = await catalog().change(name, change, { instructions, instructionsVersion });
                 return { role: await withInstructions(changed) };
             }),
     });
