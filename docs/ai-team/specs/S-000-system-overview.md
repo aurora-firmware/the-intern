@@ -1,7 +1,7 @@
 ---
 id: S-000
 title: System Overview
-version: '0.7'
+version: '0.8'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-27'
 author: planner
@@ -118,8 +118,8 @@ person's access.
 - **Boundary:** It does not define what a job is or its steps (Jobs), which roles exist (Agents and roles), what the
   command line and the web interface present to people (Command line, Web interface), the mailbox (Email), or when
   scheduled work runs (Schedules).
-- **Works with:** Jobs, Agents and roles, Command line, Web interface, Email, Schedules, Installation and
-  service setup.
+- **Works with:** Jobs, Agents and roles, Skills and instructions, Command line, Web interface, Email, Schedules,
+  Installation and service setup.
 
 #### Jobs
 
@@ -144,7 +144,7 @@ person's access.
   team members, belongs to no job, turns their requests into jobs, sets up and runs schedules when they ask, tells them
   what is being worked on, and passes their answers and steering on, without doing the work itself.
 - **Boundary:** It does not keep the job record (Jobs), run the process or queue work (Intern service), or supply the
-  content of instructions and skills (Skills and instructions).
+  content of instructions and skills or keep the skills each agent has enabled (Skills and instructions).
 - **Works with:** Intern service, Jobs, Schedules, Skills and instructions, Team knowledge, Email, Command line, Web
   interface.
 
@@ -192,16 +192,18 @@ person's access.
   runs; and skips a run while the previous one is still working.
 - **Boundary:** It does not do the work of a job (Agents and roles) or keep the job record (Jobs). No event starts a
   job: agents create jobs as they work, and Email is an input that an agent triages.
-- **Works with:** Intern service, Jobs, Agents and roles, Command line, Web interface.
+- **Works with:** Intern service, Jobs, Agents and roles, Skills and instructions, Command line, Web interface.
 
 #### Skills and instructions
 
 - **Name:** Skills and instructions.
 - **Responsibility:** The instructions and skills that ship with The Intern, such as explaining The Intern itself, and
-  the way team members add their own or adjust the shipped ones without editing the installed copy.
-- **Boundary:** It does not decide which role gets which skills (Agents and roles) and does not hold the team's
-  knowledge (Team knowledge). It adds no code to The Intern.
-- **Works with:** Agents and roles, Team knowledge, Command line, Web interface.
+  the way team members add their own or adjust the shipped ones without editing the installed copy. It also owns
+  where skills are found and which copy wins, the skills each role enables by default and each agent has enabled, how
+  a team member or an agent changes them while the agent works, and the one way every agent reads its skills.
+- **Boundary:** It does not define roles or seat agents (Agents and roles) and does not hold the team's knowledge
+  (Team knowledge). It adds no code to The Intern.
+- **Works with:** Intern service, Agents and roles, Schedules, Team knowledge, Command line, Web interface.
 
 #### Team knowledge
 
@@ -355,3 +357,4 @@ person's access.
 | 2026-11-03 | Command line, Boundary: every command calls an operation of the Intern service, except starting the service and S-004's import step, which run while no daemon serves the instance. Still version 0.6. | Architecture consistency review of the S-005 draft, finding F1: `bob serve` and `bob import` call no operation. | None; S-005 isn't broken down yet |
 | 2026-11-03 | Wording only, no change of scope: the lead completes a job rather than closes it (Purpose, use case 1, Jobs), because a closed conversation is now the conversation of a Done job (S-001 REQ-026). Version stays 0.6. | Architecture consistency review of the closed-conversation amendment, finding F5. | None |
 | 2026-11-07 | v0.7. Triggers leave the product: use case 4 rephrased so that an agent notices what happens and creates the job; the component becomes Schedules; every run starts fresh and its agent can read earlier runs, in place of a choice per schedule; Email reports no events. Users, use case 8, Solution overview, Command line, Web interface and User manual: triggers leave the wording. Agents and roles: the front desk sets up and runs schedules, and Works with names Schedules. Email's Works with no longer names Schedules. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
+| 2026-11-13 | v0.8. Skills and instructions: it also owns where skills are found and which copy wins, the skills each role enables by default and each agent has enabled, how a team member or an agent changes them while the agent works, and the one way every agent reads its skills; its Boundary no longer leaves which role gets which skills to Agents and roles, which still owns roles and seats; Works with adds Intern service and Schedules. Agents and roles, Boundary: it doesn't keep the skills each agent has enabled. Intern service and Schedules, Works with: Skills and instructions, so both sides name each other. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, finding B9. | S-008's tasks, one of which updates `docs/system_overview.html` |
