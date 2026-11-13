@@ -11,12 +11,20 @@ export type CatalogSkill = {
     file: string;
     source: SkillSource;
     shadowed: { path: string; source: SkillSource }[];
+    /** Whether the installed version ships this skill. Only the internal source's skills can be shipped. */
+    shipped: boolean;
+    /** Whether a team member changed or deleted one of the shipped files. */
+    edited: boolean;
 };
+
+/** A shipped skill whose folder a team member deleted from the internal folder. */
+export type DeletedShippedSkill = { name: string; folder: string };
 
 export type Catalog = {
     skills: CatalogSkill[];
     leftOut: SourceScan["leftOut"];
     diagnostics: string[];
+    deletedShipped: DeletedShippedSkill[];
 };
 
 const byteOrder = (left: string, right: string): number => Buffer.compare(Buffer.from(left), Buffer.from(right));
@@ -28,7 +36,7 @@ function resolveInsideSource({ source, scan }: ScannedSource, diagnostics: strin
     for (const copy of copies) {
         const winner = used.get(copy.name);
         if (winner === undefined) {
-            used.set(copy.name, { ...copy, source, shadowed: [] });
+            used.set(copy.name, { ...copy, source, shadowed: [], shipped: false, edited: false });
             continue;
         }
         winner.shadowed.push({ path: copy.folder, source });
@@ -58,7 +66,7 @@ export function resolveCatalog(sources: readonly ScannedSource[]): Catalog {
         }
     }
     const skills = [...byName.values()].sort((left, right) => byteOrder(left.name, right.name));
-    return { skills, leftOut, diagnostics };
+    return { skills, leftOut, diagnostics, deletedShipped: [] };
 }
 
 /** The names of the set the catalog uses, plus every workspace skill; a name the catalog lacks is missing. */
