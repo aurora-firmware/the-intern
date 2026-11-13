@@ -5,6 +5,7 @@ import { afterEach, describe, it } from "node:test";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
+import { internalHarness } from "../../src/host/harness_host.ts";
 import { manifestPath } from "../../src/skills/internal_folder.ts";
 import { createSkillsComponent, type SkillsComponent } from "../../src/skills/skills_component.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
@@ -47,6 +48,15 @@ async function startReady(agents: Agents): Promise<HermeticEnv> {
     }
     return env;
 }
+
+const hasRuntime = (agents: Agents): boolean => {
+    try {
+        agents.runtime();
+        return true;
+    } catch {
+        return false;
+    }
+};
 
 const HOOKS = ["prepareFiles", "checkModels", "ensureWorkspaces", "repair", "afterResume", "start", "stop"] as const;
 
@@ -105,43 +115,95 @@ describe("the agents component holding the skills component", () => {
         assert.ok(agents.operations.length > 1);
     });
 
-    it("runs every hook of the skills component, and its stop last", async () => {
+    it("runs the skills hooks once each, in the daemon's order, with stop at the end", async () => {
         const calls: string[] = [];
         const agents = await createAgentsComponent({ logger: quietLogger, skills: recordingSkills(calls) });
 
         await startReady(agents);
-        const daemon = daemons.pop();
-        await daemon?.stop();
+        await daemons.pop()?.stop();
 
         assert.deepEqual(calls, [...HOOKS]);
     });
 
-    it("runs the skills hook before the agents hook of the same name", async () => {
-        const seen: string[] = [];
-        const skills = recordingSkills([]);
-        const checkModels = skills.component.checkModels;
-        const ensureWorkspaces = skills.component.ensureWorkspaces;
+    it("returns the configuration the skills prepareFiles returns", async () => {
+        const skills = createSkillsComponent({ logger: quietLogger });
+        const sentinel = { sentinel: true } as unknown as Awaited<
+            ReturnType<NonNullable<DaemonComponent["prepareFiles"]>>
+        >;
+        skills.component.prepareFiles = async () => sentinel;
         const agents = await createAgentsComponent({ logger: quietLogger, skills });
-        skills.component.checkModels = async (ctx) => {
-            try {
-                agents.runtime();
-            } catch {
-                seen.push("no runtime at checkModels");
-            }
-            await checkModels?.(ctx);
+
+        const returned = await agents.component.prepareFiles?.(
+            {} as Parameters<NonNullable<DaemonComponent["prepareFiles"]>>[0],
+        );
+
+        assert.equal(returned, sentinel);
+    });
+
+    it("runs the skills hook before the agents hook of the same name, and its stop after the agents stop", async () => {
+        const log: string[] = [];
+        const skills = recordingSkills([]);
+        const inner = skills.component;
+        const agents = await createAgentsComponent({ logger: quietLogger, skills });
+        // The agents component's own work is seen through what it changes: its runtime, its default workspaces and
+        // its report delivery's subscription to the harness commits, which it drops again on stop.
+        const hooks = {
+            checkModels: inner.checkModels,
+            ensureWorkspaces: inner.ensureWorkspaces,
+            start: inner.start,
+            stop: inner.stop,
         };
-        skills.component.ensureWorkspaces = async (ctx) => {
-            const exists = await stat(join(ctx.dirs.dataDir, "workspaces", "bob")).then(
+        inner.checkModels = async (ctx) => {
+            log.push(hasRuntime(agents) ? "agents runtime before skills checkModels" : "skills checkModels");
+            const harness = internalHarness(ctx.host);
+            const subscribe = harness.subscribeCommits.bind(harness);
+            harness.subscribeCommits = (listener) => {
+                // Only the subscriptions made once the skills start has run are the report delivery's.
+                const owner = log.includes("skills start") ? "agents" : "other";
+                log.push(`${owner} subscribes`);
+                const unsubscribe = subscribe(listener);
+                return () => {
+                    log.push(`${owner} unsubscribes`);
+                    unsubscribe();
+                };
+            };
+            await hooks.checkModels?.(ctx);
+        };
+        inner.ensureWorkspaces = async (ctx) => {
+            const path = join(ctx.dirs.dataDir, "workspaces", "bob");
+            const exists = await stat(path).then(
                 () => true,
                 () => false,
             );
-            seen.push(exists ? "workspace made before ensureWorkspaces" : "no workspace at ensureWorkspaces");
-            await ensureWorkspaces?.(ctx);
+            log.push(exists ? "agents workspace before skills ensureWorkspaces" : "skills ensureWorkspaces");
+            await hooks.ensureWorkspaces?.(ctx);
+        };
+        inner.start = async (ctx) => {
+            log.push("skills start");
+            await hooks.start?.(ctx);
+        };
+        inner.stop = async () => {
+            log.push("skills stop");
+            await hooks.stop?.();
         };
 
         await startReady(agents);
+        await daemons.pop()?.stop();
 
-        assert.deepEqual(seen, ["no runtime at checkModels", "no workspace at ensureWorkspaces"]);
+        // The report delivery watches the instance and the conversation documents: two subscriptions, both dropped.
+        assert.deepEqual(
+            log.filter((entry) => !entry.startsWith("other")),
+            [
+                "skills checkModels",
+                "skills ensureWorkspaces",
+                "skills start",
+                "agents subscribes",
+                "agents subscribes",
+                "agents unsubscribes",
+                "agents unsubscribes",
+                "skills stop",
+            ],
+        );
     });
 
     it("reaches the agents runtime through connectAgents", async () => {
