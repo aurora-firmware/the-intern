@@ -6,6 +6,7 @@ import type { Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import { defineConfigSection } from "../../src/config/config_file.ts";
 import { WORKER_THREAD_COUNT } from "../../src/daemon/constants.ts";
 import {
     type DaemonComponent,
@@ -247,6 +248,94 @@ describe("runDaemon startup", () => {
         await until(() => daemon.phase() === "ready", "the daemon to be ready");
 
         assert.equal(linesMatching(fixture.lines, "versions changed").length, 0);
+    });
+});
+
+describe("runDaemon prepareFiles", () => {
+    const flagSection = defineConfigSection<{ value: string }>({
+        name: "flag",
+        defaults: () => ({ value: "default" }),
+        parse: () => ({ value: "parsed" }),
+        serialize: (value) => ({ value: value.value }),
+    });
+
+    it("builds the configuration store from the configuration a component's prepareFiles returns", async () => {
+        const fixture = await createFixture();
+        let seen: string | undefined;
+        const component: DaemonComponent = {
+            name: "preparer",
+            async prepareFiles({ config }) {
+                return { values: new Map([["flag", { value: "prepared" }]]), fingerprint: config.fingerprint };
+            },
+            async start(ctx) {
+                seen = ctx.config.current(flagSection).value;
+            },
+        };
+        const daemon = fixture.start({ sections: [flagSection], components: [component] });
+        await until(() => daemon.phase() === "ready", "the daemon to be ready");
+
+        assert.equal(seen, "prepared");
+    });
+
+    it("hands each prepareFiles the directories and the loaded configuration, and keeps it when it returns nothing", async () => {
+        const fixture = await createFixture();
+        const received: string[] = [];
+        let seen: string | undefined;
+        const component: DaemonComponent = {
+            name: "preparer",
+            async prepareFiles({ dirs, config }) {
+                received.push(dirs.stateDir, String((config.values.get("flag") as { value: string }).value));
+                return undefined;
+            },
+            async start(ctx) {
+                seen = ctx.config.current(flagSection).value;
+            },
+        };
+        const daemon = fixture.start({ sections: [flagSection], components: [component] });
+        await until(() => daemon.phase() === "ready", "the daemon to be ready");
+
+        assert.deepEqual(received, [fixture.env.stateDir, "default"]);
+        assert.equal(seen, "default");
+    });
+
+    it("runs no prepareFiles while another daemon owns the state directory", async () => {
+        const fixture = await createFixture();
+        const first = fixture.start();
+        await until(() => first.phase() === "ready", "the first daemon to be ready");
+        fixture.lines.length = 0;
+        let isPrepared = false;
+        const component: DaemonComponent = {
+            name: "preparer",
+            async prepareFiles() {
+                isPrepared = true;
+                return undefined;
+            },
+        };
+
+        const second = fixture.start({ components: [component] });
+
+        assert.equal(await second.exited, 1);
+        assert.match(linesMatching(fixture.lines, "ERROR")[0], /step=3/);
+        assert.equal(isPrepared, false);
+    });
+
+    it("names step 3, releases ownership and settles with 1 when prepareFiles throws", async () => {
+        const fixture = await createFixture();
+        const component: DaemonComponent = {
+            name: "preparer",
+            async prepareFiles() {
+                throw new Error("could not seed the files");
+            },
+        };
+        const daemon = fixture.start({ components: [component] });
+
+        assert.equal(await daemon.exited, 1);
+
+        const failure = linesMatching(fixture.lines, "ERROR");
+        assert.equal(failure.length, 1);
+        assert.match(failure[0], /step=3/);
+        assert.match(failure[0], /could not seed the files/);
+        assert.equal(await exists(join(fixture.env.stateDir, "owner.lock")), false);
     });
 });
 
