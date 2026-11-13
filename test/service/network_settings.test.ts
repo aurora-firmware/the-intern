@@ -7,6 +7,7 @@ import { loadConfig } from "../../src/config/config_file.ts";
 import { type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { networkSection } from "../../src/listeners/network_section.ts";
+import { roleInstructionPath } from "../../src/skills/internal_folder.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const WAIT_TIMEOUT_MS = 20_000;
@@ -58,7 +59,8 @@ describe("the network settings in the configuration file", () => {
         await first.stop();
 
         const text = await readFile(file, "utf8");
-        assert.match(text, /Review hard\./);
+        assert.doesNotMatch(text, /Review hard\./);
+        assert.equal(await readFile(roleInstructionPath(env.dataDir, "reviewer"), "utf8"), "Review hard.");
         assert.match(text, /\[network\]\naddress = "192\.168\.1\.5"\nport = 8080/);
 
         const second = await start(env);
