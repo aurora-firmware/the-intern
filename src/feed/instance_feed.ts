@@ -1,8 +1,8 @@
 /**
  * The instance scope of the observation feed (S-002 REQ-014, REQ-011, REQ-022): every conversation with its status, the
- * worker threads in use, and then conversations being created, runs starting and finishing, admission changes and
- * settings changes. Publishing never waits for a subscriber; one that falls too far behind is closed with reason
- * `lagging`.
+ * worker threads in use, and then conversations being created, runs starting and finishing, admission changes,
+ * settings changes and file changes. Publishing never waits for a subscriber; one that falls too far behind is closed
+ * with reason `lagging`.
  */
 
 import type { Admission, AdmissionSnapshot } from "../admission/admission.ts";
@@ -14,6 +14,7 @@ import { readConversationMeta } from "../host/seating.ts";
 import type { JobStatus } from "../jobs/job_model.ts";
 import type { Job, JobChange, JobStore } from "../jobs/job_store.ts";
 import { type ConversationListing, conversationStatus } from "../service/conversation_read_operations.ts";
+import type { FileChange, FileChangeHub } from "../skills/file_store.ts";
 import { createSubscription, FEED_MAX_PENDING, type Subscription } from "./observation_feed.ts";
 
 export type InstanceSnapshot = {
@@ -29,6 +30,7 @@ export type InstanceDelta = { seq: number } & (
     | { type: "status_changed"; conversationId: string; status: ConversationListing["status"] }
     | { type: "admission_changed"; admission: AdmissionSnapshot }
     | { type: "settings_changed"; section: string }
+    | ({ type: "files_changed" } & FileChange)
     | { type: "job_created"; job: Job }
     | { type: "job_changed"; number: string; fields: Extract<JobChange, { type: "job_changed" }>["fields"] }
     | { type: "job_worklog_added"; number: string; entry: Extract<JobChange, { type: "worklog_added" }>["entry"] }
@@ -69,9 +71,10 @@ export async function createInstanceFeed(options: {
     admission: Admission;
     config: ConfigStore;
     jobStore: JobStore;
+    fileChanges: FileChangeHub;
     maxPending?: number;
 }): Promise<InstanceFeed> {
-    const { host, admission, config, jobStore, maxPending = FEED_MAX_PENDING } = options;
+    const { host, admission, config, jobStore, fileChanges, maxPending = FEED_MAX_PENDING } = options;
     const sinks = new Set<Sink & { nextSeq(): number }>();
     const busyById = new Map<string, boolean>();
     const factsById = new Map<string, ConversationFacts>();
@@ -206,6 +209,7 @@ export async function createInstanceFeed(options: {
 
     const stopAdmission = admission.onChange((snapshot) => publish({ type: "admission_changed", admission: snapshot }));
     const stopConfig = config.onChange(({ section }) => publish({ type: "settings_changed", section }));
+    const stopFiles = fileChanges.onChange(({ path, kind }) => publish({ type: "files_changed", path, kind }));
     let isClosed = false;
 
     function snapshot(): InstanceSnapshot {
@@ -277,6 +281,7 @@ export async function createInstanceFeed(options: {
             metaWatch.stop();
             stopAdmission();
             stopConfig();
+            stopFiles();
             stopJobs();
             for (const sink of [...sinks]) sink.end("stopped");
             sinks.clear();
