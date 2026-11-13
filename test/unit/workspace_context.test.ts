@@ -95,6 +95,21 @@ describe("createWorkspaceContextLoader", () => {
         );
     });
 
+    it("loads the absolute skill paths and skips skill names without a diagnostic", async () => {
+        const skillDir = join(root, "role-skills", "role-skill");
+        await writeSkill(skillDir, "role-skill");
+
+        const context = createWorkspaceContextLoader({ logger: recordingLogger(entries) }).load(
+            makeSeat(["about-the-intern", skillDir]),
+        );
+
+        assert.deepEqual(
+            context.roleSkills.map((skill) => skill.name),
+            ["role-skill"],
+        );
+        assert.deepEqual(entries, []);
+    });
+
     it("leaves out a missing skill folder and logs its path", () => {
         const missing = join(root, "no-such-skill");
 

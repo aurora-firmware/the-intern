@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import {
     type LoadSkillsResult,
     loadProjectContextFiles,
@@ -26,8 +26,9 @@ function logDiagnostics(logger: Logger, result: LoadSkillsResult, fallbackPath: 
 
 function loadRoleSkills(seat: Seat, logger: Logger): Skill[] {
     const skills: Skill[] = [];
+    // Interim until T-349 loads skills by name: a name is skipped, only an absolute path loads.
     // One call per path, so a diagnostic without a path still names the folder that caused it.
-    for (const skillPath of seat.skills) {
+    for (const skillPath of seat.skills.filter((entry) => isAbsolute(entry))) {
         const result = loadSkills({
             cwd: seat.workspace,
             agentDir: EMPTY_AGENT_DIR,
