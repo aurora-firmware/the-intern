@@ -6,6 +6,7 @@ import type { Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { defineConfigSection } from "../../src/config/config_file.ts";
 import { WORKER_THREAD_COUNT } from "../../src/daemon/constants.ts";
 import {
@@ -433,6 +434,32 @@ describe("runDaemon startup failures", () => {
         assert.equal(failure.length, 1);
         assert.match(failure[0], /step=3/);
         assert.match(failure[0], new RegExp(`pid ${process.pid}`));
+    });
+
+    it("names step 3, the role and the path when an older role skill path can't be converted, leaving the file unchanged", async () => {
+        const fixture = await createFixture();
+        const path = join(fixture.env.root, "not-a-skill");
+        await mkdir(path, { mode: 0o700 });
+        const configFile = join(fixture.env.configDir, "config.toml");
+        const original = `[roles.reviewer]\ntools = ["read"]\nskills = ["${path}"]\n`;
+        await writeFile(configFile, original);
+        const agents = await createAgentsComponent({
+            logger: createLogger({ verbose: false, stream: { write: () => true } }),
+        });
+        const daemon = fixture.start({
+            sections: agents.sections,
+            components: [agents.component],
+            operations: agents.operations,
+        });
+
+        assert.equal(await daemon.exited, 1);
+
+        const failure = linesMatching(fixture.lines, "ERROR");
+        assert.equal(failure.length, 1);
+        assert.match(failure[0], /step=3/);
+        assert.match(failure[0], /reviewer/);
+        assert.ok(failure[0].includes(path), failure[0]);
+        assert.equal(await readFile(configFile, "utf8"), original);
     });
 
     it("names step 5, releases ownership and settles with 1 when a model check fails", async () => {
