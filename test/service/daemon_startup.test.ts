@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, chmod, readdir, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import type { Models } from "@earendil-works/pi-ai";
@@ -21,6 +21,7 @@ import { recordOpenedVersions, runningVersions } from "../../src/host/versions.t
 import { JOB_SCHEMA_VERSION } from "../../src/jobs/job_store.ts";
 import { ServiceError } from "../../src/service/operations.ts";
 import type { DaemonStatus } from "../../src/service/status_operation.ts";
+import { createSkillsComponent } from "../../src/skills/skills_component.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -336,6 +337,44 @@ describe("runDaemon prepareFiles", () => {
         assert.match(failure[0], /step=3/);
         assert.match(failure[0], /could not seed the files/);
         assert.equal(await exists(join(fixture.env.stateDir, "owner.lock")), false);
+    });
+
+    it("names step 3 and the path when the internal folder cannot be written", async () => {
+        const fixture = await createFixture();
+        const blocker = join(fixture.env.dataDir, "skills");
+        await writeFile(blocker, "a file where the skills folder belongs\n");
+        const skills = createSkillsComponent({
+            logger: createLogger({ verbose: false, stream: { write: () => true } }),
+        });
+        const daemon = fixture.start({ sections: skills.sections, components: [skills.component] });
+
+        assert.equal(await daemon.exited, 1);
+
+        const failure = linesMatching(fixture.lines, "ERROR");
+        assert.equal(failure.length, 1);
+        assert.match(failure[0], /step=3/);
+        assert.ok(failure[0].includes(blocker), failure[0]);
+        assert.equal(await exists(join(fixture.env.stateDir, "owner.lock")), false);
+    });
+
+    it("names step 1 and the path when a skills search path is readable by other accounts", async () => {
+        const fixture = await createFixture();
+        const searchPath = join(fixture.env.root, "shared-skills");
+        await mkdir(searchPath);
+        await chmod(searchPath, 0o755);
+        await writeFile(join(fixture.env.configDir, "config.toml"), `[skills]\npaths = ["${searchPath}"]\n`);
+        const skills = createSkillsComponent({
+            logger: createLogger({ verbose: false, stream: { write: () => true } }),
+        });
+        const daemon = fixture.start({ sections: skills.sections, components: [skills.component] });
+
+        assert.equal(await daemon.exited, 1);
+
+        const failure = linesMatching(fixture.lines, "ERROR");
+        assert.equal(failure.length, 1);
+        assert.match(failure[0], /step=1/);
+        assert.ok(failure[0].includes(searchPath), failure[0]);
+        assert.match(failure[0], /accessible only to the service account/);
     });
 });
 
