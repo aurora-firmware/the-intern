@@ -1,7 +1,7 @@
 ---
 id: S-007
 title: Schedules
-version: '0.3'
+version: '0.4'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-07'
 author: planner
@@ -177,11 +177,13 @@ These follow S-005's conventions: `--json`, exit codes, and short numbers in any
 ### Exposed: the Schedules page
 
 A new page in S-006's sidebar at `/ui/#/schedules` (REQ-012). S-006's Users row lets later specs add pages, so S-006
-itself doesn't change. The page calls only these:
+itself doesn't change. `roles.list`, `models.list` and `workspaces.list` fill the Role, Model, Thinking level and
+Workspace choices of the page's create and change forms, as they fill the choices of S-006's Roles page. The page calls
+only these:
 
 | Page | Reads and feed | Actions |
 |---|---|---|
-| Schedules | `schedules.list`, `schedules.get`, `schedules.runs`, the instance feed | `schedules.create`, `schedules.change`, `schedules.remove`, `schedules.run` |
+| Schedules | `schedules.list`, `schedules.get`, `schedules.runs`, `roles.list`, `models.list`, `workspaces.list`, the instance feed | `schedules.create`, `schedules.change`, `schedules.remove`, `schedules.run` |
 
 The Job page of a scheduled run shows the entry, the fire time and whether it was run on demand.
 
@@ -795,3 +797,6 @@ None. Feature Architecture settled the scheduling library question (`docs/develo
 |------|-------------|-----|----------------|
 | 2026-11-07 | v0.2. REQ-007: the daemon can't see a sleep, so a due time within a minute of the daemon's next check still fires. REQ-013 and Interfaces: an interrupted tool call settles as an error and isn't repeated, and a same-id call acts once. REQ-001, AC-001.1: a cron that can never be due is refused. REQ-003, AC-003.4: removing a role is refused when an entry names its per-role default workspace, because the next start would otherwise stop. Open Questions closed. | Feature Architecture spec findings, 2026-11-07. No approved journey changes. | S-007's tasks |
 | 2026-11-07 | v0.3. Interfaces and AC-008.1: `schedules.run`'s key is optional, as for `roles.create`, and the command takes none; the same-key repeat is tested through the operation. | Gate 2 review of the task plan. | T-305, T-313 |
+| 2026-11-12 | spec-truth reconciliation — FAIL | v0.3 confirmed against T-282 to T-324, B-029 and B-032 to B-035, except that the Interfaces Schedules page row omits the page's roles.list, models.list and workspaces.list reads; amendment routed. Success Criterion 5 waits for T-311 and AC-014.3 for T-325 | none |
+| 2026-11-13 | v0.4. Interfaces, the Schedules page: the page also reads `roles.list`, `models.list` and `workspaces.list`, which fill the Role, Model, Thinking level and Workspace choices of its create and change forms. No behaviour changes and no identifier is added, changed or retired. S-004 v0.16 rewords its Assumptions to match. | Spec-truth reconciliation of 2026-11-12, finding D1: the built page makes these reads for the forms T-320 added, and the row said the page calls only the others. Approved by the product owner at Gate 1, 2026-11-13. | None; spec text only. T-325 is widened to record S-007 as built in the system overview |
+| 2026-11-13 | spec-truth reconciliation — PASS | v0.4 confirmed: the Schedules page row lists the roles.list, models.list and workspaces.list reads the built page makes (D1 of 2026-11-12 resolved); Success Criterion 5 still waits for T-311 and AC-014.3 for T-325 | none |
