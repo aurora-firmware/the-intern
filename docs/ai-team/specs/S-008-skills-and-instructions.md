@@ -530,6 +530,15 @@ REQ-006). An agent already seated with it goes without that part, with a diagnos
 
 **Verification:** test — `test/service/role_operations.test.ts`.
 
+#### AC-007.3 — Missing files
+
+- **Given:** a deleted `instructions/common.md`, and a team role `reviewer` whose file is deleted
+- **When:** a `bob` agent makes a model request, and a team member seats `reviewer` in a conversation
+- **Then:** the `bob` prompt goes without the common prompt and the daemon logs a diagnostic; the seat is refused
+  `invalid_input` naming `instructions/roles/reviewer.md`
+
+**Verification:** test — `test/service/instruction_files.test.ts`.
+
 #### AC-007.4 — A hand edit and a seated agent protect the file
 
 - **Given:** team role `reviewer`, read with `roles.list`, then its file edited by hand, and a running agent seated as
@@ -540,12 +549,13 @@ REQ-006). An agent already seated with it goes without that part, with a diagnos
 
 **Verification:** test — `test/service/role_operations.test.ts`.
 
-#### AC-007.3 — Missing files
+#### AC-007.5 — Every way of seating a role whose file is missing
 
-- **Given:** a deleted `instructions/common.md`, and a team role `reviewer` whose file is deleted
-- **When:** a `bob` agent makes a model request, and a team member seats `reviewer` in a conversation
-- **Then:** the `bob` prompt goes without the common prompt and the daemon logs a diagnostic; the seat is refused
-  `invalid_input` naming `instructions/roles/reviewer.md`
+- **Given:** team role `reviewer` whose instruction file is deleted
+- **When:** a team member calls `jobs.create` naming `reviewer`, and a running agent hands off to `reviewer`, then
+  invokes a `reviewer` agent
+- **Then:** `jobs.create` is refused `invalid_input` naming the file and creates no job; the handoff and the invocation
+  each return an error result naming the file, and the calling agent keeps its seat
 
 **Verification:** test — `test/service/instruction_files.test.ts`.
 
@@ -633,6 +643,15 @@ states, and SHALL be published as `files_changed`.
 - **Given:** a running daemon
 - **When:** `files.read` is called for `/etc/passwd`, for `config.toml`, and for a skill file that doesn't exist
 - **Then:** the first two are refused `invalid_input`, the third `not_found`
+
+**Verification:** test — `test/service/file_operations.test.ts`.
+
+#### AC-010.3 — A write is announced
+
+- **Given:** a team member subscribed to the instance feed
+- **When:** `files.write` saves `instructions/roles/gp.md`, and `instructions.restore gp` runs after it
+- **Then:** two `files_changed` deltas arrive, each naming the file and its kind; a hand edit of the same file sends
+  none
 
 **Verification:** test — `test/service/file_operations.test.ts`.
 
