@@ -180,10 +180,11 @@ code of our own, apart from the two bounded exceptions in decision 4.
 
    **First bounded exception: the-intern's own facts about a conversation, and redelivery from them.**
    - Facts the-intern owns about a conversation live in its own pi-durable documents: held messages (`held`),
-     awaiting links (`awaiting`), the parked state (`parked`), the abort mark (`aborted`) and the closed mark
-     (`closed`) in the conversation's `intern.conversation` document, and creation keys in `intern.invocations` and
-     `intern.idempotency`, including the front desk's fixed key, written in the commit that creates the front desk
-     (S-001 REQ-021). Each is written in the commit that changes it, together with the change it describes.
+     awaiting links (`awaiting`), the parked state (`parked`), the abort mark (`aborted`), the closed mark (`closed`)
+     and the enabled set (`enabledSkills`) in the conversation's `intern.conversation` document, and creation keys in
+     `intern.invocations` and `intern.idempotency`, including the front desk's fixed key, written in the commit that
+     creates the front desk (S-001 REQ-021). Each is written in the commit that changes it, together with the change
+     it describes.
    - The abort mark records that a conversation's invoker is owed an "aborted" report (S-001 REQ-019). It is set only
      on the conversation an abort names, never on one a cascade or a job abort reaches, and only when the
      conversation was invoked and its invoker still awaits it. It is set in the abort's own commit: the one
@@ -211,9 +212,27 @@ code of our own, apart from the two bounded exceptions in decision 4.
      compaction's summary is admitted outside the section. A summary already finished may still follow the mark; no
      model turn follows it. A document written without the field reads as not closed. `conversations.submit`,
      `submissions.withdraw`,
-     `conversations.abort`, `conversations.reset`, `conversations.compact` and `conversations.seat` naming the
-     conversation, the `steer` tool and the front-desk steering tools aimed at it, and the coordination and job tools
-     called from it, refuse a closed conversation (S-001 REQ-026), and no redelivery path submits input to one.
+     `conversations.abort`, `conversations.reset`, `conversations.compact`, `conversations.seat`, `skills.enable` and
+     `skills.disable` naming the conversation, the `steer` tool and the front-desk steering tools aimed at it, and the
+     coordination and job tools called from it, refuse a closed conversation (S-001 REQ-026, S-008 REQ-006), and no
+     redelivery path submits input to one.
+   - The enabled set (`enabledSkills`) holds the skill names the conversation's agent has enabled (S-008 REQ-006). It
+     is written in the commit of the change it describes. Every seat write (`writeSeat` in `src/host/seating.ts`: a
+     creation, a seat change, a handoff and a reset with a seat) sets it to the new role's default skill names in the
+     commit that writes the seat, its seat record and the pi-durable agent, so no crash leaves the new seat with the old
+     set (S-008 AC-006.4). `skills.enable` and `skills.disable` for a conversation set it in one commit with the
+     `intern.skills` entry that records the change, inside `inOpenConversation`. That entry is a record, as the seat
+     record is: it carries no model message, so ADR-003 doesn't apply to it, and it isn't an input entry for repair
+     rule 3 or the stop mark. A reset (S-001 REQ-011) and a compaction leave the field alone, so the set survives them.
+     It delivers no input, so it adds no redelivery path, and nothing repairs it.
+   - One upgrade write converts the documents written before S-008: they have no `enabledSkills`, and their stored
+     tool selection lacks `skill` (S-008 REQ-008). At step 7, after admission is restored and before the repair rules
+     and `host.resume()`, each such conversation gets, in one commit of its own, the running version's default skill
+     names of its seat's role (none when the role is gone) and `skill` added to its seat's tools and to its pi-durable
+     tool selection. A daemon document, `intern.upgrades`, records that the write has finished, so later starts skip
+     it; a crash before that record repeats it only for the documents still without the field. Until then a read takes
+     a missing field as the role's current default skill names. The write converts stored values once. It delivers no
+     input and is not a recovery: it adds no redelivery path and no repair rule.
    - The daemon orders, per job, the job abort's closed-mark commits with every input admission to a conversation of
      the job (`Conversation.submit`, the hold commit, report and held-message delivery, the reminder and resume
      inputs), every control operation on one, and every creation of one: an agent invocation, or a job's lead start
@@ -482,3 +501,4 @@ second connection open. One shared handle orders every transaction and closes wi
 | 2026-11-06 | Decision 4: a new fact, the stop mark (`stopped`), set in the abort's own commit on a lead a team member's abort names, live until an input entry follows it. A live mark decides the turn-end rule first, the rule is also checked when such an abort ends and when another run of the job ends while the mark is live, and the startup check reads it. Decision 2: the export route's own two refusals, one download at a time (`busy`) and too little free space (`conflict`), and the removal of leftovers moves to the network listener component's start hook, which runs with or without `[network]`. | S-006 re-review of S-004 v0.13 REQ-008 and S-003 v0.5 REQ-016. Product owner decision of 2026-11-06: a team member's abort of a parked lead also blocks its job, with no reminder at the next start. That abort settles no input, so a fact is needed, and this decision requires its amendment first. |
 | 2026-11-07 | Decision 4, first bounded exception: the abort's own commit clears only a `parked` that waits for reports. A `parked` that waits for an answer stays through it, and the job's abort clears that one in its own commit, because it closes the lead. | Reconciliation of S-006, finding F2: the old text cleared every park, which contradicted S-001 REQ-014 and S-004 REQ-006 and REQ-018 rule 2. S-001 v0.15 REQ-008 states the ruling, and T-270 brings the code to it. |
 | 2026-11-07 | Decision 4, second bounded exception: "no timer that checks jobs" doesn't cover the scheduler. A fire is a job source, repairs nothing and uses the existing pairing of a job write and a lead start. The decision itself is unchanged. | Second architecture consistency review of S-007: read literally, the sentence ruled out S-007 REQ-006's check for an open scheduled run at a fire. |
+| 2026-11-13 | Decision 4, first bounded exception: a new fact, the enabled set (`enabledSkills`) in the conversation's `intern.conversation` document. Every seat write sets it to the new role's default skill names in the seat's own commit, and `skills.enable` and `skills.disable` set it in one commit with the `intern.skills` record, which is not an input entry; it adds no redelivery path. `skills.enable` and `skills.disable` join the operations a closed conversation refuses. One upgrade write, at step 7 before the repair rules and `host.resume()`, gives each document written before S-008 its role's current default skill names and adds `skill` to its tools, once, recorded in the daemon document `intern.upgrades`. | S-008 REQ-006, AC-006.3 and AC-006.4, REQ-008; S-001 v0.18 REQ-017; S-008 architecture consistency review, which asked for the fact to be recorded here. The decision requires a new kind of fact to amend it first. S-008 feature architecture. |

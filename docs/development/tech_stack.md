@@ -5,8 +5,8 @@ This file records the answers to the "Decisions needed" of the development infra
 one section per component, and each answer sits under the question it settles. A question that is still open says so
 and names where it is decided.
 
-Control endpoint, Web interface and Schedules aren't among those components: they record the technology choices of
-S-003, S-006 and S-007.
+Control endpoint, Web interface, Schedules and Skills and instructions aren't among those components: they record the
+technology choices of S-003, S-006, S-007 and S-008.
 
 ## Development environment
 
@@ -193,6 +193,49 @@ moves a time that doesn't exist forward, so reading it back shows it, and takes 
 This was measured on Node 24.22.0 in Madrid, Lord Howe and Havana.
 
 **Where does the local time zone come from?** The daemon process's own, through `Date`. S-007 has no time zone setting.
+
+## Skills and instructions
+
+These answers record S-008's technology choices. The design is in [architecture.md](architecture.md), Skills and
+instructions, and the durable parts in
+[ADR-009](../ai-team/decisions/ADR-009-the-internal-folder-is-the-live-copy-of-shipped-text-tracked-by-a-manifest.md).
+S-008 adds no dependency.
+
+**What finds and reads skills?** `src/skills/skill_discovery.ts`, a walk of our own, with `parseFrontmatter` from
+`@earendil-works/pi-coding-agent` 1.4.0, so a `SKILL.md` reads as pi agent reads it. pi agent's `loadSkills` and
+`loadSkillsFromDir` were read in `dist/core/skills.js` on 2026-11-13, and differ from S-008 REQ-004 in five ways:
+
+| pi agent's loader | S-008 REQ-004 |
+|---|---|
+| The first of two copies of a name wins | A later search path wins, and the workspace wins over all |
+| Copies in one folder come in `readdir` order | The copy whose folder path sorts first by bytes wins, with a diagnostic |
+| A `.md` file with a description at a source's root is a skill | A skill is a folder holding `SKILL.md` |
+| `.gitignore`, `.ignore` and `.fdignore` hide folders, and hidden folders and `node_modules` are skipped | Skills are found at any depth below a source |
+| A shadowed copy is a collision diagnostic, with no record of its source | `skills.list` shows each shadowed copy with its source |
+
+Its result would have to be undone and redone, so the walk is ours. It is synchronous in pi agent; ours uses
+`node:fs/promises`, because the catalog is read before every model request.
+
+**What writes the skill listing?** `renderSkillListing` in `src/prompt/role_prompt.ts`. pi agent's
+`formatSkillsForPrompt(skills, fileReadTool)` can only tell the model to load a skill with `read`, with `bash`, or with
+no tool named, and S-008 REQ-008 asks the listing to name `skill`. The listing keeps the Agent Skills
+`<available_skills>` shape that function writes.
+
+**Which size limit does `skill` use?** `truncateHead` from `@earendil-works/pi-coding-agent`, with its
+`DEFAULT_MAX_LINES` (2000) and `DEFAULT_MAX_BYTES` (50 KiB), the limits of pi agent's `read` tool (S-008 REQ-008). A pi
+upgrade that changes them changes `skill` with them.
+
+**What is a version token?** The SHA-256 hex of the file's bytes, from `fingerprintOf` in `src/config/config_file.ts`,
+the configuration file's fingerprint (ADR-009 decision 5).
+
+**How is UTF-8 text checked?** `new TextDecoder("utf-8", { fatal: true })`, which throws on bytes that aren't UTF-8.
+
+**How does the `about-the-intern` skill stay in step with the manual?** It bundles byte copies of the manual pages it
+draws from, and a unit test compares them with `docs/manual/` (S-008 REQ-017). No generator: a copy is the simplest
+thing a check can compare exactly, and VitePress markup in a page reads well enough to a model.
+
+**How does an agent run `bob`?** pi-durable's `createBashTool` with a `prepare` hook, which adds the instance's
+runtime directory, the conversation id and a launcher folder to the command's environment (S-008 REQ-014).
 
 ## Local runs and diagnostics
 

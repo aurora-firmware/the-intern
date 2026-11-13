@@ -174,8 +174,9 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   usage errors and the notice for a reserved group, and otherwise runs the command and returns its exit code. The table
   lists `CommandSpec` entries (group, verb, positionals, options, `isData`, `callsService`, `run`), and the parser adds
   `--help` to each, `--json` to a data command and `--runtime-dir` to a command that calls the service. The groups are
-  `jobs`, `conversations`, `roles`, `workspaces`, `models` and `schedules` (`jobs_commands.ts`,
-  `conversations_commands.ts`, `roles_commands.ts`, `schedules_commands.ts`), and the top-level commands are `serve`,
+  `jobs`, `conversations`, `roles`, `workspaces`, `models`, `schedules`, `skills` and `instructions`
+  (`jobs_commands.ts`, `conversations_commands.ts`, `roles_commands.ts`, `schedules_commands.ts`, `skills_commands.ts`,
+  `instructions_commands.ts`), and the top-level commands are `serve`,
   `status`, `usage`, `export`, `import`, `follow` and
   `chat` (`instance_commands.ts`, `follow_commands.ts`, `chat_command.ts`, `chat_terminal.ts`). Text output is built in
   `job_text.ts`, `conversation_text.ts` and `feed_text.ts`. Data an agent or a team member wrote goes through
@@ -234,9 +235,9 @@ A requirement number with no spec named in this section is S-001's.
 
 | Component | Responsibility | Notes |
 |---|---|---|
-| Role catalog | Holds the shipped roles (`bob`, `gp`, `desk`), the team's own roles, their instructions, tools, skills and defaults, and the registered workspaces, each checked when it is registered | Changed by team members through settings operations (REQ-003, REQ-018). Consumes the-intern's settings, its shipped tools and pi agent's default model and thinking level |
-| Seating | Seats an agent of a role in a conversation, with optional model, thinking level and workspace overrides, so that later turns use that seat, and records who seated it | The only path that changes a conversation's seat. Consumes the role catalog and the pi-durable agent of each conversation |
-| Role prompt | Builds what the model sees: the-intern's preamble, role instructions, role skills, workspace instructions (`AGENTS.md`/`CLAUDE.md`) and workspace skills | Stays byte-stable while the seat and the role are unchanged (AC-005.4) |
+| Role catalog | Holds the shipped roles (`bob`, `gp`, `desk`), the team's own roles, their tools, default skill names and defaults, and the registered workspaces, each checked when it is registered | Changed by team members through settings operations (REQ-003, REQ-018). A role's instructions are its instruction file in the internal folder, not a catalog value (S-008 REQ-007). Consumes the-intern's settings, its shipped tools and pi agent's default model and thinking level |
+| Seating | Seats an agent of a role in a conversation, with optional model, thinking level and workspace overrides, so that later turns use that seat, and records who seated it | The only path that changes a conversation's seat. Each seat write also resets the agent's enabled set to the role's default skill names, in the same commit (S-008 REQ-006). Consumes the role catalog and the pi-durable agent of each conversation |
+| Role prompt | Builds what the model sees before each model request: the common prompt, the role's instruction file, the lead's duty, the workspace's instructions (`AGENTS.md`/`CLAUDE.md`) and the listing of the agent's enabled skills | Reads every part again for each request and stays byte-stable while none of them changes (AC-005.4; S-008 REQ-007, REQ-015; ADR-009 decision 6). Built under Skills and instructions below |
 | Agent coordination | Agent-callable handoff, agent invocation and steer capabilities; parking and continuing invoking conversations; the report-back clean-up step; the depth cap and the worker threads | Every role is offered the same coordination capabilities in a job's conversations, and none in the front desk (REQ-022). Consumes seating, conversation reset, compaction and fork, conversation creation, the inbox of the target conversation, and each conversation's own `intern.conversation` document (below) |
 | Entry routing | Starts a job's lead conversation for each job source with the role it names (`bob` when it names none) and records its origin; at startup, makes sure the front desk exists and records its conversation id (REQ-021); serves team members' requests to reset conversations | Holds no channel knowledge beyond choosing the role and recording the origin. Called by the Jobs component when a job is created, and by startup for the front desk |
 | Front-desk tools | The tools offered only in the front desk: the job tools that name a job, the state reads, the steering of a job's conversations and the schedule tools (REQ-022) | Calls the job operations (S-004), the `schedules.*` operations (S-007) and the same paths as `conversations.submit` and `conversations.abort`, recording the jobs and the input it passes on as from the front desk (REQ-023) |
@@ -245,7 +246,8 @@ A requirement number with no spec named in this section is S-001's.
 **The conversation's own document.** Each conversation's `intern.conversation` document holds the conversation's parked
 state, the messages held for it while it is parked, the invoked conversations whose reports it awaits, its abort mark,
 which records that its invoker is owed an "aborted" report (REQ-019), its stop mark, which records that a team member's
-abort stopped a job's lead (S-004 REQ-008), and its closed mark (REQ-026). They are facts
+abort stopped a job's lead (S-004 REQ-008), its closed mark (REQ-026) and its agent's enabled set (S-008 REQ-006). They
+are facts
 the-intern owns, written in the commit that changes them, and the only recovery from them is redelivery (ADR-001
 decision 4). An abort's facts are written in one commit just before pi-durable's abort; when a job's abort closes the
 conversation, the closed mark and the removal of its queued items are written in that same commit. The document is
@@ -298,13 +300,12 @@ small.
 - **Durability belongs to the runtime.** Recovery, exactly-once admission of input, queued input and checkpoints come
   from pi-durable. The daemon adds no retry loops, intake tables or recovery code of its own, except two bounded
   exceptions (ADR-001 decision 4). The first: the facts the-intern owns about a conversation (held messages, awaiting
-  links, parked state, the abort mark, the stop mark, the closed mark and creation keys) live in its own documents, and
-  the only
-  recovery is redelivering the input those facts show as undelivered, made safe to repeat by pi-durable request ids.
-  Each daemon-owned fact is committed in the same atomic commit as the change it describes, except for an abort. An
-  abort's facts are written in one commit just before pi-durable's abort, not in pi-durable's abort commit. The
-  second: job writes are committed before their pi-durable change, and four startup repair rules are the only job
-  recovery (S-004 REQ-018).
+  links, parked state, the abort mark, the stop mark, the closed mark, the enabled set and creation keys) live in its
+  own documents, and the only recovery is redelivering the input those facts show as undelivered, made safe to repeat by
+  pi-durable request ids. Each daemon-owned fact is committed in the same atomic commit as the change it describes,
+  except for an abort. An abort's facts are written in one commit just before pi-durable's abort, not in pi-durable's
+  abort commit. The second: job writes are committed before their pi-durable change, and four startup repair rules are
+  the only job recovery (S-004 REQ-018).
 
 ## Web interface
 
@@ -802,11 +803,264 @@ and `setTimeout`. `schedule_time.test.ts` sets `process.env.TZ`, which Node appl
 Restarting within the same minute doesn't reach the key, because the new window opens after the due time. So AC-016.1
 also restarts with the test clock set back before the due time, which is the case the key is for.
 
+## Skills and instructions
+
+This is how S-008's behaviour is built. A requirement number with no spec named in this section is S-008's. The
+durable parts are decided in ADR-009 (the internal folder, its manifest, the version token and the reads before each
+model request) and ADR-001 decision 4 (the enabled set and its upgrade write). Library questions are answered in
+[tech_stack.md](tech_stack.md), Skills and instructions. Everything else here can change inside its module.
+
+```
+ package src/shipped/ ──step 3: seed, upgrade (manifest)──► <data dir>/instructions, skills, shipped-files.json
+                                                                   │ read before each model request
+ config.toml [skills] paths, [roles.*] skills ──► skill catalog ◄──┤ (internal, search paths, workspace .pi/skills)
+                                                       │           │
+ intern.conversation: seat, enabledSkills ─────────────┼──► role prompt sections ──► model
+                                                       └──► skill tool ◄── agent
+ skills.*, instructions.*, files.*, roles.* ──► file store (one serial queue, tokens) ──► files_changed
+ skills.enable/disable (conversation) ──► one commit: enabledSkills + intern.skills entry ──► skills_changed
+```
+
+### Modules
+
+| Part | Where | Holds |
+|---|---|---|
+| Shipped text | `src/shipped/` | `instructions/common.md`, `instructions/roles/{bob,gp,desk}.md` and `skills/{carry-out-a-part,about-the-intern,bob-command-line}/`, laid out as the internal folder is (ADR-009 decision 1). It replaces `src/roles/shipped/`; `preamble.md` becomes `common.md` |
+| Shipped roles | `src/roles/shipped_roles.ts` | The shipped role names, their tools and their default skill names (REQ-001's table). It no longer reads any text |
+| Internal folder | `src/skills/internal_folder.ts` | The paths (`instructions/common.md`, `roleInstructionPath(dataDir, role)`, `skills/`), the manifest, ADR-009's start rule and the restores |
+| File store | `src/skills/file_store.ts` | The one serial queue for every write to an instruction or skill file, the version token, the atomic write, the allowed files of REQ-010 and the `files_changed` events |
+| Discovery | `src/skills/skill_discovery.ts` | Walks one source and reads each `SKILL.md` |
+| Resolution | `src/skills/skill_resolution.ts` | Pure: priority between sources, the order inside a source, shadowed copies, an agent's enabled skills and the missing names |
+| Configuration | `src/skills/skills_section.ts`, `src/roles/roles_section.ts` | `[skills] paths`, and roles whose `skills` are names, with the older forms kept for the migration |
+| Migration | `src/skills/config_migration.ts` | REQ-011's conversion at step 3 |
+| Prompt | `src/prompt/role_prompt.ts`, `src/prompt/prompt_sources.ts`, `src/prompt/role_prompt_extension.ts` | The pure rendering and the skill listing; the reads before each request, which replace `workspace_context.ts` and its cache; the sections |
+| `skill` tool | `src/skills/skill_tool_extension.ts` | The pi-durable extension `intern.skill-tool` |
+| Enabled set | `src/host/seating.ts`, `src/host/skill_set.ts` | The seat write that resets it; the enable and disable commit with its `intern.skills` entry; the upgrade write |
+| Component | `src/skills/skills_component.ts` | The daemon hooks, the extensions, the operations |
+| Operations | `src/service/skill_operations.ts`, `src/service/instruction_operations.ts`, `src/service/file_operations.ts`, `src/service/role_operations.ts` | `skills.*`, `instructions.*`, `files.*`, and the role operations' file writes |
+| Commands | `src/cli/skills_commands.ts`, `src/cli/instructions_commands.ts`, `src/cli/skill_text.ts` | S-005's conventions, on the client library |
+| Pages | `web/ui/components/skills_panel.ts`, `web/ui/components/file_editor.ts`, `web/ui/model/skills.ts`, `web/ui/pages/roles.ts` | The panel, the editor, their pure model, and the Roles page's Skills and instructions section |
+
+The agents component holds the skills component, so every daemon that composes the agents component has it, and
+`serve.ts` and the test fixtures don't change. `createAgentsComponent({ logger, skills? })` takes a skills component, or
+creates one with `createSkillsComponent({ logger })` when none is given; a test that needs a test-only switch, such as
+`shippedRoot`, passes its own. The agents component's `sections`, `operations` and `extensions` begin with the skills
+component's, and each of its daemon hooks first runs the skills component's hook of the same name (`prepareFiles`,
+`checkModels`, `ensureWorkspaces`, `repair`, `afterResume`, `start`); `stop` runs the skills component's last. So step
+3's `prepareFiles` runs as before, and the step 7 upgrade write runs before the jobs component's repair rules, because
+the agents component comes before the jobs component in every composition. The skills component also stays a
+`DaemonComponent` of its own, which a test may run without the agents component. Its operations reach the role catalog
+and the workspace registry through the agents component's `runtime()`, which `createAgentsComponent` hands it with
+`connectAgents`, read lazily, as the coordination extension does. The role catalog takes the internal folder's paths and
+the file store from the skills component. The module rule holds: only `src/host/` and the-intern's extensions import
+pi-durable, and `skill_resolution.ts`, `role_prompt.ts` and the internal folder's start rule decide without a harness.
+
+### Startup
+
+- **Step 1.** `rolesSection.parse` accepts a team role with no `instructions` key. It keeps the two older forms, an
+  `instructions` string and absolute paths in `skills`, apart from the names, and checks them as before (a non-empty
+  text, an absolute path). `skillsSection.parse` takes `paths`: a list of absolute paths, none listed twice.
+  `ConfigSection` gains an optional `check(value): Promise<void>`, which `loadConfig` runs after `parse`, and the
+  skills section uses it to check each path with the workspace check, `checkWorkspaceFolder` in
+  `src/workspaces/workspace_folder.ts` (S-001 REQ-018). A failure is a `ConfigError` naming `skills.paths` and the path.
+- **Step 3.** `DaemonComponent` gains `prepareFiles?({ dirs, config, logger })`, which `startUp` runs for each
+  component right after `acquireOwnership`, as part of step 3. It may return a new `LoadedConfig`, and step 4 builds the
+  `ConfigStore` from that. The skills component's hook runs ADR-009 decision 3, writes the `bob` launcher (Agents reach
+  `bob`), then the migration:
+  1. It checks first and writes nothing until every check passes. Each older skill path must be a source that is
+     itself a valid skill (it holds a `SKILL.md` that discovery reads with a description), must pass the search path
+     check, and must not give a name that another migrated path, in another folder, also gives. A failure stops
+     startup naming the role and the path, and says that the folder must be accessible only to the service account
+     when that is the reason.
+  2. It writes each role's `instructions` text to the role's instruction file through the file store. A shipped role's
+     file then differs from the manifest's hash, so it counts as edited.
+  3. It renders the file without the older keys, with each path replaced by the skill's name and each skill folder
+     added to `[skills] paths` after the existing ones, and writes it once with the configuration writer's atomic
+     `replaceFile`, refusing when the file's fingerprint has moved since step 1. It returns the configuration read
+     back from the new text. A crash between steps 2 and 3 leaves the older keys in the file, so the next start writes
+     the same instruction text again and then rewrites the file.
+- **Step 7.** The skills component's `repair` hook makes ADR-001's upgrade write before the jobs component's repair
+  rules run. The flag sits in the daemon document `intern.upgrades`, `{ done: string[] }`, with the entry
+  `enabled-skills`.
+
+### The skill catalog
+
+`readCatalog({ searchPaths, workspace })` reads every source before each use: a prompt, a `skill` call, `skills.list`,
+`skills.enable` and the allowed files of REQ-010. Nothing is cached between reads.
+
+- **Sources**, in rising priority: `<data dir>/skills`, each search path in its order, then `<workspace>/.pi/skills`. A
+  role's catalog uses the role's default workspace: its `workspace`, or its per-role default (S-001 REQ-003).
+- **Discovery.** A source folder that holds `SKILL.md` is one skill. Otherwise the walk reads its subfolders at any
+  depth, with `readdir` from `node:fs/promises` so the event loop isn't held, in byte order of the names. A folder that
+  holds `SKILL.md` is a skill, and the walk doesn't go into it: its other files are its bundled files. A file is never a
+  skill on its own. Symbolic links to folders are followed, and a set of real paths per source stops a cycle. A missing
+  source holds nothing; a missing search path also gives a diagnostic.
+- **Reading a skill.** `parseFrontmatter` from `@earendil-works/pi-coding-agent` reads the frontmatter, as pi agent's
+  loader does. The name is the frontmatter's `name`, or the folder's name when it has none. A file that can't be read
+  or parsed, or has no non-empty `description`, is left out with the reason. A name that breaks the Agent Skills name
+  rule is kept with a diagnostic, as pi agent keeps it. Every other field is ignored, `disable-model-invocation`
+  included (REQ-008).
+- **Resolution.** Inside a source, the copy whose folder path sorts first by bytes (`Buffer.compare`) is used and the
+  others are shadowed, with the diagnostic "shadowed inside its source". Between sources, the higher source's copy is
+  used. Each catalog skill carries its name, description, folder, `SKILL.md` path and source (`internal`, `path` with
+  the search path, or `workspace`), and for the internal source its shipped and edited marks from the manifest.
+- **An agent's enabled skills** are the names of its `enabledSkills` that the catalog uses, plus every skill the
+  workspace source supplies. A name of the set the catalog doesn't hold is missing. The prompt, the `skill` tool and
+  `skills.list` call the same function, so they never differ.
+- **Diagnostics** from a prompt read are logged once per path and reason, and again only after the problem has gone
+  and come back, so a broken skill doesn't fill the log at every request.
+
+### The enabled set
+
+`ConversationMeta.enabledSkills: string[]` is the fact ADR-001 decision 4 names. The stored seat keeps role, model,
+thinking level, workspace and tools. `resolveSeat` returns the role's default skill names, and `writeSeat` writes them
+to `enabledSkills` and stores the seat without them, so the four seat paths (creation, `conversations.seat`, a handoff
+and a reset with a seat) reset the set in their own commit. A seat no longer holds instruction text: older documents
+still carry `seat.instructions` and `seat.skills`, and no reader uses them.
+
+`setEnabledSkill(host, conversationId, { name, enable, actor })` in `src/host/skill_set.ts` runs in
+`inOpenConversation`, so a closed conversation is refused `conflict` with `ConversationClosedError`. In one commit it
+reads the document, changes the set and appends the `intern.skills` entry, data `{ actor, skill, change: "enabled" |
+"disabled", enabledSkills }`, with `defineEntry` as the seat record is. Enabling a name already in the set, or disabling
+one that isn't, changes nothing, commits nothing and returns the set. The operation checks first, against the agent's
+catalog: an unknown conversation or a name the catalog doesn't hold is `not_found`, except that disabling a name in the
+set that the catalog no longer holds is allowed; a name the workspace source supplies is `invalid_input` for a disable.
+An agent's `bob` call arrives over the local socket like any other, so its actor is a team member with the way in
+`command line` (ADR-002).
+
+`skills.enable` and `skills.disable` with a `role` change the role's `skills` through `ConfigStore.update`, so the check
+and the write are one step. A shipped role with no `skills` key gets the full list written: its current defaults with
+the change. The name is checked against the role catalog.
+
+### The system prompt
+
+The role prompt extension keeps one rendering per request preparation (`renderedByRequest`). For each, it reads the
+conversation's document, then in parallel the common prompt, the seat's role file, the workspace's context files
+(`loadProjectContextFiles` with the empty agent folder, as today) and the catalog, and renders these sections, in this
+order, each as a pure function of what was read:
+
+| Section | Text | When it is left out |
+|---|---|---|
+| `intern-common` | `common.md` | The file is missing or empty, with a diagnostic |
+| `intern-role` | The seat's role's instruction file | The file is missing or empty, with a diagnostic |
+| `intern-lead-duty` | `LEAD_DUTY` | The conversation isn't a job's lead |
+| `intern-workspace-context` | "Your workspace is …" and each context file | Never |
+| `intern-skills` | The listing of the enabled skills | The agent has none |
+
+`renderSkillListing` in `role_prompt.ts` writes the listing, not pi agent's `formatSkillsForPrompt`, because REQ-008
+asks the listing to name `skill`. It keeps the Agent Skills `<available_skills>` shape, one `<skill>` per enabled skill
+with `<name>`, `<description>` and `<location>` (the `SKILL.md` path, which an agent with `bash` needs to run a bundled
+script), sorted by name in byte order and escaped as pi agent escapes it. Fixed text before it says to load a skill with
+the `skill` tool and its `name` when the task matches the description, and a file the skill names with `file`, relative
+to the skill's folder. A conversation without a document gets `intern-common` only. Equal files and an equal set give
+equal bytes, and a change touches only its section (REQ-015).
+
+### Roles and their instruction files
+
+- `RoleDefinition` loses `instructions`. `roles.list` reads each role's file through the file store and returns its
+  text and version token; a team role whose file is missing comes with no text and the missing mark.
+- `catalog.seatFor` refuses a team role whose file is missing or holds only white space, as `RoleRefusedError` of kind
+  `invalid` naming the file's path, before any write. Every way of seating calls it (`conversations.seat`, a handoff,
+  an invocation, `jobs.create`, a fire and `schedules.run`), so each refusal of REQ-007 comes from there. The read is
+  synchronous, as `seatFor` is, and the file is at most 1 MiB. A shipped role's missing file doesn't refuse.
+- `roles.create` writes the instruction file, replacing one left without a table, then the table. A crash between the
+  two leaves a file with no table, which isn't a role.
+- `roles.change` with instructions needs the token (`instructionsVersion`), and refuses `invalid_input` without it. It
+  checks the role change first, then checks the token and writes the file in the file store's queue, then writes the
+  table.
+- `roles.restore` removes the table's changes, then restores the shipped file (ADR-009 decision 4).
+- `roles.remove` lists the open conversations whose seat has the role, refuses `conflict` naming them, then removes the
+  table, then deletes the file. A crash between the last two leaves a file with no table.
+- Each file a role operation writes or deletes publishes `files_changed`.
+
+### Files through the service
+
+`files.read` and `files.write` resolve the path first. They take the real path of the nearest existing folder on the
+path and add the rest, so a missing file and a symbolic link both resolve before the check. The allowed files are:
+
+- a file below the real path of any skill folder the catalog found, used, shadowed or left out, in the internal folder,
+  a search path or the `.pi/skills` of a workspace `workspaces.list()` returns, per-role defaults included;
+- a file below the real path of `<data dir>/instructions`;
+- the real paths of `AGENTS.md` and `CLAUDE.md` directly inside such a workspace.
+
+They then refuse in this order: a path outside them `invalid_input`, a missing file `not_found`, a folder, a file over
+1 MiB or text that isn't UTF-8 (`TextDecoder` with `fatal: true`) `invalid_input`. `files.write` also refuses text over
+1 MiB. The kind that `files_changed` and `instructions.list` give is `common`, `role` (under `instructions/roles/`),
+`instructions` (any other file of that folder), `workspace` or `skill`.
+
+### The `skill` tool
+
+The extension `intern.skill-tool` registers `skill`, input `{ name: string, file?: string }`, marked `replay: "safe"`
+because it only reads. `placeTools` adds `skill` to every seat's tools, in a job's conversation and in the front desk,
+so it is offered whatever the role's tools are, and ADR-001's upgrade write adds it to older conversations.
+
+A call reads the conversation's document through the tool's `DocumentReader` and the catalog, and resolves the agent's
+enabled skills as the prompt does. It returns an error result, and the run goes on, for a name that isn't enabled, a
+`file` that is absolute or whose real path leaves the real path of the skill's folder, and a file that is missing or is
+a folder. Without `file` it returns `SKILL.md`, frontmatter included. The text is cut with pi agent's `truncateHead` at
+`DEFAULT_MAX_LINES` and `DEFAULT_MAX_BYTES`, the limits of its `read` tool, with a closing line saying so.
+
+### Agents reach `bob`
+
+`shippedToolsExtension` becomes a factory that builds `bash` with pi-durable's `createBashTool({ prepare })`. `prepare`
+sets `BOB_RUNTIME_DIR` to the instance's runtime directory and `BOB_CONVERSATION_ID` to the call's conversation id, and
+puts `<runtime dir>/bin` first on `PATH`. At step 3 the skills component writes `<runtime dir>/bin/bob`, owner-only
+(`0700`), a shell script that runs `process.execPath` on this package's `src/cli/bob.ts` with the arguments. So an
+agent's `bob` is the daemon's own version and reaches its own instance (REQ-014), and `bob-command-line` tells the agent
+to use `$BOB_CONVERSATION_ID`.
+
+### Feed, commands and pages
+
+- **Instance feed.** `factsOf` adds `enabledSkills`, and the snapshot's conversations carry it. `applyMeta` publishes
+  `skills_changed { conversationId, enabledSkills }` right after `seat_changed` whenever it publishes that, and on its
+  own whenever the set differs. `files_changed { path, kind }` comes from a change hub the daemon creates and puts in
+  the `ServiceContext` as `fileChanges`; the file store publishes to it after each write, and `createInstanceFeed`
+  listens as it listens to the configuration. `[skills]` and role changes arrive as `settings_changed` from the
+  existing configuration listener.
+- **Reads.** `ConversationListing` gains `enabledSkills`, so `conversations.get` and `conversations.list` return it.
+  `toHostEntry` shows an `intern.skills` entry by its data, as it shows a seat record, in `conversations.entries` and
+  the conversation feed.
+- **`skills.list`** returns `{ skills, missing, leftOut, seat? }`. Each skill has `name`, `description`, `source`
+  (`{ kind, path? }`), `path` (its folder), `enabled`, `shipped`, `edited` and `shadowed` (each `{ path, source }`). A
+  shipped skill whose folder is deleted is listed with `edited: true` and `deleted: true`. `leftOut` holds `{ path,
+  reason }`. `instructions.list` returns `{ files }`, each `{ kind, path, shipped, edited, missing }`, in REQ-007's
+  order, the workspace's parent folders included.
+- **Commands.** `skills` and `instructions` leave `RESERVED_GROUPS` in `command_line.ts`. A shadowed copy prints on an
+  indented line under the copy in use; marks print as words. No command prints file text.
+- **Pages.** The Skills panel reads `skills.list` and again after a `skills_changed` delta for its conversation, a
+  `settings_changed` delta, or a `files_changed` delta. The editor reads with `files.read`, keeps the token, and on a
+  `conflict` keeps the typed text and offers the disk text from a new `files.read`, whose token it then keeps. The Job
+  page renders an `intern.skills` entry in the activity as it renders a seat record. The Schedules page opens the panel
+  for the entry's role, or `bob`.
+
+### The manual and the `about-the-intern` skill
+
+The skill folder holds a `SKILL.md` written by hand, which says what each page covers and how to load it with `skill`
+and `file`, and a `manual/` folder of byte copies of the manual pages it draws from, under their names in
+`docs/manual/`. `test/unit/about_the_intern_skill.test.ts`, which `npm run check` runs through `test:unit`, fails naming
+the page when a copy differs from `docs/manual/<page>`, when a copied page no longer exists, or when `SKILL.md` doesn't
+name a copied page. Updating the skill is copying the page. A new manual page, `docs/manual/skills_and_instructions.md`,
+covers REQ-017's topics and says that `shipped-files.json` is the daemon's own record.
+
+### Tests
+
+The tests are the files S-008's acceptance criteria name. The upgrade tests (AC-003.1, AC-003.2) run a daemon on a
+package root whose `src/shipped/` a test changes: `SkillsComponentOptions.shippedRoot` is a test-only switch, passed as
+the schedules component's clock is. The crash test of AC-006.4 kills the daemon child before and after the handoff's
+one commit, as S-001's seat crash tests do. `npm run test:live:skills` runs `test/live/live_skills.ts`, as
+`test:live:desk` runs its file.
+
 ## Rejected approaches
 
 Implementation approaches weighed and rejected. ADR-001, Alternatives Considered, gives the full reasoning for the ones
 it records.
 
+- **pi agent's skill loader for the catalog, or its `formatSkillsForPrompt` for the listing.** See
+  [tech_stack.md](tech_stack.md), Skills and instructions.
+- **A skill cache cleared by file watches, or a per-seat cache as before S-008.** See ADR-009, Alternative D.
+- **The `read` tool for the front desk, or skill text inlined in the prompt.** S-008, Alternatives Considered.
+- **The enabled set inside the seat.** S-008 REQ-006 makes it no part of the seat, and a change records no seat change;
+  it sits beside the seat in the same document, so a seat write still resets it in the same commit.
 - **A scheduling library, or one timer per entry.** See [tech_stack.md](tech_stack.md), Schedules. One tick reads the
   entries as they are, so a change needs no timers rebuilt, and a clock jump needs no special case.
 - **Skipped fires as pi-durable documents or a file.** S-004 chose tables for saved job data (ADR-001, Alternative G),
@@ -847,7 +1101,7 @@ that defines it.
 | Email | The Intern's own mailbox as a way in and out | No spec yet |
 | Web interface | The team's browser view and configuration, built only on service operations | S-006 for jobs, conversations, roles, workspaces, status and the export download; later specs add their own pages |
 | Command line | The `bob` commands, built only on service operations | S-005 |
-| Skills and instructions | Shipped skills and instructions, and the team's overlay | No spec yet |
+| Skills and instructions | The common prompt, the roles' instruction files and the shipped skills in the internal folder, the skill catalog and its search paths, each agent's enabled set, and the `skill` tool | S-008 |
 | Team knowledge | Reaching, reading and updating the wiki and other knowledge sources | No spec yet |
 
 Development infrastructure components (S-000, Components, Development infrastructure) are not part of the runtime and
@@ -865,6 +1119,9 @@ are not described here.
 - **pi-durable only behind the host.** Only the harness host module and the-intern's own pi-durable extensions import
   pi-durable. The service layer and every other component depend on the host's interface, so an upgrade of the pi
   packages touches a few files.
+- **Skills and instructions.** `src/skills/skill_resolution.ts` and `src/prompt/role_prompt.ts` import nothing with
+  I/O. Only `src/host/skill_set.ts` and `src/host/seating.ts` write the enabled set, and only the skills component's
+  file store writes an instruction or skill file (ADR-009 decision 5).
 - **Every job source ends in the same service operation.** Every way in and job source submits through the service layer.
 - **The command table imports no daemon module besides the path layout.** A `bob` command reaches the daemon only
   through the client library, except `serve` and `import`, which load the daemon's code by a dynamic import inside

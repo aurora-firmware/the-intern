@@ -1,6 +1,6 @@
 ---
 title: Daemon and host runtime
-version: '0.15'
+version: '0.16'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-16'
 author: planner
@@ -124,13 +124,13 @@ failed (REQ-013). **Contract** (operation names and kinds):
 | Operation | Kind | Purpose |
 |---|---|---|
 | `daemon.status` | read | Phase, versions, start time, instance directories, worker threads in use and waiting (REQ-003, REQ-011, REQ-020) |
-| `conversations.list`, `conversations.get` | read | Conversations with seat, origin, status, depth and invocation links; the list marks the front desk (REQ-012; S-001 REQ-016, REQ-021) |
+| `conversations.list`, `conversations.get` | read | Conversations with seat, enabled set, origin, status, depth and invocation links; the list marks the front desk (REQ-012; S-001 REQ-016, REQ-021; S-008 REQ-006) |
 | `desk.get` | read | The front desk's conversation id and seat (REQ-012; S-001 REQ-021) |
 | `conversations.invocations` | read | The conversations a conversation invoked, recursively (S-001 REQ-016) |
 | `conversations.entries` | read | Stored entries, paged, including entries from before resets and compactions |
 | `conversations.context` | read | The current context |
 | `submissions.get`, `submissions.wait` | read | A submission's state; wait up to 5 minutes for it to settle |
-| `roles.list` | read | Roles with their instructions, tools, skills and defaults |
+| `roles.list` | read | Roles with their instructions, read from their instruction files with a version token, tools, default skill names and defaults; a team role whose file is missing is marked missing (S-008 Interfaces, REQ-007) |
 | `workspaces.list` | read | Registered workspaces |
 | `models.list` | read | Available models and thinking levels |
 | `usage.get` | read | Usage per conversation and in total |
@@ -150,6 +150,14 @@ failed (REQ-013). **Contract** (operation names and kinds):
 | `schedules.create`, `schedules.change`, `schedules.remove` | control | Schedule settings (S-007 REQ-003; REQ-022) |
 | `schedules.run` | control | Run a schedule entry now (S-007 REQ-008) |
 | `workspaces.register`, `workspaces.unregister` | control | Workspace registration (S-001 REQ-018; REQ-022) |
+| `skills.list`, `skills.paths.list` | read | The skill catalog of a role or an agent, and the skill search paths (S-008 REQ-004, REQ-009) |
+| `skills.enable`, `skills.disable` | control | Change a role's default skills (REQ-022) or an agent's enabled set (S-008 REQ-005, REQ-006) |
+| `skills.paths.add`, `skills.paths.remove` | control | Skill search paths (S-008 REQ-004; REQ-022) |
+| `skills.restore` | control | Restore a shipped skill (S-008 REQ-003) |
+| `instructions.list` | read | The instruction files that build a role's or an agent's prompt (S-008 REQ-009) |
+| `instructions.restore` | control | Restore the common prompt or a shipped role's instructions (S-008 REQ-003) |
+| `files.read` | read | The text of a skill file or an instruction file, with a version token (S-008 REQ-010) |
+| `files.write` | control | Replace the text of a skill file or an instruction file (S-008 REQ-010) |
 
 The tests register `test.createConversation` and `test.failStorage` (`test/support/test_operations.ts`); they are not
 part of the product's catalogue.
@@ -159,11 +167,12 @@ part of the product's catalogue.
 A subscription names the scope `instance` or one conversation. Each delivers a snapshot, then deltas with increasing
 sequence numbers in commit order, and ends with a reason (`lagging`, `unsubscribed`, `stopped`) (REQ-014, REQ-015). The
 instance scope carries every conversation with its job, lead flag, seat, status and the worker threads, and the
-deltas `conversation_created`, `run_started`, `run_finished`, `seat_changed`, `status_changed`, `admission_changed` and
-`settings_changed`. It also carries S-007's schedule fire skipped delta, the jobs that aren't Done and S-004's job
-deltas, each published after its job
-store commit and numbered in the same sequence (S-004 REQ-015). The conversation scope carries its live view and
-entries.
+deltas `conversation_created`, `run_started`, `run_finished`, `seat_changed`, `status_changed`, `admission_changed`,
+`settings_changed`, and S-008's `skills_changed` and `files_changed`; its snapshot gives each conversation's enabled
+set beside its seat (S-008 Interfaces). A seat change is followed by a `skills_changed` delta with the new role's
+defaults (S-008 REQ-006). It also carries S-007's schedule fire skipped delta, the jobs that aren't Done
+and S-004's job deltas, each published after its job store commit and numbered in the same sequence (S-004 REQ-015).
+The conversation scope carries its live view and entries.
 
 ### Consumed
 
@@ -188,6 +197,9 @@ Resolve directories, check permissions → unsafe? exit non-zero, naming path,  
   ↓
 Take single ownership → another live owner? exit non-zero, naming state dir     REQ-001
   and pid; a stale owner is taken over
+  ↓
+Seed and upgrade the internal folder, convert older configuration keys          S-008 REQ-002,
+  → can't write or convert? exit non-zero, naming the path                      REQ-003, REQ-011
   ↓
 Read job schema version → newer? exit non-zero, naming both versions            REQ-002
   ↓
@@ -250,9 +262,11 @@ tests run on the fake model, with an isolated instance and an isolated pi agent 
 The daemon SHALL start in this order and stop at the first failure with an error that names the failing step and its
 cause:
 
-1. load and validate configuration (REQ-021)
+1. load and validate configuration (REQ-021), including the `[skills]` table and its search paths (S-008 REQ-004) and
+   the older keys S-008 REQ-011 accepts
 2. resolve the instance directories and check or create them (REQ-006)
-3. take single ownership (REQ-001)
+3. take single ownership (REQ-001); then create, seed and upgrade the internal folder (S-008 REQ-002, REQ-003) and
+   convert the older configuration keys (S-008 REQ-011)
 4. read the job schema version, open the database, create or migrate the job store's tables, and make the-intern's
    tools ready, before anything resumes
 5. check that every model and thinking level configured for a role resolves (S-001 Configuration Requirements); a
@@ -266,15 +280,17 @@ cause:
 
 - **Given:** a valid instance
 - **When:** the daemon starts
-- **Then:** the eight steps run in order, and status reports "starting" until step 8 has finished
+- **Then:** the eight steps run in order, step 3 seeds the internal folder and converts the older keys only after
+  ownership is taken, and status reports "starting" until step 8 has finished
 
 **Verification:** test — `test/service/daemon_startup.test.ts`.
 
 #### AC-002.2 — Each step fails with its name
 
-- **Given:** an invalid configuration file, an unknown key, an unsafe directory, a relative directory flag, a live
-  owner, an unopenable database, a newer job schema, an unresolvable model configured for a role, a failing workspace or
-  a component that fails to start in step 8
+- **Given:** an invalid configuration file, an unknown key, an invalid skill search path, an unsafe directory, a
+  relative directory flag, a live owner, an internal folder that can't be written, an older role skill path that can't
+  be converted (S-008 AC-011.2), an unopenable database, a newer job schema, an unresolvable model configured for a
+  role, a failing workspace or a component that fails to start in step 8
 - **When:** the daemon starts
 - **Then:** it exits non-zero naming the failing step and its cause, creates no database file where the step precedes
   step 4, releases ownership it took, and stops the components already started
@@ -379,7 +395,8 @@ The daemon SHALL use four directories, resolved from the XDG base directories, e
 
 - config (configuration file)
 - state (database)
-- data (per-role default workspaces, S-001 REQ-003)
+- data (per-role default workspaces, S-001 REQ-003, and the internal folder of instruction files and shipped skills,
+  S-008 REQ-002)
 - runtime (the socket's directory, S-003). When `XDG_RUNTIME_DIR` is unset, as on macOS and under launchd, the
   runtime directory is the `run` folder inside the state directory.
 
@@ -491,11 +508,12 @@ waits (S-001 REQ-016).
 The service layer SHALL offer at least these operations, each marked **read** or **control** (Interfaces gives their
 names):
 
-- Read: daemon status; list conversations, marking the front desk; get one conversation (seat, origin, status,
-  depth, invocation links); get the front desk's conversation id and seat (S-001 REQ-021); read a conversation's
-  stored entries, paged, including entries from before resets and compactions; read its current context; read a
-  submission's state; wait for a submission to settle, for a time the caller chooses, at most 5 minutes; list roles
-  with their instructions, tools, skills and defaults; list registered workspaces; list available models and
+- Read: daemon status; list conversations, marking the front desk; get one conversation (seat, enabled set, origin,
+  status, depth, invocation links); get the front desk's conversation id and seat (S-001 REQ-021); read a
+  conversation's stored entries, paged, including entries from before resets and compactions; read its current
+  context; read a submission's state; wait for a submission to settle, for a time the caller chooses, at most 5
+  minutes; list roles with their instructions and the instructions' version token, tools, default skill names and
+  defaults (S-008 REQ-007); list registered workspaces; list available models and
   thinking levels; read usage per conversation and in total; inspect live pi-durable tasks per conversation;
   subscribe to the observation feed (REQ-014).
 - Control: submit input with a request id and a busy mode (follow-up, steer or reject); withdraw a queued input;
@@ -505,6 +523,9 @@ names):
 - Jobs: the `jobs.*` operations of S-004, read and control as Interfaces marks them. Starting a job's lead
   conversation (S-001 REQ-012) isn't a catalogue operation: `jobs.create` calls it in-process.
 - Schedules: the `schedules.*` operations of S-007, read and control as Interfaces marks them.
+- Skills and instructions: the `skills.*`, `instructions.*` and `files.*` operations of S-008, read and control as
+  Interfaces marks them. Those that change the configuration file (a role's default skills, the skill search paths)
+  follow REQ-022.
 
 A submit to a conversation parked for reports holds the message until the conversation continues (S-001 REQ-020),
 whatever its busy mode, and returns `{ held: true }` with no submission id. A submit to a job's lead conversation
@@ -643,10 +664,10 @@ operation test in `test/service/`.
 
 ### REQ-014 — Snapshot, then deltas
 
-A subscription SHALL name a scope: the instance (conversations with seat, status and admission state, plus started
-and finished events, S-007's schedule fire skipped delta, and S-004's jobs and job deltas, each published after its job
-store commit and numbered in the
-same sequence), or one conversation (its live view, events and queued input). It first gets a snapshot, then deltas
+A subscription SHALL name a scope: the instance (conversations with seat, enabled set, status and admission state,
+plus started and finished events, S-007's schedule fire skipped delta, S-008's `skills_changed` and `files_changed`
+deltas, and S-004's jobs and job deltas, each published after its job store commit and numbered in the same
+sequence), or one conversation (its live view, events and queued input). It first gets a snapshot, then deltas
 in commit order. A new subscription never replays earlier deltas. A subscriber that reconnects starts from a
 fresh snapshot.
 
@@ -663,8 +684,9 @@ fresh snapshot.
 
 - **Given:** several conversations
 - **When:** a client subscribes to the instance
-- **Then:** the snapshot holds every conversation with its job, lead flag, seat, status and the worker threads, and
-  the deltas report creations, runs, seat and status changes, admission and settings changes in order
+- **Then:** the snapshot holds every conversation with its job, lead flag, seat, enabled set, status and the worker
+  threads, and the deltas report creations, runs, seat and status changes, admission and settings changes, and
+  enabled-set and file changes (S-008 REQ-006, REQ-010) in order
 
 **Verification:** test — `test/service/instance_feed.test.ts`, `test/service/host_observation.test.ts`.
 
@@ -735,8 +757,10 @@ startup and continues.
 Each setting SHALL have one source:
 
 - the configuration file in the config directory holds the settings of S-001 (the team's roles, the changes to
-  the shipped roles, and the registered workspaces) and the sections later specs add, such as S-003's `[network]` and
-  S-007's `[[schedule]]`
+  the shipped roles' settings other than their instructions, and the registered workspaces) and the sections later
+  specs add, such as S-003's `[network]`, S-007's `[[schedule]]` and S-008's `[skills]`. A role's instructions are
+  its instruction file in the internal folder, not a key of this file (S-008 REQ-007); the older `instructions` key
+  and skill paths are read as S-008 REQ-011 states
 - command-line flags set the instance directories (REQ-006)
 - the environment sets the pi agent folder, as for pi agent itself
 
@@ -771,12 +795,15 @@ The settings in the configuration file SHALL also be changeable through control 
   refused with a message naming the setting and the reason, and nothing changes.
 - A valid change is written to the configuration file first, atomically and owner-only, and applies at once. The
   file stays the single source of truth, so the change survives a restart.
-- A change applies as S-001 states: a role change affects only agents seated after it, a newly
-  registered workspace can be used at once, and unregistering follows S-001 REQ-018 (refused while a role's default
-  workspace is that workspace or a schedule entry names it; seated agents keep it until their seat changes; new seats
-  can't name it).
+- A change applies as S-001 states: a change to a role's tools, default skills, model, thinking level or workspace
+  affects only agents seated after it, while an edit to its instructions reaches running agents from their next model
+  request (S-008 REQ-007); a change to the skill search paths is seen from the next catalog read (S-008 REQ-004); a
+  newly registered workspace can be used at once, and unregistering follows S-001 REQ-018 (refused while a role's
+  default workspace is that workspace or a schedule entry names it; seated agents keep it until their seat changes;
+  new seats can't name it).
 - If the file was changed on disk since the daemon last read it, the change is refused as a conflict naming the
-  file, so a hand edit is never overwritten. A restart picks up the hand edit.
+  file, so a hand edit is never overwritten. A restart picks up the hand edit. A role's instruction file is guarded
+  the same way, by the version token `roles.list` returns (S-008 REQ-007).
 - If the file can't be written, the change is refused and nothing applies.
 - Writing a change keeps every section and setting it doesn't change, including sections other specs own (S-003
   `[network]`).
@@ -806,10 +833,13 @@ The settings in the configuration file SHALL also be changeable through control 
 #### AC-022.3 — Seated agents keep their seat
 
 - **Given:** an agent seated before a role change
-- **When:** the role changes through the service
-- **Then:** the agent keeps its seat until its seat changes
+- **When:** the role's tools, default skills, model, thinking level or workspace change through the service, and then
+  its instructions
+- **Then:** the agent keeps its seat and enabled set until its seat changes, and its next model request holds the new
+  instructions
 
-**Verification:** test — `test/unit/role_catalog.test.ts`, `test/service/role_prompt_extension.test.ts`.
+**Verification:** test — `test/unit/role_catalog.test.ts`, `test/service/role_prompt_extension.test.ts`,
+`test/service/instruction_files.test.ts`.
 
 ## Quality Requirements
 
@@ -917,8 +947,10 @@ usual places. No credential is copied into the instance's directories or the dat
 ## Configuration Requirements
 
 - **Configuration file.**
-  - **What:** the S-001 settings: the team's roles, the changes to the shipped roles, and the registered workspaces.
-    Later specs add their sections and say which of their settings change at runtime.
+  - **What:** the S-001 settings: the team's roles, the changes to the shipped roles' settings other than their
+    instructions, and the registered workspaces. Later specs add their sections and say which of their settings
+    change at runtime, such as S-008's `[skills]`. Role instructions are files in the internal folder (S-008
+    REQ-002, REQ-007).
   - **Where:** a TOML file in the config directory (REQ-006). Written by hand, or by the settings operations
     (REQ-022).
   - **Constraints:** a trusted, owner-only input. Unknown keys are refused.
@@ -963,6 +995,8 @@ records the two capacity constants by amendment.
 - **S-001** defines the conversations, roles, seats and coordination this daemon runs, and the settings the
   configuration file holds.
 - **S-003, the control-endpoint spec**, defines the listeners that expose the catalogue.
+- **S-008, the Skills and instructions spec**, defines the internal folder that startup step 3 seeds, the conversion
+  of older configuration keys, the `[skills]` section, and the `skills.*`, `instructions.*` and `files.*` operations.
 - **S-004, the Jobs spec**, defines the job store in the same database, the `jobs.*` operations, the job deltas on the
   instance feed and the job repair rules that startup step 7 applies.
 - **Assumption, confirmed by ADR-002:** the team members who can reach a listener are trusted equally, and the service
@@ -1023,3 +1057,4 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-06 | v0.14. No behaviour changes. REQ-013: the gloss of `busy` reads "a reject-if-busy submit, or a resource in use for now". No identifier added or retired. | S-006 second architecture consistency review, finding F3, product owner decision of 2026-11-06: `jobs.export` (S-004 REQ-016) and the export route (S-003 REQ-016) refuse `busy` for a resource in use, which the old gloss didn't cover. Approved with S-006 at Gate 1. | None; spec text only |
 | 2026-11-07 | spec-truth reconciliation — PASS | v0.14 confirmed for the feed shape, the busy gloss and B-023's log line; spec read in part | none |
 | 2026-11-07 | v0.15. Triggers leave the job sources (Purpose, Definitions, Users, Exclusions, REQ-012, AC-012.5). REQ-021: the configuration file holds S-007's schedule entries. Interfaces and REQ-012: the `schedules.*` operations. Interfaces and REQ-014: the schedule fire skipped delta. REQ-002, Workflow, AC-002.2 and Configuration: the startup model check covers roles, and an entry's model is checked at a fire. REQ-022: unregistering a workspace an entry names is refused. REQ-012: a run on demand states its origin. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
+| 2026-11-13 | v0.16. Skills and instructions (S-008). REQ-006: the data directory also holds the internal folder of instruction files and shipped skills. REQ-021 and Configuration Requirements, Configuration file: the file holds the shipped roles' changed settings other than their instructions, and S-008's `[skills]` section; instructions are files, and the older `instructions` key and skill paths are read as S-008 REQ-011 states. REQ-002, AC-002.1, AC-002.2 and Workflow: step 1 checks the `[skills]` table, its search paths and the older keys; step 3, after single ownership, seeds and upgrades the internal folder and converts the older keys; the step numbers stay. Interfaces and REQ-012: the catalogue adds `skills.list`, `skills.enable`, `skills.disable`, `skills.paths.list`, `skills.paths.add`, `skills.paths.remove`, `skills.restore`, `instructions.list`, `instructions.restore`, `files.read` and `files.write`; `roles.list` returns instructions with a version token and default skills as names; `conversations.get` and `conversations.list` return the enabled set. Interfaces, the feed, REQ-014 and AC-014.2: the instance snapshot carries each enabled set, and the new deltas `skills_changed` and `files_changed`. REQ-022 and AC-022.3: a role's tools, default skills, model, thinking level and workspace still apply only to agents seated afterwards, while an instructions edit reaches running agents from their next model request, and a role's instruction file is guarded by its version token. Assumptions name S-008. No identifier added or retired. The feed: a seat change is followed by a `skills_changed` delta with the new defaults. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, findings B1, B3 to B5, C1 and C2. S-002 owns the catalogue, the feed and startup. | S-008's tasks |
