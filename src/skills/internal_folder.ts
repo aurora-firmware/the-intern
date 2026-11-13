@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rm, rmdir } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, rmdir } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fingerprintOf } from "../config/config_file.ts";
@@ -23,6 +23,16 @@ export class InternalFolderError extends Error {
         this.name = "InternalFolderError";
         this.path = path;
         this.reason = reason;
+    }
+}
+
+export class NotShippedError extends Error {
+    readonly shippedName: string;
+
+    constructor(name: string) {
+        super(`${name}: the installed version doesn't ship it`);
+        this.name = "NotShippedError";
+        this.shippedName = name;
     }
 }
 
@@ -173,6 +183,12 @@ async function removeUnshippedFile(dataDir: string, relativePath: string, record
     await removeEmptySkillFolders(dataDir, relativePath);
 }
 
+async function writeManifestFiles(dataDir: string, files: Record<string, string>): Promise<void> {
+    const path = manifestPath(dataDir);
+    const text = `${JSON.stringify({ version: MANIFEST_VERSION, files }, null, 2)}\n`;
+    await atPath(path, () => writeFileAtomic(path, text));
+}
+
 async function runStartRule(dataDir: string, shippedRoot: string): Promise<void> {
     await makeFolder(join(dataDir, "instructions", "roles"));
     await makeFolder(skillsFolderPath(dataDir));
@@ -185,9 +201,7 @@ async function runStartRule(dataDir: string, shippedRoot: string): Promise<void>
     for (const [relativePath, recorded] of Object.entries(manifest.files)) {
         if (!(relativePath in next)) await removeUnshippedFile(dataDir, relativePath, recorded);
     }
-    const path = manifestPath(dataDir);
-    const text = `${JSON.stringify({ version: MANIFEST_VERSION, files: next }, null, 2)}\n`;
-    await atPath(path, () => writeFileAtomic(path, text));
+    await writeManifestFiles(dataDir, next);
 }
 
 export function prepareInternalFolder(options: {
@@ -196,4 +210,66 @@ export function prepareInternalFolder(options: {
     store: FileStore;
 }): Promise<void> {
     return options.store.enqueue(() => runStartRule(options.dataDir, options.shippedRoot));
+}
+
+async function runFileRestore(dataDir: string, shippedRoot: string, relativePath: string): Promise<void> {
+    const file = (await listShippedFiles(shippedRoot)).find((candidate) => candidate.relativePath === relativePath);
+    if (file === undefined) throw new NotShippedError(relativePath);
+    const manifest = await readManifest(dataDir);
+    await writeCopy(dataDir, file);
+    await writeManifestFiles(dataDir, { ...manifest.files, [relativePath]: file.hash });
+}
+
+export function restoreShippedFile(options: {
+    dataDir: string;
+    shippedRoot: string;
+    store: FileStore;
+    relativePath: string;
+}): Promise<void> {
+    return options.store.enqueue(() => runFileRestore(options.dataDir, options.shippedRoot, options.relativePath));
+}
+
+let skillCopyCounter = 0;
+
+// The copy is built beside the skill, so the swap is a removal and a rename inside one folder.
+async function replaceSkillFolder(dataDir: string, name: string, files: ShippedFile[]): Promise<void> {
+    const skills = skillsFolderPath(dataDir);
+    const target = join(skills, name);
+    skillCopyCounter += 1;
+    const copy = join(skills, `.${name}.${process.pid}.${skillCopyCounter}.tmp`);
+    try {
+        for (const file of files) {
+            const path = join(copy, file.relativePath.slice(`${SKILLS_PREFIX}${name}/`.length));
+            await makeFolder(dirname(path));
+            await atPath(path, () => writeFileAtomic(path, file.bytes));
+        }
+        await atPath(target, () => rm(target, { recursive: true, force: true }));
+        await atPath(target, () => rename(copy, target));
+    } catch (error) {
+        await rm(copy, { recursive: true, force: true });
+        throw error;
+    }
+}
+
+async function runSkillRestore(dataDir: string, shippedRoot: string, name: string): Promise<void> {
+    const prefix = `${SKILLS_PREFIX}${name}/`;
+    const files = (await listShippedFiles(shippedRoot)).filter(
+        (file) => name !== "" && !name.includes("/") && name !== ".." && file.relativePath.startsWith(prefix),
+    );
+    if (files.length === 0) throw new NotShippedError(name);
+    const manifest = await readManifest(dataDir);
+    await makeFolder(skillsFolderPath(dataDir));
+    await replaceSkillFolder(dataDir, name, files);
+    const recorded = Object.fromEntries(Object.entries(manifest.files).filter(([key]) => !key.startsWith(prefix)));
+    for (const file of files) recorded[file.relativePath] = file.hash;
+    await writeManifestFiles(dataDir, recorded);
+}
+
+export function restoreShippedSkill(options: {
+    dataDir: string;
+    shippedRoot: string;
+    store: FileStore;
+    name: string;
+}): Promise<void> {
+    return options.store.enqueue(() => runSkillRestore(options.dataDir, options.shippedRoot, options.name));
 }
