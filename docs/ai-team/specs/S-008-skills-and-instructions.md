@@ -183,7 +183,12 @@ Feed, on the instance scope (S-002 REQ-014):
 |---|---|---|
 | `settings_changed` (existing, S-002 REQ-022) | that a role's skills or the search paths changed | REQ-004, REQ-005 |
 | `files_changed` (new) | the path and kind of a file changed through `files.write`, a restore or a role operation | REQ-010 |
-| `skills_changed` (new) | a conversation id and its new enabled set | REQ-006 |
+| `skills_changed` (new) | a conversation id and its new enabled set, after an enable, a disable or a seat change | REQ-006 |
+
+**Contract** (transcript entry): each enabled-set change is stored as an `intern.skills` entry in the conversation,
+read through `conversations.entries` and the conversation feed. It carries the actor, the skill, whether it was enabled
+or disabled, and the new set. It is not part of the model's context. The Job page shows it in the conversation's
+activity, as it shows a seat record (S-006 REQ-005).
 
 `conversations.get`, `conversations.list` and the instance feed snapshot return each conversation's enabled set beside
 its seat. A file changed by hand is not announced: pages show it when they next read it, and a save over it is refused
@@ -238,7 +243,7 @@ enabled skills by name and description and tells the agent to load them with `sk
 First start of this version: seed the internal folder, migrate the configuration            REQ-002, REQ-011
 Later start after an upgrade: update unedited shipped files, add new ones                     REQ-003
 Team member or agent edits an instruction file or skill (by hand, web, or agent tools)        REQ-010
-  (web save after the file changed on disk → refused conflict, page reloads the text)         REQ-010
+  (web save after the file changed on disk → refused conflict, typed text kept, disk text offered)  REQ-010, REQ-013
 Team member adds a search path or drops a skill folder into one                               REQ-004
   (path not absolute, missing, or reachable by other accounts → refused; in the file → startup stops)  REQ-004
 Team member enables a skill for a role or for one running agent                               REQ-005, REQ-006
@@ -437,14 +442,15 @@ SHALL NOT change; `roles.restore` SHALL remove the key, bringing the version's d
 Each agent SHALL have its own enabled set, starting from its role's defaults when it is seated. The enabled set is not
 part of the seat: changing it records no seat change. `skills.enable` and `skills.disable` with a `conversation` SHALL
 change that agent's set, from its next model request, whoever calls them: a team member through a way in, or an agent
-through `bob`. Each change SHALL be recorded in the conversation's entries with its actor, the skill and the new set,
+through `bob`. Each change SHALL be recorded as an `intern.skills` entry with its actor, the skill and the new set,
 outside the model's context, and published as `skills_changed`. An unknown conversation or skill name SHALL be refused
 `not_found`, and a closed conversation `conflict`, naming it as closed (S-001 REQ-026). A workspace's skills SHALL
 always be enabled; disabling a name the agent's workspace supplies is refused `invalid_input`.
 
 The set SHALL survive a daemon restart, a reset (S-001 REQ-011) and a compaction. It SHALL reset to the new role's
 defaults on any seat change (S-001 REQ-004, REQ-006), in the same durable step as the seat change, so that after a crash
-the conversation never holds the new seat with the old set.
+the conversation never holds the new seat with the old set. The reset SHALL be published as a `skills_changed` delta
+after the `seat_changed` delta, and records no `intern.skills` entry, because the seat record already shows it.
 
 #### AC-006.1 — Enable for a working agent
 
@@ -510,8 +516,8 @@ otherwise SHALL delete the file.
 A missing common prompt, or a missing shipped role's file, SHALL leave that part out with a diagnostic, and agents carry
 on. A team role whose file is missing or empty SHALL NOT be seated, and the refusal names the file: `conversations.seat`
 is refused `invalid_input`, a handoff or invocation returns an error result to the calling agent, `jobs.create` is
-refused `invalid_input` and creates nothing (S-001 REQ-012), and a schedule fire is skipped with that reason (S-007
-REQ-006). An agent already seated with it goes without that part, with a diagnostic.
+refused `invalid_input` and creates nothing (S-001 REQ-012), a schedule fire is skipped with that reason (S-007
+REQ-006), and `schedules.run` is refused `invalid_input` naming the file (S-007 REQ-008). An agent already seated with it goes without that part, with a diagnostic.
 
 #### AC-007.1 — A live edit
 
@@ -718,7 +724,7 @@ or both is a usage error.
 ### REQ-013 — The Skills panel and file editing on the web
 
 The web interface SHALL offer a Skills panel for a role, from the Roles page and from a Schedules page entry (the
-entry's role), and for an agent, from each conversation on a Job page, To do and In progress jobs included. The panel
+entry's role, or `bob` when the entry names none, S-001 REQ-012), and for an agent, from each conversation on a Job page, To do and In progress jobs included. The panel
 SHALL show what `skills.list` returns, with a check box per skill that calls `skills.enable` or `skills.disable`, and
 SHALL open any listed skill file and any instruction file in `instructions.list` to show and edit its text through
 `files.read` and `files.write`. A refused save SHALL show the reason and keep what the team member typed (S-006

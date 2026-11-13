@@ -500,6 +500,8 @@ It SHALL be refused, creating nothing and recording no skipped fire, because the
 - `busy`, naming the open scheduled run, when the entry has one
 - `invalid_input`, naming the folder, when the seat's workspace folder doesn't exist
 - `invalid_input`, naming the model, when the entry's model isn't available
+- `invalid_input`, naming the file, when the entry's role is a team role whose instruction file is missing or empty
+  (S-008 REQ-007)
 - `not_found` when no entry has that name
 
 A repeated call with the same idempotency key SHALL return the original job (S-002 REQ-013).
@@ -529,6 +531,14 @@ A repeated call with the same idempotency key SHALL return the original job (S-0
 - **Given:** an entry whose model is no longer available
 - **When:** a team member calls `schedules.run`
 - **Then:** it is refused `invalid_input` naming the model, no job number is used, and the history is unchanged
+
+**Verification:** test — `test/service/schedule_fires.test.ts`.
+
+#### AC-008.4 — Run now for a role whose instruction file is missing
+
+- **Given:** an entry naming team role `reviewer`, whose instruction file is deleted
+- **When:** a team member calls `schedules.run` for it
+- **Then:** the call is refused `invalid_input` naming the file, no job is created, and no skipped fire is recorded
 
 **Verification:** test — `test/service/schedule_fires.test.ts`.
 
@@ -811,4 +821,4 @@ None. Feature Architecture settled the scheduling library question (`docs/develo
 | 2026-11-12 | spec-truth reconciliation — FAIL | v0.3 confirmed against T-282 to T-324, B-029 and B-032 to B-035, except that the Interfaces Schedules page row omits the page's roles.list, models.list and workspaces.list reads; amendment routed. Success Criterion 5 waits for T-311 and AC-014.3 for T-325 | none |
 | 2026-11-13 | v0.4. Interfaces, the Schedules page: the page also reads `roles.list`, `models.list` and `workspaces.list`, which fill the Role, Model, Thinking level and Workspace choices of its create and change forms. No behaviour changes and no identifier is added, changed or retired. S-004 v0.16 rewords its Assumptions to match. | Spec-truth reconciliation of 2026-11-12, finding D1: the built page makes these reads for the forms T-320 added, and the row said the page calls only the others. Approved by the product owner at Gate 1, 2026-11-13. | None; spec text only. T-325 is widened to record S-007 as built in the system overview |
 | 2026-11-13 | spec-truth reconciliation — PASS | v0.4 confirmed: the Schedules page row lists the roles.list, models.list and workspaces.list reads the built page makes (D1 of 2026-11-12 resolved); Success Criterion 5 still waits for T-311 and AC-014.3 for T-325 | none |
-| 2026-11-13 | v0.5. REQ-006: a fire is skipped when the entry's role is a team role whose instruction file is missing or empty, with a reason naming the file; new AC-006.5. Interfaces, the Schedules page: from an entry the page opens S-008's Skills panel for the entry's role, and the table names the panel's calls. No identifier changed or retired. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, findings B8 and C4. | S-008's tasks |
+| 2026-11-13 | v0.5. REQ-006: a fire is skipped when the entry's role is a team role whose instruction file is missing or empty, with a reason naming the file; new AC-006.5. REQ-008: run now is refused `invalid_input` for a team role whose instruction file is missing; new AC-008.4. Interfaces, the Schedules page: from an entry the page opens S-008's Skills panel for the entry's role, and the table names the panel's calls. No identifier changed or retired. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, findings B8 and C4. | S-008's tasks |
