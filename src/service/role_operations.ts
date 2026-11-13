@@ -11,7 +11,8 @@ import { type CatalogRole, RoleRefusedError } from "../roles/role_catalog.ts";
 import type { RoleChange, RoleDefinition } from "../roles/role_model.ts";
 import { FileRefusedError } from "../skills/file_store.ts";
 import { roleInstructionPath } from "../skills/internal_folder.ts";
-import { defineOperation, type Operation, ServiceError } from "./operations.ts";
+import type { ConversationListing } from "./conversation_read_operations.ts";
+import { type Caller, defineOperation, type Operation, ServiceError } from "./operations.ts";
 
 type CreateInput = { role: RoleDefinition; instructions: string; idempotencyKey?: string };
 type ChangeInput = { name: string; change: RoleChange; instructions?: string; instructionsVersion?: string };
@@ -118,6 +119,18 @@ const sameDefinition = (existing: ListedRole, role: RoleDefinition, instructions
     );
 };
 
+// An open conversation holds the role its agent is seated with; a closed one doesn't.
+async function refuseWhileSeated(ctx: ServiceContext, role: string, caller: Caller): Promise<void> {
+    const listings = (await ctx.catalogue.invoke("conversations.list", {}, caller)) as ConversationListing[];
+    const holding = listings.filter((listing) => listing.status !== "closed" && listing.seat?.role === role);
+    if (holding.length === 0) return;
+    const ids = holding.map((listing) => listing.id).join(", ");
+    throw new ServiceError(
+        "conflict",
+        `Role "${role}" can't be removed: an open conversation is seated with it (${ids}); close or reseat it first`,
+    );
+}
+
 export function roleOperations(component: AgentsComponent) {
     const catalog = () => component.runtime().catalog;
 
@@ -195,8 +208,9 @@ export function roleOperations(component: AgentsComponent) {
         name: "roles.remove",
         kind: "control",
         parse: parseName,
-        run: (_ctx, { name }) =>
+        run: (ctx, { name }, caller) =>
             mappingRefusals(async () => {
+                await refuseWhileSeated(ctx, name, caller);
                 await catalog().remove(name);
                 return {};
             }),
