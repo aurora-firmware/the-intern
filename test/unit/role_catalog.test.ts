@@ -16,7 +16,7 @@ import { createWorkspaceRegistry } from "../../src/workspaces/workspace_registry
 
 const SHIPPED: RoleDefinition[] = [
     { name: "bob", tools: ["read", "bash"], skills: [] },
-    { name: "gp", tools: ["read"], skills: ["/shipped/skills/part"] },
+    { name: "gp", tools: ["read"], skills: ["part"] },
 ];
 const SHIPPED_TEXT: Record<string, string> = { bob: "Lead the team.", gp: "Carry out a part." };
 const REVIEW_TEXT = "Review the work.";

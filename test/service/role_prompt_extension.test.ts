@@ -234,38 +234,33 @@ describe("the role prompt extension", () => {
         ]);
     });
 
-    it("keeps sending the instructions and skills the agent was seated with when the team role changes later", async () => {
+    it("keeps sending the instructions the agent was seated with and seats the skill names of the changed role", async () => {
         const { prompts, model, root, say, seatConversation } = await createFixture();
         const catalog = await createCatalog(root, model);
         await catalog.create(
             {
                 name: "developer",
                 tools: [],
-                skills: [await writeSkill(join(root, "role-skills"), "developer-role-skill")],
+                skills: ["developer-role-skill"],
                 workspace: await catalog.registerWorkspace("ws-developer"),
             },
             { instructions: "Instructions of developer." },
         );
+        assert.deepEqual(catalog.seatFor("developer").skills, ["developer-role-skill"]);
         const seatedId = await seatConversation(catalog.seatFor("developer"), "seated-before");
         await say(seatedId);
 
-        await catalog.change(
-            "developer",
-            { skills: [await writeSkill(join(root, "role-skills"), "edited-role-skill")] },
-            { instructions: "Edited instructions." },
-        );
+        await catalog.change("developer", { skills: ["edited-role-skill"] }, { instructions: "Edited instructions." });
         await say(seatedId);
+        assert.deepEqual(catalog.seatFor("developer").skills, ["edited-role-skill"]);
         const seatedAfterId = await seatConversation(catalog.seatFor("developer"), "seated-after");
         await say(seatedAfterId);
 
         const [, seatedPrompt, newcomerPrompt] = prompts;
         // An agent seated after the change gets the edited role, so the change reached the running system.
         assert.match(newcomerPrompt, /Edited instructions\./);
-        assert.match(newcomerPrompt, /edited-role-skill/);
         assert.match(seatedPrompt, /Instructions of developer\./);
-        assert.match(seatedPrompt, /developer-role-skill/);
         assert.equal(seatedPrompt.includes("Edited instructions."), false);
-        assert.equal(seatedPrompt.includes("edited-role-skill"), false);
     });
 
     it("loads the seat's workspace once for the sections of one request", async () => {

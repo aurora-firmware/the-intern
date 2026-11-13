@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile, stat } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { SHIPPED_TOOL_NAMES, validateRoleDefinition } from "../../src/roles/role_model.ts";
@@ -26,17 +26,11 @@ describe("SHIPPED_ROLES", () => {
         }
     });
 
-    it("gives gp the absolute carry-out-a-part skill folder holding a SKILL.md and bob and desk no skills", async () => {
-        const bob = SHIPPED_ROLES.find((role) => role.name === "bob");
-        const gp = SHIPPED_ROLES.find((role) => role.name === "gp");
-        const desk = SHIPPED_ROLES.find((role) => role.name === "desk");
-        assert.deepEqual(bob?.skills, []);
-        assert.deepEqual(desk?.skills, []);
-        assert.equal(gp?.skills.length, 1);
-        const skillFolder = gp?.skills[0] ?? "";
-        assert.ok(isAbsolute(skillFolder));
-        assert.equal(skillFolder, join(shippedFolder, "skills", "carry-out-a-part"));
-        assert.ok((await stat(join(skillFolder, "SKILL.md"))).isFile());
+    it("gives bob, gp and desk the default skill names of S-008 REQ-001", () => {
+        const skillsOf = (name: string) => SHIPPED_ROLES.find((role) => role.name === name)?.skills;
+        assert.deepEqual(skillsOf("bob"), ["about-the-intern", "bob-command-line"]);
+        assert.deepEqual(skillsOf("gp"), ["carry-out-a-part", "bob-command-line"]);
+        assert.deepEqual(skillsOf("desk"), ["about-the-intern"]);
     });
 });
 

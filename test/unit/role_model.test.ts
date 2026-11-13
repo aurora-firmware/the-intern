@@ -17,7 +17,7 @@ const role = (overrides: Partial<SeatRole> = {}): SeatRole => ({
     name: "writer",
     instructions: "Write things.",
     tools: ["read", "write"],
-    skills: ["/skills/style"],
+    skills: ["style"],
     ...overrides,
 });
 
@@ -52,7 +52,7 @@ describe("resolveSeat", () => {
         assert.equal(seat.thinkingLevel, "medium");
         assert.equal(seat.workspace, "/o/ws");
         assert.equal(seat.instructions, "Write things.");
-        assert.deepEqual(seat.skills, ["/skills/style"]);
+        assert.deepEqual(seat.skills, ["style"]);
         assert.deepEqual(seat.tools, ["read", "write", ...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES]);
     });
 
@@ -142,9 +142,13 @@ describe("validateRoleDefinition", () => {
         validateRoleDefinition(role({ name: "a".repeat(40) }));
     });
 
-    it("refuses a relative skill path", () => {
-        assert.equal(invalidField(role({ skills: ["skills/style"] })).field, "skills");
-    });
+    for (const skill of ["", "skills/style", "/skills/style"]) {
+        it(`refuses the skill name "${skill}"`, () => {
+            const error = invalidField(role({ skills: ["style", skill] }));
+            assert.equal(error.field, "skills");
+            assert.match(error.reason, new RegExp(`"${skill}"`));
+        });
+    }
 
     it("refuses a relative workspace path", () => {
         assert.equal(invalidField(role({ workspace: "ws" })).field, "workspace");

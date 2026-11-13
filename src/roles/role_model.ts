@@ -54,6 +54,8 @@ const isKnownTool = (tool: string): boolean =>
     (COORDINATION_TOOL_NAMES as readonly string[]).includes(tool) ||
     (JOB_TOOL_NAMES as readonly string[]).includes(tool);
 
+export const isSkillName = (skill: string): boolean => skill !== "" && !skill.includes("/");
+
 export const validateRoleDefinition = (role: RoleDefinition): void => {
     if (!ROLE_NAME_PATTERN.test(role.name)) {
         throw new RoleInvalidError(role.name, "name", `"${role.name}" does not match ${ROLE_NAME_PATTERN}`);
@@ -62,9 +64,9 @@ export const validateRoleDefinition = (role: RoleDefinition): void => {
     if (unknownTool !== undefined) {
         throw new RoleInvalidError(role.name, "tools", `"${unknownTool}" is not a shipped, coordination or job tool`);
     }
-    const relativeSkill = role.skills.find((skill) => !isAbsolute(skill));
-    if (relativeSkill !== undefined) {
-        throw new RoleInvalidError(role.name, "skills", `skill path "${relativeSkill}" is not absolute`);
+    const badSkill = role.skills.find((skill) => !isSkillName(skill));
+    if (badSkill !== undefined) {
+        throw new RoleInvalidError(role.name, "skills", `skill name "${badSkill}" is empty or holds "/"`);
     }
     if (role.workspace !== undefined && !isAbsolute(role.workspace)) {
         throw new RoleInvalidError(role.name, "workspace", `workspace path "${role.workspace}" is not absolute`);
