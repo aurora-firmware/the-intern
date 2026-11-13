@@ -8,11 +8,12 @@ import {
     type RoleDefinition,
     RoleInvalidError,
     resolveSeat,
+    type SeatRole,
     SHIPPED_TOOL_NAMES,
     validateRoleDefinition,
 } from "../../src/roles/role_model.ts";
 
-const role = (overrides: Partial<RoleDefinition> = {}): RoleDefinition => ({
+const role = (overrides: Partial<SeatRole> = {}): SeatRole => ({
     name: "writer",
     instructions: "Write things.",
     tools: ["read", "write"],
@@ -141,10 +142,6 @@ describe("validateRoleDefinition", () => {
         validateRoleDefinition(role({ name: "a".repeat(40) }));
     });
 
-    it("refuses empty instructions", () => {
-        assert.equal(invalidField(role({ instructions: "" })).field, "instructions");
-    });
-
     it("refuses a relative skill path", () => {
         assert.equal(invalidField(role({ skills: ["skills/style"] })).field, "skills");
     });
@@ -157,8 +154,8 @@ describe("validateRoleDefinition", () => {
 describe("applyRoleChange", () => {
     it("replaces only the changed fields", () => {
         const base = role({ model: "m" });
-        const changed = applyRoleChange(base, { instructions: "New.", tools: ["edit"] });
-        assert.deepEqual(changed, { ...base, instructions: "New.", tools: ["edit"] });
+        const changed = applyRoleChange(base, { model: "n", tools: ["edit"] });
+        assert.deepEqual(changed, { ...base, model: "n", tools: ["edit"] });
     });
 
     it("leaves the base unchanged", () => {

@@ -14,7 +14,6 @@ const failure = (run: () => unknown): ConfigValueError => {
 };
 
 const reviewerTable = {
-    instructions: "Review the work.",
     tools: ["read", "bash"],
     skills: ["/skills/review"],
     model: "provider/id",
@@ -29,7 +28,6 @@ describe("rolesSection", () => {
             teamRoles: {
                 reviewer: {
                     name: "reviewer",
-                    instructions: "Review the work.",
                     tools: ["read", "bash"],
                     skills: ["/skills/review"],
                     model: "provider/id",
@@ -38,13 +36,48 @@ describe("rolesSection", () => {
                 },
             },
             shippedChanges: { bob: { model: "provider/other" } },
+            older: {},
         });
+    });
+
+    it("accepts a team role with no instructions key", () => {
+        const value = rolesSection.parse({ reviewer: { tools: ["read"] } });
+        assert.deepEqual(value.teamRoles.reviewer, { name: "reviewer", tools: ["read"], skills: [] });
+        assert.deepEqual(value.older, {});
+    });
+
+    it("keeps an instructions string of a team role and of a shipped role as an older key", () => {
+        const value = rolesSection.parse({
+            reviewer: { ...reviewerTable, instructions: "Review the work." },
+            bob: { instructions: "Lead.", model: "provider/other" },
+        });
+        assert.deepEqual(value.older, {
+            reviewer: { instructions: "Review the work." },
+            bob: { instructions: "Lead." },
+        });
+        assert.equal("instructions" in (value.teamRoles.reviewer ?? {}), false);
+        assert.deepEqual(value.shippedChanges.bob, { model: "provider/other" });
+    });
+
+    it("writes the older instructions key back unchanged", () => {
+        const table = {
+            reviewer: { instructions: "Review the work.", tools: ["read"] },
+            bob: { instructions: "Lead.", model: "provider/other" },
+        };
+        assert.deepEqual(rolesSection.serialize(rolesSection.parse(table)), table);
+    });
+
+    it("names the role and the field when the older instructions key is empty or not a string", () => {
+        const empty = failure(() => rolesSection.parse({ reviewer: { instructions: " ", tools: ["read"] } }));
+        assert.deepEqual([empty.key, empty.reason], ["reviewer.instructions", "instructions are empty"]);
+        assert.equal(failure(() => rolesSection.parse({ bob: { instructions: 5 } })).key, "bob.instructions");
     });
 
     it("serializes to a table that parses back to the same value", () => {
         const value = rolesSection.parse({
             reviewer: reviewerTable,
             writer: { instructions: "Write.", tools: ["write"] },
+            editor: { tools: ["read"] },
             bob: { thinking_level: "high", skills: ["/skills/x"] },
         });
         assert.deepEqual(rolesSection.parse(rolesSection.serialize(value)), value);
@@ -73,11 +106,6 @@ describe("rolesSection", () => {
         assert.equal(failure(() => rolesSection.parse({ bob: { workspace: "rel" } })).key, "bob.workspace");
     });
 
-    it("names the role and the field when a team role lacks instructions", () => {
-        const error = failure(() => rolesSection.parse({ reviewer: { tools: ["read"] } }));
-        assert.equal(error.key, "reviewer.instructions");
-    });
-
     it("names the role and the field when a team role lacks tools", () => {
         const error = failure(() => rolesSection.parse({ reviewer: { instructions: "Review." } }));
         assert.equal(error.key, "reviewer.tools");
@@ -89,7 +117,7 @@ describe("rolesSection", () => {
     });
 
     it("uses no team roles and no changes by default", () => {
-        assert.deepEqual(rolesSection.defaults(), { teamRoles: {}, shippedChanges: {} });
+        assert.deepEqual(rolesSection.defaults(), { teamRoles: {}, shippedChanges: {}, older: {} });
         assert.equal(rolesSection.name, "roles");
     });
 });

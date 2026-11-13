@@ -73,28 +73,35 @@ function roleFieldsOf(input: CommandInput): Record<string, unknown> {
     return fields;
 }
 
-function formatRoleLine(role: CatalogRole): string {
+// What roles.list returns: the catalog's role with the text of its instruction file, absent when the file is missing.
+type ListedRole = CatalogRole & { instructions?: string };
+
+function formatRoleLine(role: ListedRole): string {
     const origin = role.shipped ? (role.changed ? "shipped, changed" : "shipped") : "team";
     return `${flat(role.name)}  ${origin}  ${flat(role.model ?? "default model")}`;
 }
 
-function formatRole(role: CatalogRole): string[] {
+// Every line of the instructions is indented, so none reads as a field of this listing.
+const formatInstructions = (text: string): string[] => [
+    "  Instructions:",
+    ...block(text)
+        .split("\n")
+        .map((line) => `    ${line}`),
+];
+
+function formatRole(role: ListedRole): string[] {
     return [
         formatRoleLine(role),
         `  Thinking: ${flat(role.thinkingLevel ?? "default")}`,
         `  Workspace: ${flat(role.workspace ?? "role default")}`,
         `  Tools: ${flat(role.tools.join(", ")) || NOTHING}`,
         `  Skills: ${flat(role.skills.join(", ")) || NOTHING}`,
-        "  Instructions:",
-        // Every line of the instructions is indented, so none reads as a field of this listing.
-        ...block(role.instructions)
-            .split("\n")
-            .map((line) => `    ${line}`),
+        ...(role.instructions === undefined ? [] : formatInstructions(role.instructions)),
     ];
 }
 
-async function listedRoles(client: Client): Promise<CatalogRole[]> {
-    return ((await client.invoke("roles.list", {})) as { roles: CatalogRole[] }).roles;
+async function listedRoles(client: Client): Promise<ListedRole[]> {
+    return ((await client.invoke("roles.list", {})) as { roles: ListedRole[] }).roles;
 }
 
 const rolesList = serviceCommand(
@@ -103,7 +110,7 @@ const rolesList = serviceCommand(
     async (c, input) => {
         const answer = await c.invoke("roles.list", {});
         if (input.json) writeJson(input.io, answer);
-        else for (const role of (answer as { roles: CatalogRole[] }).roles) writeLine(input.io, formatRoleLine(role));
+        else for (const role of (answer as { roles: ListedRole[] }).roles) writeLine(input.io, formatRoleLine(role));
         return EXIT_CODES.ok;
     },
 );

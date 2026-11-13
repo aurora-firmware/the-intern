@@ -1,8 +1,11 @@
+import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type { ConfigStore } from "../config/config_writer.ts";
 import type { SeatPlace } from "../desk/desk_model.ts";
 import { JOB_TOOL_NAMES } from "../jobs/job_model.ts";
 import type { InternModels } from "../models/model_runtime.ts";
+import { FileRefusedError, type FileStore } from "../skills/file_store.ts";
+import { DEFAULT_SHIPPED_ROOT, restoreShippedFile } from "../skills/internal_folder.ts";
 import { roleWorkspacePath } from "../workspaces/workspace_folder.ts";
 import type { WorkspaceRegistry } from "../workspaces/workspace_registry.ts";
 import {
@@ -14,6 +17,7 @@ import {
     resolveSeat,
     type Seat,
     type SeatOverrides,
+    type SeatRole,
     SHIPPED_TOOL_NAMES,
     validateRoleDefinition,
 } from "./role_model.ts";
@@ -23,11 +27,13 @@ export type CatalogRole = RoleDefinition & { shipped: boolean; changed: boolean 
 
 export type RoleReferenceSource = { name: string; referrersOf(role: string): string[] };
 
+export type InstructionText = { instructions: string };
+
 export type RoleCatalog = {
     list(): CatalogRole[];
     get(name: string): CatalogRole | undefined;
-    create(role: RoleDefinition): Promise<CatalogRole>;
-    change(name: string, change: RoleChange): Promise<CatalogRole>;
+    create(role: RoleDefinition, text: InstructionText): Promise<CatalogRole>;
+    change(name: string, change: RoleChange, text?: Partial<InstructionText>): Promise<CatalogRole>;
     restore(name: string): Promise<CatalogRole>;
     remove(name: string): Promise<void>;
     addReferenceSource(source: RoleReferenceSource): void;
@@ -42,6 +48,10 @@ export type RoleCatalogOptions = {
     workspaces: WorkspaceRegistry;
     models: Pick<InternModels, "checkModelChoice" | "defaultChoice">;
     dataDir: string;
+    instructionPath(role: string): string;
+    fileStore: FileStore;
+    /** The folder the shipped instruction files are restored from; the package's own unless a test names another. */
+    shippedRoot?: string;
 };
 
 export type RoleRefusalKind = "not_found" | "invalid" | "conflict";
@@ -83,7 +93,8 @@ const offendingValue = (role: RoleDefinition, field: string): string | undefined
 };
 
 export function createRoleCatalog(options: RoleCatalogOptions): RoleCatalog {
-    const { config, shipped, workspaces, models, dataDir } = options;
+    const { config, shipped, workspaces, models, dataDir, instructionPath, fileStore } = options;
+    const shippedRoot = options.shippedRoot ?? DEFAULT_SHIPPED_ROOT;
     const referenceSources: RoleReferenceSource[] = [];
 
     const current = (): RolesConfig => config.current(rolesSection);
@@ -151,6 +162,36 @@ export function createRoleCatalog(options: RoleCatalogOptions): RoleCatalog {
         checkChoices(role.name, role);
     };
 
+    const checkInstructions = (role: string, instructions: string | undefined): void => {
+        if (instructions !== undefined && instructions.trim() === "") {
+            refuseField(role, "instructions", undefined, "instructions are empty");
+        }
+    };
+
+    const writeInstructions = async (role: string, instructions: string | undefined): Promise<void> => {
+        if (instructions !== undefined)
+            await fileStore.write(instructionPath(role), instructions, { announce: "role" });
+    };
+
+    const readInstructions = (role: string): string => {
+        const path = instructionPath(role);
+        try {
+            return readFileSync(path, "utf8");
+        } catch (error) {
+            const reason = `the instruction file ${path} can't be read: ${(error as Error).message}`;
+            throw new RoleRefusedError("invalid", role, reason, "instructions");
+        }
+    };
+
+    // A file already gone is the state a removal wants; any other failure stays.
+    const removeInstructions = async (role: string): Promise<void> => {
+        try {
+            await fileStore.remove(instructionPath(role), { announce: "role" });
+        } catch (error) {
+            if (!(error instanceof FileRefusedError && error.kind === "not_found")) throw error;
+        }
+    };
+
     const saveChange = async (name: string, next: RolesConfig): Promise<CatalogRole> => {
         await config.change(rolesSection, next);
         return requireRole(name);
@@ -159,23 +200,28 @@ export function createRoleCatalog(options: RoleCatalogOptions): RoleCatalog {
     return {
         list,
         get: effective,
-        async create(role) {
+        async create(role, { instructions }) {
             if (effective(role.name) !== undefined) {
                 throw new RoleRefusedError("conflict", role.name, "a role with this name already exists");
             }
             checkDefinition(role);
+            checkInstructions(role.name, instructions);
             const definition = { ...role };
             if (definition.workspace === undefined) await workspaces.ensureRoleDefault(role.name);
+            await writeInstructions(role.name, instructions);
             return saveChange(role.name, {
                 ...current(),
                 teamRoles: { ...current().teamRoles, [role.name]: definition },
             });
         },
-        async change(name, change) {
+        async change(name, change, { instructions } = {}) {
             const role = requireRole(name);
             const { shipped: _shipped, changed: _changed, ...definition } = role;
             checkDefinition(applyRoleChange(definition, change));
+            checkInstructions(name, instructions);
+            await writeInstructions(name, instructions);
             if (role.shipped) {
+                if (Object.keys(change).length === 0) return role;
                 const merged = { ...current().shippedChanges[name], ...change };
                 return saveChange(name, {
                     ...current(),
@@ -189,7 +235,15 @@ export function createRoleCatalog(options: RoleCatalogOptions): RoleCatalog {
             const role = requireRole(name);
             if (!role.shipped) throw new RoleRefusedError("conflict", name, "it is a team role, not a shipped role");
             const { [name]: _dropped, ...remaining } = current().shippedChanges;
-            return saveChange(name, { ...current(), shippedChanges: remaining });
+            const { [name]: _older, ...olderRemaining } = current().older;
+            await config.change(rolesSection, { ...current(), shippedChanges: remaining, older: olderRemaining });
+            await restoreShippedFile({
+                dataDir,
+                shippedRoot,
+                store: fileStore,
+                relativePath: `instructions/roles/${name}.md`,
+            });
+            return requireRole(name);
         },
         async remove(name) {
             const role = requireRole(name);
@@ -201,14 +255,17 @@ export function createRoleCatalog(options: RoleCatalogOptions): RoleCatalog {
                 throw new RoleRefusedError("conflict", name, `it is named by ${referrers.join(", ")}`);
             }
             const { [name]: _removed, ...remaining } = current().teamRoles;
-            await config.change(rolesSection, { ...current(), teamRoles: remaining });
+            const { [name]: _older, ...olderRemaining } = current().older;
+            await config.change(rolesSection, { ...current(), teamRoles: remaining, older: olderRemaining });
+            await removeInstructions(name);
         },
         addReferenceSource(source) {
             referenceSources.push(source);
         },
         seatFor(name, overrides = {}, place = "job") {
-            const { shipped: _shipped, changed: _changed, ...role } = requireRole(name);
-            checkDefinition(role);
+            const { shipped: _shipped, changed: _changed, ...definition } = requireRole(name);
+            checkDefinition(definition);
+            const role: SeatRole = { ...definition, instructions: readInstructions(name) };
             const defaults = models.defaultChoice();
             checkChoices(name, {
                 model: overrides.model ?? role.model,

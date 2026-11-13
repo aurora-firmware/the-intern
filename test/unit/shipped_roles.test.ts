@@ -4,35 +4,21 @@ import { isAbsolute, join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { SHIPPED_TOOL_NAMES, validateRoleDefinition } from "../../src/roles/role_model.ts";
-import {
-    DEFAULT_LEAD_ROLE,
-    loadPreamble,
-    loadShippedRoles,
-    SHIPPED_ROLE_NAMES,
-} from "../../src/roles/shipped_roles.ts";
+import { DEFAULT_LEAD_ROLE, loadPreamble, SHIPPED_ROLE_NAMES, SHIPPED_ROLES } from "../../src/roles/shipped_roles.ts";
 
 const shippedFolder = fileURLToPath(new URL("../../src/shipped/", import.meta.url));
 
-describe("loadShippedRoles", () => {
-    it("returns exactly bob, gp and desk, each valid with non-empty instructions", async () => {
-        const roles = await loadShippedRoles();
-        assert.deepEqual(roles.map((role) => role.name).sort(), ["bob", "desk", "gp"]);
-        for (const role of roles) {
+describe("SHIPPED_ROLES", () => {
+    it("holds exactly bob, gp and desk, each valid and carrying no instruction text", () => {
+        assert.deepEqual(SHIPPED_ROLES.map((role) => role.name).sort(), ["bob", "desk", "gp"]);
+        for (const role of SHIPPED_ROLES) {
             validateRoleDefinition(role);
-            assert.notEqual(role.instructions.trim(), "");
+            assert.equal("instructions" in role, false);
         }
     });
 
-    it("reads each role's instructions from its file in the package", async () => {
-        const roles = await loadShippedRoles();
-        for (const role of roles) {
-            const text = await readFile(join(shippedFolder, "instructions", "roles", `${role.name}.md`), "utf8");
-            assert.equal(role.instructions, text);
-        }
-    });
-
-    it("gives bob and gp every shipped tool and desk none, and no role a default model, thinking level or workspace", async () => {
-        for (const role of await loadShippedRoles()) {
+    it("gives bob and gp every shipped tool and desk none, and no role a default model, thinking level or workspace", () => {
+        for (const role of SHIPPED_ROLES) {
             assert.deepEqual(role.tools, role.name === "desk" ? [] : [...SHIPPED_TOOL_NAMES]);
             assert.equal(role.model, undefined);
             assert.equal(role.thinkingLevel, undefined);
@@ -41,10 +27,9 @@ describe("loadShippedRoles", () => {
     });
 
     it("gives gp the absolute carry-out-a-part skill folder holding a SKILL.md and bob and desk no skills", async () => {
-        const roles = await loadShippedRoles();
-        const bob = roles.find((role) => role.name === "bob");
-        const gp = roles.find((role) => role.name === "gp");
-        const desk = roles.find((role) => role.name === "desk");
+        const bob = SHIPPED_ROLES.find((role) => role.name === "bob");
+        const gp = SHIPPED_ROLES.find((role) => role.name === "gp");
+        const desk = SHIPPED_ROLES.find((role) => role.name === "desk");
         assert.deepEqual(bob?.skills, []);
         assert.deepEqual(desk?.skills, []);
         assert.equal(gp?.skills.length, 1);

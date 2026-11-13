@@ -13,11 +13,12 @@ import { createRolePromptExtension } from "../prompt/role_prompt_extension.ts";
 import { createWorkspaceContextLoader } from "../prompt/workspace_context.ts";
 import { createRoleCatalog, type RoleCatalog } from "../roles/role_catalog.ts";
 import { rolesSection, workspacesSection } from "../roles/roles_section.ts";
-import { loadPreamble, loadShippedRoles } from "../roles/shipped_roles.ts";
+import { loadPreamble, SHIPPED_ROLES } from "../roles/shipped_roles.ts";
 import type { Operation } from "../service/operations.ts";
 import { roleOperations } from "../service/role_operations.ts";
 import { seatOperations } from "../service/seat_operations.ts";
 import { workspaceOperations } from "../service/workspace_operations.ts";
+import { roleInstructionPath } from "../skills/internal_folder.ts";
 import { createSkillsComponent, type SkillsComponent } from "../skills/skills_component.ts";
 import { shippedToolsExtension } from "../tools/shipped_tools_extension.ts";
 import { roleWorkspacePath } from "../workspaces/workspace_folder.ts";
@@ -43,7 +44,6 @@ export async function createAgentsComponent(options: {
     skills?: SkillsComponent;
 }): Promise<AgentsComponent> {
     const skills = options.skills ?? createSkillsComponent({ logger: options.logger });
-    const shipped = await loadShippedRoles();
     const preamble = await loadPreamble();
     const loader = createWorkspaceContextLoader({ logger: options.logger });
     let runtime: AgentsRuntime | undefined;
@@ -72,7 +72,16 @@ export async function createAgentsComponent(options: {
             account: { uid: process.getuid?.() ?? 0 },
             defaultWorkspaceUsers: (path) => catalogRef.current?.defaultWorkspaceUsers(path) ?? [],
         });
-        const catalog = createRoleCatalog({ config: ctx.config, shipped, workspaces, models: ctx.models, dataDir });
+        const catalog = createRoleCatalog({
+            config: ctx.config,
+            shipped: SHIPPED_ROLES,
+            workspaces,
+            models: ctx.models,
+            dataDir,
+            instructionPath: (role) => roleInstructionPath(dataDir, role),
+            fileStore: skills.fileStore,
+            shippedRoot: skills.shippedRoot,
+        });
         catalogRef.current = catalog;
         return { catalog, workspaces };
     };
