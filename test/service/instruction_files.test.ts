@@ -17,8 +17,8 @@ import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContex
 import { createLogger } from "../../src/daemon/logger.ts";
 import { createSeatedConversation, readConversationMeta } from "../../src/host/seating.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
-import { roleInstructionPath } from "../../src/skills/internal_folder.ts";
 import type { Caller } from "../../src/service/operations.ts";
+import { roleInstructionPath } from "../../src/skills/internal_folder.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const WAIT_MS = 20_000;
