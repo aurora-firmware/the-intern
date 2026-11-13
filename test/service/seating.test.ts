@@ -12,13 +12,14 @@ import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/comp
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
 import { AgentDoc, type ConversationId } from "@earendil-works/pi-durable";
 import { createLogger } from "../../src/daemon/logger.ts";
-import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
+import { resetConversation, submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
 import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import {
     changeSeat,
     createSeatedConversation,
     type JobLinks,
     readConversationMeta,
+    resetWithSeat,
     SEAT_RECORD_KIND,
     type SeatActor,
     SeatingError,
@@ -361,5 +362,44 @@ describe("conversation metadata after reopening", () => {
         const host = await open();
 
         assert.equal(await readConversationMeta(host, "999"), undefined);
+    });
+});
+
+describe("the enabled set", () => {
+    async function seatedWith(skills: string[]) {
+        const { open, seatOn } = await createFixture();
+        const host = await open();
+        const { conversationId } = await createSeatedConversation(host, {
+            scope: "start-job",
+            key: "k1",
+            job,
+            seat: seatOn("model-one", { skills: skills }),
+            actor,
+        });
+        return { host, conversationId, seatOn };
+    }
+
+    it("holds the default skill names of the role a conversation is created with", async () => {
+        const { host, conversationId } = await seatedWith(["a", "b"]);
+        assert.deepEqual((await readConversationMeta(host, conversationId))?.enabledSkills, ["a", "b"]);
+    });
+
+    it("sets the default skill names of the new role in the commit of changeSeat", async () => {
+        const { host, conversationId, seatOn } = await seatedWith(["a"]);
+        await changeSeat(host, conversationId, { seat: seatOn("model-two", { skills: ["c"] }), actor });
+        assert.deepEqual((await readConversationMeta(host, conversationId))?.enabledSkills, ["c"]);
+    });
+
+    it("sets the default skill names of the new role in the commit of a reset with a seat", async () => {
+        const { host, conversationId, seatOn } = await seatedWith(["a"]);
+        const change = { seat: seatOn("model-two", { skills: ["d", "e"] }), actor };
+        await resetWithSeat(host, conversationId, { change });
+        assert.deepEqual((await readConversationMeta(host, conversationId))?.enabledSkills, ["d", "e"]);
+    });
+
+    it("leaves the set unchanged when the conversation is reset without a seat", async () => {
+        const { host, conversationId } = await seatedWith(["a", "b"]);
+        await resetConversation(host, conversationId, "again");
+        assert.deepEqual((await readConversationMeta(host, conversationId))?.enabledSkills, ["a", "b"]);
     });
 });
