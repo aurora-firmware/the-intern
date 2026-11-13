@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -10,6 +10,7 @@ import { type Admission, createAdmission } from "../../src/admission/admission.t
 import { createAdmissionGate } from "../../src/admission/admission_extension.ts";
 import { defineConfigSection, loadConfig } from "../../src/config/config_file.ts";
 import { type ConfigStore, createConfigStore } from "../../src/config/config_writer.ts";
+import type { ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import {
     createInstanceFeed,
@@ -34,6 +35,8 @@ import {
 import type { Seat } from "../../src/roles/role_model.ts";
 import { feedOperations } from "../../src/service/feed_operations.ts";
 import { type Caller, ServiceError } from "../../src/service/operations.ts";
+import { createFileChangeHub, type FileChangeHub } from "../../src/skills/file_store.ts";
+import { createSkillsComponent } from "../../src/skills/skills_component.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -52,6 +55,8 @@ type Fixture = {
     config: ConfigStore;
     modelId: string;
     jobStore: JobStore;
+    fileChanges: FileChangeHub;
+    directory: string;
     open(maxPending?: number, store?: JobStore): Promise<InstanceFeed>;
 };
 
@@ -118,7 +123,10 @@ async function openFixture(capacity = 2): Promise<Fixture> {
     await migrateJobStore(hostDatabase(host));
     const jobStore = createJobStore(hostDatabase(host));
     const modelId = `${fake.getModel().provider}/${fake.getModel().id}`;
+    const fileChanges = createFileChangeHub();
     return {
+        fileChanges,
+        directory,
         host,
         admission,
         config,
@@ -130,6 +138,7 @@ async function openFixture(capacity = 2): Promise<Fixture> {
                 admission,
                 config,
                 jobStore: store,
+                fileChanges,
                 ...(maxPending && { maxPending }),
             });
             feeds.push(feed);
@@ -321,6 +330,82 @@ describe("the instance feed", () => {
         );
         const created = deltas[0];
         assert.ok(created?.type === "conversation_created" && created.conversationId === id);
+    });
+
+    it("publishes one files_changed delta per announced write, in sequence with the other deltas", async () => {
+        const fixture = await openFixture();
+        const feed = await fixture.open();
+        const subscription = feed.subscribe();
+        const skills = createSkillsComponent({ logger: createLogger({ stream: { write: () => true } }) });
+        await skills.component.checkModels?.({ fileChanges: fixture.fileChanges } as ServiceContext);
+
+        await fixture.config.change(labelSection, { label: "before" });
+        await skills.fileStore.write(join(fixture.directory, "a.md"), "text", { announce: "skill" });
+        await fixture.config.change(labelSection, { label: "after" });
+
+        assert.deepEqual(await nextDelta(subscription), { seq: 1, type: "settings_changed", section: "label" });
+        assert.deepEqual(await nextDelta(subscription), {
+            seq: 2,
+            type: "files_changed",
+            path: join(fixture.directory, "a.md"),
+            kind: "skill",
+        });
+        assert.deepEqual(await nextDelta(subscription), { seq: 3, type: "settings_changed", section: "label" });
+    });
+
+    it("sends every instance subscriber the files_changed delta", async () => {
+        const fixture = await openFixture();
+        const feed = await fixture.open();
+        const first = feed.subscribe();
+        const second = feed.subscribe();
+
+        fixture.fileChanges.publish({ path: "/p/role.md", kind: "role" });
+
+        const expected = { seq: 1, type: "files_changed", path: "/p/role.md", kind: "role" };
+        assert.deepEqual(await nextDelta(first), expected);
+        assert.deepEqual(await nextDelta(second), expected);
+    });
+
+    it("publishes no files_changed delta for a file changed by hand or written without announce", async () => {
+        const fixture = await openFixture();
+        const feed = await fixture.open();
+        const subscription = feed.subscribe();
+        const skills = createSkillsComponent({ logger: createLogger({ stream: { write: () => true } }) });
+        await skills.component.checkModels?.({ fileChanges: fixture.fileChanges } as ServiceContext);
+
+        await writeFile(join(fixture.directory, "hand.md"), "by hand");
+        await skills.fileStore.write(join(fixture.directory, "quiet.md"), "text");
+        await fixture.config.change(labelSection, { label: "marker" });
+
+        assert.deepEqual(await nextDelta(subscription), { seq: 1, type: "settings_changed", section: "label" });
+    });
+
+    it("stops listening to the file change hub when the feed closes", async () => {
+        const fixture = await openFixture();
+        let listening = 0;
+        const hub: FileChangeHub = {
+            publish: (change) => fixture.fileChanges.publish(change),
+            onChange(listener) {
+                listening++;
+                const stop = fixture.fileChanges.onChange(listener);
+                return () => {
+                    listening--;
+                    stop();
+                };
+            },
+        };
+        const feed = await createInstanceFeed({
+            host: fixture.host,
+            admission: fixture.admission,
+            config: fixture.config,
+            jobStore: fixture.jobStore,
+            fileChanges: hub,
+        });
+        assert.equal(listening, 1);
+
+        feed.close();
+
+        assert.equal(listening, 0);
     });
 
     it("delivers every delta to every instance subscriber", async () => {

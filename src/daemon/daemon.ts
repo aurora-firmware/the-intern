@@ -30,6 +30,7 @@ import { feedOperations } from "../service/feed_operations.ts";
 import { type Catalogue, createCatalogue, type DaemonPhase, type Operation } from "../service/operations.ts";
 import { runtimeReadOperations } from "../service/runtime_read_operations.ts";
 import { type StatusSources, statusOperation } from "../service/status_operation.ts";
+import { createFileChangeHub, type FileChangeHub } from "../skills/file_store.ts";
 import { STOP_BOUND_MS, WORKER_THREAD_COUNT } from "./constants.ts";
 import type { Logger } from "./logger.ts";
 import { acquireOwnership } from "./ownership.ts";
@@ -53,6 +54,7 @@ export type ServiceContext = {
     logger: Logger;
     catalogue: Catalogue;
     jobStore: JobStore;
+    fileChanges: FileChangeHub;
 };
 
 export type DaemonComponent = {
@@ -275,11 +277,13 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
             const store = createConfigStore(dirs.configFile, sections, config);
             const feed = createObservationFeed({ host: runtime.host });
             undoStack.push(async () => feed.close());
+            const fileChanges = createFileChangeHub();
             const instanceFeed = await createInstanceFeed({
                 host: runtime.host,
                 admission: runtime.gateAdmission,
                 config: store,
                 jobStore: runtime.jobStore,
+                fileChanges,
             });
             undoStack.push(async () => instanceFeed.close());
             Object.assign(context, {
@@ -290,6 +294,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
                 config: store,
                 feed,
                 instanceFeed,
+                fileChanges,
             });
             return runtime;
         });

@@ -7,7 +7,7 @@ import type { ConfigSection } from "../config/config_file.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
 import type { Operation } from "../service/operations.ts";
-import { createFileStore, type FileStore } from "./file_store.ts";
+import { createFileStore, type FileChangeHub, type FileStore } from "./file_store.ts";
 import { DEFAULT_SHIPPED_ROOT, prepareInternalFolder } from "./internal_folder.ts";
 import { skillsSection } from "./skills_section.ts";
 
@@ -30,7 +30,8 @@ export type SkillsComponent = {
 
 export function createSkillsComponent(options: SkillsComponentOptions): SkillsComponent {
     const shippedRoot = options.shippedRoot ?? DEFAULT_SHIPPED_ROOT;
-    const fileStore = createFileStore();
+    let hub: FileChangeHub | undefined;
+    const fileStore = createFileStore({ changes: () => hub });
     let recordedDataDir: string | undefined;
 
     const component: DaemonComponent = {
@@ -39,6 +40,10 @@ export function createSkillsComponent(options: SkillsComponentOptions): SkillsCo
             recordedDataDir = dirs.dataDir;
             await prepareInternalFolder({ dataDir: dirs.dataDir, shippedRoot, store: fileStore });
             return undefined;
+        },
+        // Writes before this step announce nothing: the start rule of step 3 has no feed to tell.
+        async checkModels(ctx) {
+            hub = ctx.fileChanges;
         },
     };
 
