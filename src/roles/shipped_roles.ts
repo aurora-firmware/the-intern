@@ -23,16 +23,10 @@ const TOOLS_BY_ROLE: Record<(typeof SHIPPED_ROLE_NAMES)[number], string[]> = {
     desk: [],
 };
 
-export const loadShippedRoles = (): Promise<RoleDefinition[]> =>
-    Promise.all(
-        SHIPPED_ROLE_NAMES.map(
-            async (name): Promise<RoleDefinition> => ({
-                name,
-                instructions: await readShippedText(`instructions/roles/${name}.md`),
-                tools: TOOLS_BY_ROLE[name],
-                skills: SKILLS_BY_ROLE[name],
-            }),
-        ),
-    );
+export const SHIPPED_ROLES: RoleDefinition[] = SHIPPED_ROLE_NAMES.map((name) => ({
+    name,
+    tools: TOOLS_BY_ROLE[name],
+    skills: SKILLS_BY_ROLE[name],
+}));
 
 export const loadPreamble = (): Promise<string> => readShippedText("instructions/common.md");

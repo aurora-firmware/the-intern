@@ -9,13 +9,15 @@ const ROLE_NAME_PATTERN = /^[a-z][a-z0-9-]{0,39}$/;
 
 export type RoleDefinition = {
     name: string;
-    instructions: string;
     tools: string[];
     skills: string[];
     model?: string;
     thinkingLevel?: string;
     workspace?: string;
 };
+
+// The role as a seat is made from it: its definition and the text of its instruction file.
+export type SeatRole = RoleDefinition & { instructions: string };
 
 export type RoleChange = Partial<Omit<RoleDefinition, "name">>;
 
@@ -56,9 +58,6 @@ export const validateRoleDefinition = (role: RoleDefinition): void => {
     if (!ROLE_NAME_PATTERN.test(role.name)) {
         throw new RoleInvalidError(role.name, "name", `"${role.name}" does not match ${ROLE_NAME_PATTERN}`);
     }
-    if (role.instructions.trim() === "") {
-        throw new RoleInvalidError(role.name, "instructions", "instructions are empty");
-    }
     const unknownTool = role.tools.find((tool) => !isKnownTool(tool));
     if (unknownTool !== undefined) {
         throw new RoleInvalidError(role.name, "tools", `"${unknownTool}" is not a shipped, coordination or job tool`);
@@ -78,7 +77,7 @@ const placeTools = (place: SeatPlace): readonly string[] =>
     place === "front_desk" ? FRONT_DESK_TOOL_NAMES : [...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES];
 
 export const resolveSeat = (
-    role: RoleDefinition,
+    role: SeatRole,
     defaults: SeatDefaults,
     overrides: SeatOverrides = {},
     place: SeatPlace = "job",

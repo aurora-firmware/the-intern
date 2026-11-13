@@ -16,6 +16,8 @@ import { createWorkspaceContextLoader } from "../../src/prompt/workspace_context
 import { createRoleCatalog } from "../../src/roles/role_catalog.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 import { rolesSection, workspacesSection } from "../../src/roles/roles_section.ts";
+import { createFileStore } from "../../src/skills/file_store.ts";
+import { roleInstructionPath } from "../../src/skills/internal_folder.ts";
 import { createWorkspaceRegistry } from "../../src/workspaces/workspace_registry.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -80,11 +82,14 @@ async function createCatalog(root: string, model: string) {
         account: { uid: process.getuid?.() ?? 0 },
         defaultWorkspaceUsers: () => [],
     });
+    await mkdir(join(dataDir, "instructions", "roles"), { recursive: true });
     const catalog = createRoleCatalog({
         config,
         shipped: [],
         workspaces,
         dataDir,
+        instructionPath: (role) => roleInstructionPath(dataDir, role),
+        fileStore: createFileStore(),
         models: { checkModelChoice: () => ({ ok: true }), defaultChoice: () => ({ model }) },
     });
     const registerWorkspace = async (name: string): Promise<string> => {
@@ -232,20 +237,23 @@ describe("the role prompt extension", () => {
     it("keeps sending the instructions and skills the agent was seated with when the team role changes later", async () => {
         const { prompts, model, root, say, seatConversation } = await createFixture();
         const catalog = await createCatalog(root, model);
-        await catalog.create({
-            name: "developer",
-            instructions: "Instructions of developer.",
-            tools: [],
-            skills: [await writeSkill(join(root, "role-skills"), "developer-role-skill")],
-            workspace: await catalog.registerWorkspace("ws-developer"),
-        });
+        await catalog.create(
+            {
+                name: "developer",
+                tools: [],
+                skills: [await writeSkill(join(root, "role-skills"), "developer-role-skill")],
+                workspace: await catalog.registerWorkspace("ws-developer"),
+            },
+            { instructions: "Instructions of developer." },
+        );
         const seatedId = await seatConversation(catalog.seatFor("developer"), "seated-before");
         await say(seatedId);
 
-        await catalog.change("developer", {
-            instructions: "Edited instructions.",
-            skills: [await writeSkill(join(root, "role-skills"), "edited-role-skill")],
-        });
+        await catalog.change(
+            "developer",
+            { skills: [await writeSkill(join(root, "role-skills"), "edited-role-skill")] },
+            { instructions: "Edited instructions." },
+        );
         await say(seatedId);
         const seatedAfterId = await seatConversation(catalog.seatFor("developer"), "seated-after");
         await say(seatedAfterId);

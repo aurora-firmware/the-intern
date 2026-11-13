@@ -6,6 +6,7 @@ import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { ServiceError } from "../../src/service/operations.ts";
+import { roleInstructionPath } from "../../src/skills/internal_folder.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const WAIT_TIMEOUT_MS = 20_000;
@@ -56,6 +57,7 @@ async function hermetic(): Promise<HermeticEnv> {
 }
 
 const configFile = (env: HermeticEnv) => join(env.configDir, "config.toml");
+const instructionFile = (env: HermeticEnv) => roleInstructionPath(env.dataDir, "reviewer");
 const fileText = (env: HermeticEnv) => readFile(configFile(env), "utf8").catch(() => "");
 
 async function refusal(action: Promise<unknown>): Promise<ServiceError> {
@@ -86,9 +88,13 @@ describe("the role operations", () => {
 
         await first.invoke("roles.create", reviewer);
         assert.match(await fileText(env), /reviewer/);
+        assert.equal(await readFile(instructionFile(env), "utf8"), "Review the work.");
+        assert.doesNotMatch(await fileText(env), /Review the work/);
         assert.ok((await first.roles()).some((role) => role.name === "reviewer"));
 
         await first.invoke("roles.change", { name: "reviewer", instructions: "Review hard." });
+        assert.equal(await readFile(instructionFile(env), "utf8"), "Review hard.");
+        assert.doesNotMatch(await fileText(env), /Review hard/);
         assert.equal((await first.roles()).find((role) => role.name === "reviewer")?.instructions, "Review hard.");
 
         await first.daemon.stop();
@@ -98,6 +104,7 @@ describe("the role operations", () => {
         await second.invoke("roles.remove", { name: "reviewer" });
         assert.ok(!(await second.roles()).some((role) => role.name === "reviewer"));
         assert.doesNotMatch(await fileText(env), /reviewer/);
+        await assert.rejects(readFile(instructionFile(env), "utf8"), { code: "ENOENT" });
     });
 
     it("creates the role once and returns the original result when roles.create repeats an idempotency key", async () => {
@@ -124,17 +131,19 @@ describe("the role operations", () => {
 
     it("returns the role as the original result when a crash left it in the file before the key was recorded", async () => {
         const { agents, invoke, roles } = await start(await hermetic());
-        const written = await agents.runtime().catalog.create(reviewer);
+        const { instructions, ...definition } = reviewer;
+        const written = await agents.runtime().catalog.create(definition, { instructions });
 
         const result = await invoke("roles.create", { ...reviewer, idempotencyKey: "k1" });
 
-        assert.deepEqual(result, { role: written });
+        assert.deepEqual(result, { role: { ...written, instructions } });
         assert.equal((await roles()).filter((role) => role.name === "reviewer").length, 1);
     });
 
     it("still refuses a key with a different definition for an existing name as a conflict", async () => {
         const { agents, invoke } = await start(await hermetic());
-        await agents.runtime().catalog.create(reviewer);
+        const { instructions, ...definition } = reviewer;
+        await agents.runtime().catalog.create(definition, { instructions });
 
         const error = await refusal(
             invoke("roles.create", { ...reviewer, instructions: "Other.", idempotencyKey: "k1" }),
@@ -238,15 +247,16 @@ describe("the role operations", () => {
         const env = await hermetic();
         const { invoke, roles } = await start(env);
         const shippedInstructions = (await roles()).find((role) => role.name === "gp")?.instructions;
-        await invoke("roles.change", { name: "gp", instructions: "Something else." });
-        assert.match(await fileText(env), /Something else/);
+        await invoke("roles.change", { name: "gp", instructions: "Something else.", tools: ["read"] });
+        assert.equal((await roles()).find((role) => role.name === "gp")?.instructions, "Something else.");
+        assert.match(await fileText(env), /\[roles\.gp\]/);
 
         await invoke("roles.restore", { name: "gp" });
 
         const gp = (await roles()).find((role) => role.name === "gp");
         assert.equal(gp?.instructions, shippedInstructions);
         assert.equal(gp?.changed, false);
-        assert.doesNotMatch(await fileText(env), /Something else/);
+        assert.doesNotMatch(await fileText(env), /\[roles\.gp\]/);
     });
 
     it("refuses with conflict naming the file and applies nothing when the file changed on disk", async () => {
