@@ -11,8 +11,8 @@ import {
     renderSkillListing,
     scheduledRunNotice,
 } from "../../src/prompt/role_prompt.ts";
-import type { CatalogSkill } from "../../src/skills/skill_resolution.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
+import type { CatalogSkill } from "../../src/skills/skill_resolution.ts";
 
 const seat: Seat = {
     role: "writer",
