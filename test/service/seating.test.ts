@@ -12,7 +12,12 @@ import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/comp
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
 import { AgentDoc, type ConversationId } from "@earendil-works/pi-durable";
 import { createLogger } from "../../src/daemon/logger.ts";
-import { resetConversation, submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
+import {
+    compactConversation,
+    resetConversation,
+    submitInput,
+    waitForSubmission,
+} from "../../src/host/conversation_control.ts";
 import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import {
     changeSeat,
@@ -91,7 +96,7 @@ async function createFixture(firstDelayMs = 0): Promise<Fixture> {
         const host = await openHarnessHost({
             databaseFile: join(env.root, "state.sqlite"),
             models: modelsFor(fake),
-            harnessSettings: {},
+            harnessSettings: { compaction: { keepRecentTokens: 1 } },
             extensions: [],
             defaultCwd: process.cwd(),
             logger: createLogger({ stream: { write: () => true } }),
@@ -401,6 +406,16 @@ describe("the enabled set", () => {
     it("leaves the set unchanged when the conversation is reset without a seat", async () => {
         const { host, conversationId } = await seatedWith(["a", "b"]);
         await resetConversation(host, conversationId, "again");
+        assert.deepEqual((await readConversationMeta(host, conversationId))?.enabledSkills, ["a", "b"]);
+    });
+
+    it("leaves the set unchanged when the conversation is compacted", async () => {
+        const { host, conversationId } = await seatedWith(["a", "b"]);
+        const turn = await submitInput(host, conversationId, { content: "one", requestId: "r1", busyMode: "reject" });
+        await waitForSubmission(host, turn.submissionId, WAIT_MS);
+        await compactConversation(host, conversationId);
+        const entries = (await host.readEntries(conversationId, { limit: 100 })).entries;
+        assert.ok(entries.some((entry) => entry.kind === "pi.compaction"));
         assert.deepEqual((await readConversationMeta(host, conversationId))?.enabledSkills, ["a", "b"]);
     });
 });
