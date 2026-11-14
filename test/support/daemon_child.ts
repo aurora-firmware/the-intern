@@ -12,7 +12,7 @@ import { parseArgs } from "node:util";
 import { Type } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
-import { defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { defineExtension, defineTool, type StorageWrite } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
@@ -20,7 +20,7 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import { createDeskComponent, type DeskCreatePoint } from "../../src/desk/desk_component.ts";
 import { onInputSubmitted, submissionIdFor, submissionState } from "../../src/host/conversation_control.ts";
 import type { Models, Storage } from "../../src/host/harness_host.ts";
-import { readConversationMeta } from "../../src/host/seating.ts";
+import { readConversationMeta, SEAT_RECORD_KIND } from "../../src/host/seating.ts";
 import { blockJob, cancelJob } from "../../src/jobs/job_actions.ts";
 import { createJobsComponent, type JobsComponentOptions, type WritePoint } from "../../src/jobs/jobs_component.ts";
 import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
@@ -314,6 +314,33 @@ function failingOnDemand(storage: Storage, storageSwitch: StorageSwitch): Storag
                 return () => Promise.reject(new Error("storage commit refused"));
             }
             return value.bind(target);
+        },
+    });
+}
+
+/** True when the commit writes a seat record that continues from an earlier seat, as a seat change does. */
+function changesSeat(writes: readonly StorageWrite[]): boolean {
+    return writes.some(
+        (write) =>
+            write.type === "entry" &&
+            write.value.kind === SEAT_RECORD_KIND &&
+            (write.value.data as { previous: unknown }).previous !== null,
+    );
+}
+
+/** Kills the process just before, or just after, the first commit of a seat change; the work after the kill never runs. */
+function killingAtSeatChange(storage: Storage, point: "before" | "after"): Storage {
+    return new Proxy(storage, {
+        get(target, property, receiver) {
+            const value = Reflect.get(target, property, receiver);
+            if (typeof value !== "function") return value;
+            if (property !== "commit") return value.bind(target);
+            return async (writes: readonly StorageWrite[], context: unknown) => {
+                if (!changesSeat(writes)) return value.call(target, writes, context);
+                if (point === "after") await value.call(target, writes, context);
+                process.kill(process.pid, "SIGKILL");
+                return new Promise<never>(() => undefined);
+            };
         },
     });
 }
@@ -669,7 +696,10 @@ async function main(): Promise<void> {
         ],
         ...(switches.workerThreads !== undefined && { workerThreadCount: switches.workerThreads }),
         ...(fake && { prepareModels: (runtime: InternModels) => modelsWithFake(runtime, fake) }),
-        openStorage: async (database) => failingOnDemand(await SqliteStorage.open(database), storageSwitch),
+        openStorage: async (database) => {
+            const storage = failingOnDemand(await SqliteStorage.open(database), storageSwitch);
+            return switches.killAtSeatChange ? killingAtSeatChange(storage, switches.killAtSeatChange) : storage;
+        },
     });
 
     currentPhase = () => daemon.phase();

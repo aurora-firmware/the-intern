@@ -118,6 +118,11 @@ export type StartDaemonOptions = {
      */
     killAfterResume?: boolean;
     /**
+     * The child kills itself with `SIGKILL` just before, or just after, the first storage commit that changes a seat
+     * that already had one (a handoff or a seat change), and never lets the work after the kill run.
+     */
+    killAtSeatChange?: "before" | "after";
+    /**
      * Adds the network listener, with a `[network]` section on the loopback address written to the instance's
      * `config.toml` before the daemon starts. It listens on a free port, which `networkPort()` gives.
      */
