@@ -71,6 +71,9 @@ const SkillItem = ({
         row.description !== "" ? h("span", { class: "skill-description" }, row.description) : null,
         h("span", { class: "skill-source", "data-verbatim": "" }, row.sourceText),
         ...row.marks.map((mark) => h("span", { class: "badge" }, mark)),
+        ...row.shadowed.map((copy) =>
+            h("div", { class: "skill-shadowed", "data-verbatim": "" }, `Shadows ${copy.sourceText}: ${copy.path}`),
+        ),
         isDeleted
             ? null
             : h("button", { type: "button", class: "button button-secondary file-open", onClick: onOpen }, "Edit"),
@@ -144,6 +147,15 @@ export const SkillsPanel = ({ target, feed }: { target: SkillsTarget; feed?: Fee
             : null,
         rows !== undefined && rows.skills.missing.length > 0
             ? h("p", { class: "skills-missing" }, `Not found: ${rows.skills.missing.join(", ")}`)
+            : null,
+        rows !== undefined && rows.skills.leftOut.length > 0
+            ? h(
+                  "ul",
+                  { class: "skills-left-out" },
+                  ...rows.skills.leftOut.map(({ path, reason }) =>
+                      h("li", { key: path, "data-verbatim": "" }, `Left out ${path}: ${reason}`),
+                  ),
+              )
             : null,
         rows !== undefined
             ? h(
