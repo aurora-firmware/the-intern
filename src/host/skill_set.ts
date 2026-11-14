@@ -4,7 +4,8 @@
  * commit. The entry carries no model message, so it is no part of the model's context and no input entry.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { defineEntry } from "@earendil-works/pi-durable";
+import { AgentDoc, configure, defineDoc, defineEntry } from "@earendil-works/pi-durable";
+import { SKILL_TOOL_NAME } from "../roles/role_model.ts";
 import { toConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { inOpenConversation } from "./job_section.ts";
@@ -55,4 +56,47 @@ export async function setEnabledSkill(
             return [...next];
         }, context),
     );
+}
+
+export const UPGRADES_KIND = "intern.upgrades";
+export const ENABLED_SKILLS_UPGRADE = "enabled-skills";
+
+// A daemon document (S-002 Definitions, "Database"): the upgrade writes that have finished.
+export const upgradesDocument = defineDoc<{ done: string[] }>({
+    kind: UPGRADES_KIND,
+    version: 1,
+    scope: "session",
+    initial: () => ({ done: [] }),
+    checkpointWhen: () => false,
+});
+
+/**
+ * ADR-001 decision 4's one upgrade write. Each conversation whose document has no `enabledSkills` gets, in one commit
+ * of its own, `defaultsOf(role)` and the `skill` tool in its stored seat and in its agent's tool selection; then
+ * `enabled-skills` joins `intern.upgrades`. A run that stops before that record repeats the write only for the
+ * documents still without the field. It delivers no input and appends no entry.
+ */
+export async function upgradeEnabledSkills(host: HarnessHost, defaultsOf: (role: string) => string[]): Promise<void> {
+    const harness = internalHarness(host);
+    const stored = await harness.snapshot(upgradesDocument, context);
+    if (stored?.done.includes(ENABLED_SKILLS_UPGRADE)) return;
+    for (const { id } of await host.listConversations()) {
+        await harness.commit(async (tx) => {
+            const meta = await tx.doc(conversationMetaDoc, toConversationId(id));
+            if (meta.jobId === "" || meta.enabledSkills !== undefined) return;
+            meta.enabledSkills = [...defaultsOf(meta.seat.role)];
+            if (!meta.seat.tools.includes(SKILL_TOOL_NAME)) meta.seat.tools.push(SKILL_TOOL_NAME);
+            const tools = (await tx.doc(AgentDoc, toConversationId(id))).tools;
+            // An unset selection already enables every tool, and a `remove` selection never held `skill` back.
+            if (Array.isArray(tools) && !tools.includes(SKILL_TOOL_NAME)) {
+                await configure(tx, toConversationId(id), {
+                    tools: [...tools, SKILL_TOOL_NAME].map((name) => ({ name }) as never),
+                });
+            }
+        }, context);
+    }
+    await harness.commit(async (tx) => {
+        const done = (await tx.doc(upgradesDocument)).done;
+        if (!done.includes(ENABLED_SKILLS_UPGRADE)) done.push(ENABLED_SKILLS_UPGRADE);
+    }, context);
 }
