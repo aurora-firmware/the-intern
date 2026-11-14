@@ -19,6 +19,7 @@ type Role = {
     name: string;
     instructions: string;
     instructionsVersion?: string;
+    skills: string[];
     shipped: boolean;
     changed: boolean;
 };
@@ -399,25 +400,28 @@ describe("the Skills and instructions section of the Roles page in chrome", () =
 
     it("changes a role's default skills from its Skills panel", { timeout: TEST_TIMEOUT_MS }, async (t) => {
         const { daemon, port } = await startServer();
+        const listed = (await daemon.invoke("skills.list", { role: "gp" })) as {
+            skills: { name: string; enabled: boolean }[];
+        };
+        const checked = listed.skills.find((entry) => entry.enabled)?.name;
+        if (checked === undefined) throw new Error("gp has no skill enabled");
+        await daemon.invoke("skills.disable", { role: "gp", name: checked });
         const browser = await launchBrowser(t, "chrome");
         if (browser === undefined) return;
         const page = await browser.newPage();
         await openRoles(page, port);
         const panel = `${roleCard("gp")} .role-skills`;
         await page.click(`${panel} > summary`);
-        const box = page.locator(`${panel} .skill-row[data-skill="${SKILL}"] input[type=checkbox]`);
+        const box = page.locator(`${panel} .skill-row[data-skill="${checked}"] input[type=checkbox]`);
         await box.waitFor({ timeout: WAIT_MS });
-        const before = (await roleOf(daemon, "gp"))?.skills ?? [];
-        t.assert.equal(before.includes(SKILL), false);
 
         await box.check({ timeout: WAIT_MS });
 
-        await waitFor(page, `document.querySelector(${JSON.stringify(roleCard("gp"))}) !== null`);
         const deadline = Date.now() + WAIT_MS;
-        while (!((await roleOf(daemon, "gp"))?.skills ?? []).includes(SKILL) && Date.now() < deadline) {
+        while (!((await roleOf(daemon, "gp"))?.skills ?? []).includes(checked) && Date.now() < deadline) {
             await new Promise((resolve) => setTimeout(resolve, POLL_MS));
         }
-        t.assert.equal(((await roleOf(daemon, "gp"))?.skills ?? []).includes(SKILL), true);
+        t.assert.equal(((await roleOf(daemon, "gp"))?.skills ?? []).includes(checked), true);
     });
 
     it("shows the common prompt in the editor", { timeout: TEST_TIMEOUT_MS }, async (t) => {

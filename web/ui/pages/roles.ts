@@ -1,14 +1,18 @@
 /**
  * The Roles page (S-006 REQ-009): every role with its settings, a form that creates a role, and for each role Save,
  * Restore and Remove. The service decides what is allowed (S-001 REQ-003) and a refusal shows next to the role it
- * concerns. The list is read again after a `settings_changed` delta and on each new instance snapshot. Models and
- * workspaces are native choices from `models.list` and `workspaces.list`.
+ * concerns. Each role opens its Skills panel. The "Skills and instructions" section edits the common prompt, lists the
+ * skill search paths with add and remove, and restores each shipped file. The list is read again after a
+ * `settings_changed` or `files_changed` delta and on each new instance snapshot. Models and workspaces are native
+ * choices from `models.list` and `workspaces.list`.
  */
 import { h } from "preact";
 import { useContext, useEffect, useRef, useState } from "preact/hooks";
 import { listen } from "../components/activity.ts";
 import { isConnected } from "../components/connection_banner.ts";
+import { FileEditor } from "../components/file_editor.ts";
 import { RefusalMessage } from "../components/refusal.ts";
+import { SkillsPanel } from "../components/skills_panel.ts";
 import { type FeedConnection, pageClient } from "../feed_connection.ts";
 
 type Role = {
@@ -26,7 +30,16 @@ type Role = {
 };
 type Model = { model: string; thinkingLevels: string[] };
 type Workspace = { path: string };
-type Data = { roles: Role[]; models: Model[]; workspaces: Workspace[] };
+type SearchPath = { path: string; ok: boolean; reason?: string };
+type ShippedSkill = { name: string; edited: boolean };
+type Data = {
+    roles: Role[];
+    models: Model[];
+    workspaces: Workspace[];
+    searchPaths: SearchPath[];
+    shippedSkills: ShippedSkill[];
+    commonPromptPath: string | undefined;
+};
 type Fields = {
     instructions: string;
     tools: string;
@@ -48,9 +61,8 @@ const attachFeed = (feed: FeedConnection) => {
     attachedFeeds.add(feed);
     feed.onInstanceSnapshot(() => void mountedReload?.());
     listen(feed, (event) => {
-        if (event.type === "instance-delta" && (event.delta as { type?: string }).type === "settings_changed") {
-            void mountedReload?.();
-        }
+        const deltaType = event.type === "instance-delta" ? (event.delta as { type?: string }).type : undefined;
+        if (deltaType === "settings_changed" || deltaType === "files_changed") void mountedReload?.();
     });
 };
 
@@ -59,7 +71,25 @@ const readData = async (): Promise<Data> => {
     const { roles } = (await client.invoke("roles.list")) as { roles: Role[] };
     const models = (await client.invoke("models.list")) as Model[];
     const { workspaces } = (await client.invoke("workspaces.list")) as { workspaces: Workspace[] };
-    return { roles, models, workspaces };
+    const searchPaths = (await client.invoke("skills.paths.list")) as SearchPath[];
+    // Any role lists the shipped skills and names the common prompt; the shipped roles are always there.
+    const reader = roles.find((role) => role.shipped)?.name ?? roles[0]?.name;
+    if (reader === undefined)
+        return { roles, models, workspaces, searchPaths, shippedSkills: [], commonPromptPath: undefined };
+    const skills = (await client.invoke("skills.list", { role: reader })) as {
+        skills: (ShippedSkill & { shipped: boolean })[];
+    };
+    const instructions = (await client.invoke("instructions.list", { role: reader })) as {
+        files: { kind: string; path: string }[];
+    };
+    return {
+        roles,
+        models,
+        workspaces,
+        searchPaths,
+        shippedSkills: skills.skills.filter((skill) => skill.shipped).map(({ name, edited }) => ({ name, edited })),
+        commonPromptPath: instructions.files.find((file) => file.kind === "common")?.path,
+    };
 };
 
 const linesOf = (text: string): string[] =>
@@ -178,7 +208,17 @@ const settingsFields = (data: Data, fields: Fields, set: (name: keyof Fields) =>
 
 type Calling = (action: () => Promise<void>) => Promise<void>;
 
-const RoleCard = ({ role, data, reload }: { role: Role; data: Data; reload: Reload }) => {
+const RoleCard = ({
+    role,
+    data,
+    reload,
+    feed,
+}: {
+    role: Role;
+    data: Data;
+    reload: Reload;
+    feed: FeedConnection | null | undefined;
+}) => {
     const connected = useContext(isConnected);
     const { fields, setFields, set } = useFields(fieldsOf(role));
     const [isCalling, setCalling] = useState(false);
@@ -230,8 +270,209 @@ const RoleCard = ({ role, data, reload }: { role: Role; data: Data; reload: Relo
         button("Save", "role-save", invoke("roles.change", changeOf(fields, role))),
         button("Restore", "role-restore", invoke("roles.restore", {})),
         button("Remove", "button-destructive role-remove", invoke("roles.remove", {})),
+        h(RoleSkills, { role: role.name, feed }),
     );
 };
+
+/** The control that opens the Skills panel of one role, collapsed; the panel reads when it is first opened. */
+const RoleSkills = ({ role, feed }: { role: string; feed: FeedConnection | null | undefined }) => {
+    const [isOpen, setOpen] = useState(false);
+    return h(
+        "details",
+        {
+            class: "role-skills",
+            onToggle: (event: Event) => setOpen((event.currentTarget as HTMLDetailsElement).open),
+        },
+        h("summary", null, "Skills"),
+        isOpen ? h(SkillsPanel, { target: { role }, feed }) : null,
+    );
+};
+
+/** A button that calls one operation, reads the page again and shows a refusal next to itself. */
+const ActionButton = ({
+    label,
+    className,
+    operation,
+    input,
+    reload,
+    onDone,
+}: {
+    label: string;
+    className: string;
+    operation: string;
+    input: Record<string, unknown>;
+    reload: Reload;
+    onDone?: () => void;
+}) => {
+    const connected = useContext(isConnected);
+    const [isCalling, setCalling] = useState(false);
+    const [failure, setFailure] = useState<{ error: unknown } | undefined>(undefined);
+    const call = async () => {
+        setCalling(true);
+        setFailure(undefined);
+        try {
+            await pageClient().invoke(operation, input);
+            onDone?.();
+            await reload();
+        } catch (error) {
+            setFailure({ error });
+        } finally {
+            setCalling(false);
+        }
+    };
+    return [
+        h(
+            "button",
+            {
+                type: "button",
+                class: `button button-secondary ${className}`,
+                disabled: !connected || isCalling,
+                onClick: () => void call(),
+            },
+            label,
+        ),
+        failure !== undefined ? h(RefusalMessage, { error: failure.error }) : null,
+    ];
+};
+
+const CommonPrompt = ({ path, reload }: { path: string | undefined; reload: Reload }) => {
+    const [isOpen, setOpen] = useState(false);
+    return h(
+        "div",
+        { class: "common-prompt" },
+        h("h4", null, "Common prompt"),
+        path === undefined
+            ? null
+            : h(
+                  "button",
+                  { type: "button", class: "button button-secondary file-open", onClick: () => setOpen(true) },
+                  "Edit",
+              ),
+        h(ActionButton, {
+            label: "Restore",
+            className: "restore-common",
+            operation: "instructions.restore",
+            input: { name: "common" },
+            reload,
+        }),
+        isOpen && path !== undefined ? h(FileEditor, { path, onClose: () => setOpen(false) }) : null,
+    );
+};
+
+const SearchPaths = ({ paths, reload }: { paths: SearchPath[]; reload: Reload }) => {
+    const connected = useContext(isConnected);
+    const [path, setPath] = useState("");
+    const [isCalling, setCalling] = useState(false);
+    const [failure, setFailure] = useState<{ error: unknown } | undefined>(undefined);
+    const add = async () => {
+        setCalling(true);
+        setFailure(undefined);
+        try {
+            await pageClient().invoke("skills.paths.add", { path });
+            setPath("");
+            await reload();
+        } catch (error) {
+            setFailure({ error });
+        } finally {
+            setCalling(false);
+        }
+    };
+    return h(
+        "div",
+        { class: "search-paths" },
+        h("h4", null, "Skill search paths"),
+        h(
+            "ul",
+            null,
+            ...paths.map((entry) =>
+                h(
+                    "li",
+                    { class: "search-path", "data-path": entry.path, key: entry.path },
+                    h("span", { "data-verbatim": "" }, entry.path),
+                    entry.ok ? null : h("span", { class: "badge" }, `unusable: ${entry.reason ?? ""}`),
+                    h(ActionButton, {
+                        label: "Remove",
+                        className: "search-path-remove",
+                        operation: "skills.paths.remove",
+                        input: { path: entry.path },
+                        reload,
+                    }),
+                ),
+            ),
+        ),
+        h(
+            "div",
+            { class: "search-paths-form" },
+            text("Folder", "searchPath", path, setPath, true),
+            h(
+                "button",
+                {
+                    type: "button",
+                    class: "button search-path-add",
+                    disabled: !connected || isCalling,
+                    onClick: () => void add(),
+                },
+                "Add",
+            ),
+            failure !== undefined ? h(RefusalMessage, { error: failure.error }) : null,
+        ),
+    );
+};
+
+const SkillsAndInstructions = ({ data, reload }: { data: Data; reload: Reload }) =>
+    h(
+        "section",
+        { class: "skills-instructions" },
+        h("h3", null, "Skills and instructions"),
+        h(CommonPrompt, { path: data.commonPromptPath, reload }),
+        h(SearchPaths, { paths: data.searchPaths, reload }),
+        h(
+            "div",
+            { class: "restore-roles" },
+            h("h4", null, "Shipped role instructions"),
+            ...data.roles
+                .filter((role) => role.shipped)
+                .map((role) =>
+                    h(
+                        "div",
+                        { class: "restore-role", "data-role": role.name, key: role.name },
+                        h("span", { "data-verbatim": "" }, role.name),
+                        h(ActionButton, {
+                            label: "Restore",
+                            className: "restore-role-instructions",
+                            operation: "instructions.restore",
+                            input: { name: role.name },
+                            reload,
+                        }),
+                    ),
+                ),
+        ),
+        h(
+            "div",
+            { class: "restore-skills" },
+            h("h4", null, "Shipped skills"),
+            ...data.shippedSkills.map((skill) =>
+                h(
+                    "div",
+                    {
+                        class: "shipped-skill",
+                        "data-skill": skill.name,
+                        "data-edited": String(skill.edited),
+                        key: skill.name,
+                    },
+                    h("span", { "data-verbatim": "" }, skill.name),
+                    skill.edited ? h("span", { class: "badge" }, "edited") : null,
+                    h(ActionButton, {
+                        label: "Restore",
+                        className: "skill-restore",
+                        operation: "skills.restore",
+                        input: { name: skill.name },
+                        reload,
+                    }),
+                ),
+            ),
+        ),
+    );
 
 const CreateRole = ({ data, reload }: { data: Data; reload: Reload }) => {
     const connected = useContext(isConnected);
@@ -316,8 +557,9 @@ export const RolesPage = ({ feed }: { feed: FeedConnection | null | undefined })
         data === undefined
             ? null
             : [
-                  ...data.roles.map((role) => h(RoleCard, { role, data, reload, key: role.name })),
+                  ...data.roles.map((role) => h(RoleCard, { role, data, reload, feed, key: role.name })),
                   h(CreateRole, { data, reload }),
+                  h(SkillsAndInstructions, { data, reload }),
               ],
     );
 };
