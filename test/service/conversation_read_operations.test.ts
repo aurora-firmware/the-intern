@@ -25,6 +25,7 @@ import {
     resetWithSeat,
     type SeatActor,
 } from "../../src/host/seating.ts";
+import { SKILLS_RECORD_KIND, type SkillsRecord, setEnabledSkill } from "../../src/host/skill_set.ts";
 import { steerConversation } from "../../src/host/steering.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 import {
@@ -266,6 +267,7 @@ type Listing = {
     jobId: string | null;
     isLead: boolean;
     seat: { role: string; model: string; workspace: string } | null;
+    enabledSkills: string[];
     origin: unknown;
     status: string;
     lastActivity: string | null;
@@ -407,6 +409,31 @@ describe("conversations.list job fields", () => {
         assert.equal(listed.find((listing) => listing.id === idle)?.status, "idle");
         const got = (await fixture.call("conversations.get", { conversationId: parked })) as Listing;
         assert.equal(got.status, "parked");
+    });
+});
+
+describe("conversations.list and conversations.get return the enabled set", () => {
+    it("returns each conversation's enabled set from list and get", async () => {
+        const fixture = await openFixture();
+        const plain = await fixture.seated({}, fixture.seatOf("developer", { skills: ["audit"] }));
+        const changed = await fixture.seated({}, fixture.seatOf("developer", { skills: ["audit"] }));
+        await setEnabledSkill(fixture.host, changed, { name: "review", enable: true, actor }, () => []);
+
+        const listed = (await fixture.call("conversations.list")) as Listing[];
+        const got = (await fixture.call("conversations.get", { conversationId: changed })) as Listing;
+
+        assert.deepEqual(listed.find((listing) => listing.id === plain)?.enabledSkills, ["audit"]);
+        assert.deepEqual(listed.find((listing) => listing.id === changed)?.enabledSkills, ["audit", "review"]);
+        assert.deepEqual(got.enabledSkills, ["audit", "review"]);
+    });
+
+    it("returns an empty set for a conversation without the intern document", async () => {
+        const fixture = await openFixture();
+        await fixture.newConversation();
+
+        const [listing] = (await fixture.call("conversations.list")) as Listing[];
+
+        assert.deepEqual(listing?.enabledSkills, []);
     });
 });
 
@@ -788,6 +815,19 @@ describe("conversations.entries shows report and steer entries by their own data
 
         assert.equal(listing.lastActivity, new Date(steerMessage[0]?.timestamp as number).toISOString());
         await fixture.settle(submissionId);
+    });
+});
+
+describe("conversations.entries shows an intern.skills entry by its own data", () => {
+    it("returns the entry with its actor, skill, change and set", async () => {
+        const fixture = await openFixture();
+        const id = await fixture.seated();
+        await setEnabledSkill(fixture.host, id, { name: "review", enable: true, actor }, () => []);
+
+        const recorded = (await transcriptOf(fixture, id)).find((entry) => entry.kind === SKILLS_RECORD_KIND);
+
+        const expected: SkillsRecord = { actor, skill: "review", change: "enabled", enabledSkills: ["review"] };
+        assert.deepEqual(recorded?.data, expected);
     });
 });
 
