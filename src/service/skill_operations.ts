@@ -3,6 +3,8 @@
  * skill's source, whether it is enabled, the copies it shadows, and the skills left out. It returns no file text.
  */
 
+import { readdir } from "node:fs/promises";
+import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { ConfigChangeRefused } from "../config/config_writer.ts";
 import type { ServiceContext } from "../daemon/daemon.ts";
@@ -13,6 +15,7 @@ import { RoleRefusedError } from "../roles/role_catalog.ts";
 import type { Seat } from "../roles/role_model.ts";
 import { type RolesConfig, rolesSection } from "../roles/roles_section.ts";
 import { SHIPPED_ROLE_NAMES } from "../roles/shipped_roles.ts";
+import { NotShippedError, restoreShippedSkill, skillsFolderPath } from "../skills/internal_folder.ts";
 import { readCatalog } from "../skills/skill_discovery.ts";
 import { type CatalogSkill, enabledSkillsOf, type SkillSource } from "../skills/skill_resolution.ts";
 import type { SkillsComponent } from "../skills/skills_component.ts";
@@ -65,6 +68,13 @@ function parseChange(raw: unknown): ChangeInput {
     const { name, ...target } = raw as Record<string, unknown>;
     if (typeof name !== "string" || name === "") throw new Error("name must be a non-empty string");
     return { name, ...parseList(target) };
+}
+
+function parseName(raw: unknown): { name: string } {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("input must be an object");
+    const { name } = raw as Record<string, unknown>;
+    if (typeof name !== "string" || name === "") throw new Error("name must be a non-empty string");
+    return { name };
 }
 
 type PathInput = { path: string };
@@ -121,6 +131,12 @@ function listedSkill(skill: CatalogSkill, enabled: boolean): ListedSkill {
         edited: skill.edited,
         shadowed: skill.shadowed,
     };
+}
+
+/** Every file under the folder, as full paths. */
+async function filesUnder(folder: string): Promise<string[]> {
+    const entries = await readdir(folder, { recursive: true, withFileTypes: true });
+    return entries.filter((entry) => entry.isFile()).map((entry) => join(entry.parentPath, entry.name));
 }
 
 export function skillOperations(component: SkillsComponent) {
@@ -346,6 +362,43 @@ export function skillOperations(component: SkillsComponent) {
             }),
     });
 
+    const restoreOperation = defineOperation<ServiceContext, { name: string }, ListedSkill>({
+        name: "skills.restore",
+        kind: "control",
+        parse: parseName,
+        async run(ctx, { name }) {
+            const dataDir = component.dataDir();
+            try {
+                await restoreShippedSkill({
+                    dataDir,
+                    shippedRoot: component.shippedRoot,
+                    store: component.fileStore,
+                    name,
+                });
+            } catch (error) {
+                if (error instanceof NotShippedError) throw new ServiceError("not_found", error.message);
+                throw error;
+            }
+            for (const path of await filesUnder(join(skillsFolderPath(dataDir), name))) {
+                component.fileStore.announce(path, "skill");
+            }
+            // The restore names no role, so the skill is listed from the internal folder alone, enabled when any role enables it.
+            const catalog = await readCatalog({
+                dataDir,
+                shippedRoot: component.shippedRoot,
+                searchPaths: [],
+            });
+            const restored = catalog.skills.find((skill) => skill.name === name);
+            if (restored === undefined)
+                throw new ServiceError("internal", `The restored skill ${name} is not in the catalog`);
+            const isEnabled = component
+                .agentsRuntime()
+                .catalog.list()
+                .some((role) => role.skills.includes(name));
+            return listedSkill(restored, isEnabled);
+        },
+    });
+
     // biome-ignore lint/suspicious/noExplicitAny: heterogeneous operations cannot share a narrower type
     const operations: Operation<ServiceContext, any, any>[] = [
         listOperation,
@@ -354,6 +407,7 @@ export function skillOperations(component: SkillsComponent) {
         pathsListOperation,
         pathsAddOperation,
         pathsRemoveOperation,
+        restoreOperation,
     ];
     return operations;
 }

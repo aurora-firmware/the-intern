@@ -421,3 +421,54 @@ describe("skills and instructions of an agent", () => {
         await assert.rejects(rig.invoke("instructions.list", { conversation: "0" }), refusal("not_found"));
     });
 });
+
+describe("instructions.restore", () => {
+    it("refuses a team role's name as not found and leaves its file unchanged", async () => {
+        const rig = await start();
+        await rig.invoke("roles.create", { name: "reviewer", instructions: "Review.", tools: ["read"], skills: [] });
+        const file = join(rig.dirs.dataDir, "instructions", "roles", "reviewer.md");
+        writeFileSync(file, "Edited by hand.");
+
+        await assert.rejects(rig.invoke("instructions.restore", { name: "reviewer" }), refusal("not_found"));
+
+        assert.equal(readFileSync(file, "utf8"), "Edited by hand.");
+    });
+
+    it("restores a shipped role's file and the common prompt, returning each as instructions.list shows it", async () => {
+        const rig = await start();
+        const dir = join(rig.dirs.dataDir, "instructions");
+        writeFileSync(join(dir, "roles", "gp.md"), "edited gp\n");
+        writeFileSync(join(dir, "common.md"), "edited common\n");
+
+        const role = await rig.invoke("instructions.restore", { name: "gp" });
+        const common = await rig.invoke("instructions.restore", { name: "common" });
+
+        const { files } = (await rig.invoke("instructions.list", { role: "gp" })) as { files: InstructionFile[] };
+        assert.deepEqual(
+            role,
+            files.find(({ kind }) => kind === "role"),
+        );
+        assert.deepEqual(
+            common,
+            files.find(({ kind }) => kind === "common"),
+        );
+        assert.deepEqual(
+            { shipped: (role as InstructionFile).shipped, edited: (role as InstructionFile).edited },
+            { shipped: true, edited: false },
+        );
+        assert.equal(
+            readFileSync(join(dir, "roles", "gp.md"), "utf8"),
+            readFileSync(join(DEFAULT_SHIPPED_ROOT, "instructions/roles/gp.md"), "utf8"),
+        );
+    });
+
+    it("refuses a name that is neither common nor a role as not found", async () => {
+        const rig = await start();
+
+        for (const name of ["nobody", "../common", ""]) {
+            await assert.rejects(rig.invoke("instructions.restore", { name }), (error: unknown) =>
+                ["not_found", "invalid_input"].includes((error as { code?: string }).code ?? ""),
+            );
+        }
+    });
+});

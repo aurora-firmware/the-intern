@@ -400,6 +400,14 @@ const INPUT_BUILDERS: Record<string, InputBuilder> = {
         await fixture.invoke("skills.paths.add", { path });
         return { input: { path } };
     },
+    "skills.restore": async (fixture) => {
+        await writeFile(join(fixture.env.dataDir, "skills/carry-out-a-part/SKILL.md"), "Edited for the test.\n");
+        return { input: { name: "carry-out-a-part" } };
+    },
+    "instructions.restore": async (fixture) => {
+        await writeFile(join(fixture.env.dataDir, "instructions/roles/gp.md"), "Edited for the test.\n");
+        return { input: { name: "gp" } };
+    },
     "conversations.submit": async (fixture, _seed, way) => {
         const conversationId = await fixture.settledConversation(`submit-${label(way)}`);
         return { input: { conversationId, content: "more", requestId: "more" } };
