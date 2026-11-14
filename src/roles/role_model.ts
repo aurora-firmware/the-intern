@@ -16,9 +16,6 @@ export type RoleDefinition = {
     workspace?: string;
 };
 
-// The role as a seat is made from it: its definition and the text of its instruction file.
-export type SeatRole = RoleDefinition & { instructions: string };
-
 export type RoleChange = Partial<Omit<RoleDefinition, "name">>;
 
 export type Seat = {
@@ -26,7 +23,8 @@ export type Seat = {
     model: string;
     thinkingLevel?: string;
     workspace: string;
-    instructions: string;
+    /** Only a document written before S-008 holds it; the prompt reads the role's file by name and no reader uses this. */
+    instructions?: string;
     tools: string[];
     skills: string[];
 };
@@ -79,7 +77,7 @@ const placeTools = (place: SeatPlace): readonly string[] =>
     place === "front_desk" ? FRONT_DESK_TOOL_NAMES : [...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES];
 
 export const resolveSeat = (
-    role: SeatRole,
+    role: RoleDefinition,
     defaults: SeatDefaults,
     overrides: SeatOverrides = {},
     place: SeatPlace = "job",
@@ -93,7 +91,6 @@ export const resolveSeat = (
         model,
         thinkingLevel: overrides.thinkingLevel ?? role.thinkingLevel ?? defaults.thinkingLevel,
         workspace: overrides.workspace ?? role.workspace ?? defaults.workspace,
-        instructions: role.instructions,
         tools: [...new Set([...role.tools, ...placeTools(place)])],
         skills: [...role.skills],
     };

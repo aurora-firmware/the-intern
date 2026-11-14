@@ -17,7 +17,6 @@ import {
     resolveSeat,
     type Seat,
     type SeatOverrides,
-    type SeatRole,
     SHIPPED_TOOL_NAMES,
     validateRoleDefinition,
 } from "./role_model.ts";
@@ -279,7 +278,9 @@ export function createRoleCatalog(options: RoleCatalogOptions): RoleCatalog {
             const found = requireRole(name);
             const { shipped: _shipped, changed: _changed, ...definition } = found;
             checkDefinition(definition);
-            const role: SeatRole = { ...definition, instructions: readInstructions(found) };
+            // The seat carries no text: the file is read here only so a team role without a usable one is refused.
+            readInstructions(found);
+            const role: RoleDefinition = definition;
             const defaults = models.defaultChoice();
             checkChoices(name, {
                 model: overrides.model ?? role.model,

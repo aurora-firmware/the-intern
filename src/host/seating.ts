@@ -57,6 +57,7 @@ export type SeatRecord = {
 };
 export type JobLinks = { jobId: string | null; isLead: boolean; origin: Origin; depth: number; invokedBy?: string };
 export type ConversationMeta = JobLinks & {
+    /** A seat written since S-008 holds no `skills` or `instructions`; older documents keep both, and no reader uses them. */
     seat: Seat;
     awaiting: string[];
     parked: ParkedState | null;
@@ -79,7 +80,7 @@ const unsetMeta = (): ConversationMeta => ({
     isLead: false,
     origin: { kind: "request", wayIn: "" },
     depth: 0,
-    seat: { role: "", model: "", workspace: "", instructions: "", tools: [], skills: [] },
+    seat: { role: "", model: "", workspace: "", tools: [], skills: [] },
     awaiting: [],
     parked: null,
     held: [],
@@ -150,7 +151,8 @@ async function writeSeat(
         tools: toToolSelection(seat.tools),
         extensions: extensionSelectionFor(meta.origin) ?? null,
     });
-    meta.seat = toStoredJson(seat);
+    const { skills: _skills, instructions: _instructions, ...stored } = seat;
+    meta.seat = toStoredJson(stored) as Seat;
     meta.enabledSkills = [...seat.skills];
     const record: SeatRecord = {
         previous: previous === null ? null : summarize(previous),

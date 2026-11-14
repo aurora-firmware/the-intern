@@ -424,19 +424,9 @@ describe("createRoleCatalog", () => {
         assert.equal(catalog.seatFor("reviewer", { thinkingLevel: "high" }).thinkingLevel, "high");
     });
 
-    it("leaves a seat already resolved unchanged by a later role change", async () => {
-        const before = catalog.seatFor("gp");
-        await catalog.change("gp", {}, { instructions: "Different." });
-        assert.equal(before.instructions, SHIPPED_TEXT.gp);
-        assert.equal(catalog.seatFor("gp").instructions, "Different.");
-    });
-
-    it("takes a seat's instructions from the role's file, for a shipped and for a team role", async () => {
+    it("seats a role without carrying the text of its instruction file", async () => {
         await createReviewer();
-        assert.equal(catalog.seatFor("bob").instructions, SHIPPED_TEXT.bob);
-        assert.equal(catalog.seatFor("reviewer").instructions, REVIEW_TEXT);
-        await writeFile(instructionFile("reviewer"), "Edited on disk.");
-        assert.equal(catalog.seatFor("reviewer").instructions, "Edited on disk.");
+        for (const name of ["bob", "reviewer"]) assert.equal("instructions" in catalog.seatFor(name), false);
     });
 
     for (const [state, damage] of [
@@ -453,9 +443,9 @@ describe("createRoleCatalog", () => {
         });
     }
 
-    it("seats a shipped role whose file is missing with no instructions", async () => {
+    it("seats a shipped role whose file is missing", async () => {
         await rm(instructionFile("bob"));
-        assert.equal(catalog.seatFor("bob").instructions, "");
+        assert.equal(catalog.seatFor("bob").role, "bob");
     });
 
     it("names the roles whose own workspace is a path, so the registry refuses to unregister it", async () => {

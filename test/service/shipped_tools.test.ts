@@ -144,7 +144,7 @@ describe("the shipped tools extension", () => {
     it("offers a read-only role read, the coordination tools and the job tools, not write, edit or bash", async () => {
         const { offered, seatConversation, say, jobToolsRegistered } = await createFixture([]);
         const { tools } = resolveSeat(
-            { name: "reader", instructions: "Read.", tools: ["read"], skills: [] },
+            { name: "reader", tools: ["read"], skills: [] },
             {
                 model: "m",
                 workspace: "/w",

@@ -263,7 +263,7 @@ describe("the front-desk state and steering tools", { timeout: TEST_TIMEOUT_MS }
         const [child] = await createInvokedConversations(fixture.ctx.host, {
             invokingId: job.leadConversation,
             callId: "invoke-1",
-            agents: [{ seat: lead, contextMode: "clean", jobPrompt: HANG_PROMPT }],
+            agents: [{ seat: { ...lead, skills: [] }, contextMode: "clean", jobPrompt: HANG_PROMPT }],
             actor: { kind: "agent", conversationId: job.leadConversation, role: lead.role },
         });
         assert.ok(child);

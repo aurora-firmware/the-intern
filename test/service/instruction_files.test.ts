@@ -1,6 +1,6 @@
 /** A team role whose instruction file is missing or empty is not seated (S-008 REQ-007: AC-007.3, AC-007.5). */
 import assert from "node:assert/strict";
-import { rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
@@ -18,12 +18,11 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import { createSeatedConversation, readConversationMeta } from "../../src/host/seating.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import type { Caller } from "../../src/service/operations.ts";
-import { roleInstructionPath } from "../../src/skills/internal_folder.ts";
+import { commonPromptPath, roleInstructionPath } from "../../src/skills/internal_folder.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const WAIT_MS = 20_000;
 const POLL_MS = 10;
-const quietLogger = createLogger({ stream: { write: () => true } });
 const caller: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
 const FILE = "instructions/roles/reviewer.md";
 
@@ -37,6 +36,21 @@ afterEach(async () => {
     for (const env of envs.splice(0)) await env.dispose();
 });
 
+// The fake model's transcript drops system messages. pi-durable sends the sections of the first system message whole
+// and later ones as replacements by name, with null removing a section; the prompt in effect is the fold of them.
+function systemTextOf(context: { messages: readonly object[] }): string {
+    const inEffect = new Map<string, string>();
+    for (const message of context.messages) {
+        if (!("role" in message) || message.role !== "system") continue;
+        const changes = (message as { sections?: Record<string, string | null> }).sections ?? {};
+        for (const [key, text] of Object.entries(changes)) {
+            if (text === null) inEffect.delete(key);
+            else inEffect.set(key, text);
+        }
+    }
+    return JSON.stringify([...inEffect]);
+}
+
 const textOf = (message: Message | undefined): string => {
     const content = message?.content;
     if (typeof content === "string") return content;
@@ -47,7 +61,22 @@ const textOf = (message: Message | undefined): string => {
 async function start(leadCall?: { tool: string; args: JsonObject }) {
     const env = await createHermeticEnv();
     envs.push(env);
-    const fake = registerFauxProvider({ models: [{ id: "model-one", reasoning: true }] });
+    const logged: string[] = [];
+    const quietLogger = createLogger({
+        stream: {
+            write: (chunk) => {
+                logged.push(chunk);
+                return true;
+            },
+        },
+    });
+    const prompts: { user: string; system: string }[] = [];
+    const fake = registerFauxProvider({
+        models: [
+            { id: "model-one", reasoning: true },
+            { id: "model-two", reasoning: true },
+        ],
+    });
     fakes.push(fake);
     const toolResults: { text: string; isError: boolean }[] = [];
     let release = (): void => {};
@@ -56,6 +85,8 @@ async function start(leadCall?: { tool: string; args: JsonObject }) {
     });
     const answer = async (context: { messages: Message[] }) => {
         fake.appendResponses([answer]);
+        const lastUser = context.messages.findLast((message) => message.role === "user");
+        prompts.push({ user: textOf(lastUser), system: systemTextOf(context) });
         const results = context.messages.filter((message) => message.role === "toolResult");
         if (results.length > 0) {
             for (const result of results) {
@@ -115,12 +146,16 @@ async function start(leadCall?: { tool: string; args: JsonObject }) {
     await invoke("roles.create", { name: "reviewer", instructions: "Review the work.", tools: ["read"], skills: [] });
     return {
         ctx,
+        logged,
+        prompts,
         toolResults,
         release,
         invoke,
         dataDir: env.dataDir,
         instructionFile: roleInstructionPath(env.dataDir, "reviewer"),
         agents,
+        root: env.root,
+        provider,
     };
 }
 
@@ -220,6 +255,91 @@ describe("a team role whose instruction file is missing or empty", () => {
         const started = await start();
         await rm(roleInstructionPath(started.dataDir, "gp"));
 
-        assert.equal(started.agents.runtime().catalog.seatFor("gp").instructions, "");
+        assert.equal(started.agents.runtime().catalog.seatFor("gp").role, "gp");
+    });
+});
+
+type Started = Awaited<ReturnType<typeof start>>;
+
+/** Sends `content` to the conversation and returns the system prompt of the request that answers it. */
+async function say(started: Started, conversationId: string, content: string): Promise<string> {
+    await started.invoke("conversations.submit", { conversationId, content, requestId: `request-${content}` });
+    await waitFor(() => started.prompts.some((prompt) => prompt.user === content), `the request for "${content}"`);
+    return (started.prompts.findLast((prompt) => prompt.user === content) as { system: string }).system;
+}
+
+const startJob = async (started: Started, role: string, text: string): Promise<string> => {
+    const job = (await started.invoke("jobs.create", { text, role })) as { leadConversation: string };
+    await waitFor(() => started.prompts.some((prompt) => prompt.user.includes(text)), `the first request of ${role}`);
+    return job.leadConversation;
+};
+
+describe("a hand edit of an instruction file", () => {
+    it("reaches the next request of two running agents of different roles, and reseats neither (AC-1)", async () => {
+        const started = await start();
+        await writeFile(commonPromptPath(started.dataDir), "COMMON-BEFORE");
+        const lead = await startJob(started, "bob", "work for bob");
+        const reviewer = await startJob(started, "reviewer", "work for reviewer");
+        const seatsBefore = await Promise.all(
+            [lead, reviewer].map((id) => readConversationMeta(started.ctx.host, id).then((meta) => meta?.seat)),
+        );
+
+        await writeFile(commonPromptPath(started.dataDir), "COMMON-AFTER");
+        const prompts = [await say(started, lead, "again bob"), await say(started, reviewer, "again reviewer")];
+
+        for (const system of prompts) {
+            assert.ok(system.includes("COMMON-AFTER"), "the new text is sent");
+            assert.equal(system.includes("COMMON-BEFORE"), false);
+        }
+        assert.ok(prompts[1]?.includes("Review the work."));
+        const seatsAfter = await Promise.all(
+            [lead, reviewer].map((id) => readConversationMeta(started.ctx.host, id).then((meta) => meta?.seat)),
+        );
+        assert.deepEqual(seatsAfter, seatsBefore);
+        assert.equal((await started.ctx.host.listConversations()).length, 2);
+    });
+
+    it("leaves the common text out of a bob prompt, and logs a diagnostic, when common.md is deleted (AC-2)", async () => {
+        const started = await start();
+        await writeFile(commonPromptPath(started.dataDir), "COMMON-BEFORE");
+        const lead = await startJob(started, "bob", "work for bob");
+
+        await rm(commonPromptPath(started.dataDir));
+        const system = await say(started, lead, "again bob");
+
+        assert.equal(system.includes("COMMON-BEFORE"), false);
+        assert.ok(system.length > 0);
+        const diagnostic = started.logged.find((line) => line.includes(commonPromptPath(started.dataDir)));
+        assert.ok(diagnostic?.includes("file is missing"), started.logged.join(""));
+    });
+});
+
+describe("a role changed after its agent was seated", () => {
+    it("leaves the agent's seat and enabled set, and sends the new instructions in its next request (AC-3)", async () => {
+        const started = await start();
+        await started.invoke("roles.change", { name: "reviewer", skills: ["alpha"] });
+        const reviewer = await startJob(started, "reviewer", "work for reviewer");
+        const folder = join(started.root, "other-workspace");
+        await mkdir(folder, { mode: 0o700 });
+        await chmod(folder, 0o700);
+        await started.agents.runtime().workspaces.register(folder);
+        const before = await readConversationMeta(started.ctx.host, reviewer);
+
+        await started.invoke("roles.change", {
+            name: "reviewer",
+            tools: ["bash"],
+            skills: ["beta"],
+            model: `${started.provider}/model-two`,
+            thinkingLevel: "high",
+            workspace: folder,
+        });
+        await started.invoke("roles.change", { name: "reviewer", instructions: "Review it twice." });
+        const system = await say(started, reviewer, "again reviewer");
+
+        const after = await readConversationMeta(started.ctx.host, reviewer);
+        assert.deepEqual(after?.seat, before?.seat);
+        assert.deepEqual(after?.enabledSkills, ["alpha"]);
+        assert.ok(system.includes("Review it twice."));
+        assert.equal(system.includes("Review the work."), false);
     });
 });
