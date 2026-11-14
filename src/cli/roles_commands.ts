@@ -20,9 +20,13 @@ const NOTHING = "(none)";
 const namePositional = { name: "name", required: true };
 
 const ROLE_FIELD_OPTIONS: Record<string, OptionSpec> = {
-    instructions: { type: "string", description: "The role's instructions." },
+    instructions: { type: "string", description: "The text of the role's instruction file." },
     tool: { type: "string", multiple: true, description: "A tool the role may use; repeat for several." },
-    skill: { type: "string", multiple: true, description: "The absolute path of a skill; repeat for several." },
+    skill: {
+        type: "string",
+        multiple: true,
+        description: "The name of a skill the role starts with; repeat for several.",
+    },
     model: { type: "string", description: "The role's model." },
     thinking: { type: "string", description: "The role's thinking level." },
     workspace: { type: "string", description: "The role's default workspace." },
