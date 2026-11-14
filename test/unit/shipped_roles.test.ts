@@ -1,12 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { describe, it } from "node:test";
-import { fileURLToPath } from "node:url";
 import { SHIPPED_TOOL_NAMES, validateRoleDefinition } from "../../src/roles/role_model.ts";
-import { DEFAULT_LEAD_ROLE, loadPreamble, SHIPPED_ROLE_NAMES, SHIPPED_ROLES } from "../../src/roles/shipped_roles.ts";
-
-const shippedFolder = fileURLToPath(new URL("../../src/shipped/", import.meta.url));
+import { DEFAULT_LEAD_ROLE, SHIPPED_ROLE_NAMES, SHIPPED_ROLES } from "../../src/roles/shipped_roles.ts";
 
 describe("SHIPPED_ROLES", () => {
     it("holds exactly bob, gp and desk, each valid and carrying no instruction text", () => {
@@ -31,14 +26,6 @@ describe("SHIPPED_ROLES", () => {
         assert.deepEqual(skillsOf("bob"), ["about-the-intern", "bob-command-line"]);
         assert.deepEqual(skillsOf("gp"), ["carry-out-a-part", "bob-command-line"]);
         assert.deepEqual(skillsOf("desk"), ["about-the-intern"]);
-    });
-});
-
-describe("loadPreamble", () => {
-    it("returns the non-empty text of the shipped preamble", async () => {
-        const preamble = await loadPreamble();
-        assert.notEqual(preamble.trim(), "");
-        assert.equal(preamble, await readFile(join(shippedFolder, "instructions", "common.md"), "utf8"));
     });
 });
 

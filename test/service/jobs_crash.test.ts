@@ -13,6 +13,7 @@ import {
     assertNoRun,
     conversationsOf,
     createJob,
+    createStartedJob,
     DAEMON_AUTHOR,
     disposeCrashTest,
     type Entry,
@@ -171,7 +172,7 @@ describe("kill -9 after the block write and before the park", () => {
         const env = await hermetic();
         const first = start(env, "echo", "job-blocked");
         await first.ready;
-        const job = await createJob(first, "block me");
+        const job = await createStartedJob(first, "block me");
         const leadId = job.leadConversation as string;
         await untilLeadAnswered(first, leadId);
         const blocking = first.invoke("test.blockJob", { job: job.id, reason: REASON }).catch(() => undefined);
@@ -196,7 +197,7 @@ describe("kill -9 after input reached the lead of a Blocked job and before the r
         const env = await hermetic();
         const first = start(env, "gated", "lead-input");
         await first.ready;
-        const job = await createJob(first, "block me while I run");
+        const job = await createStartedJob(first, "block me while I run");
         const leadId = job.leadConversation as string;
         await untilStatus(first, leadId, "running");
         await first.invoke("test.blockJob", { job: job.id, reason: REASON });
@@ -221,7 +222,7 @@ describe("kill -9 after input reached the lead of a Blocked job and before the r
         const env = await hermetic();
         const first = start(env, "echo", "lead-input");
         await first.ready;
-        const job = await createJob(first, "block me while idle");
+        const job = await createStartedJob(first, "block me while idle");
         const leadId = job.leadConversation as string;
         await untilLeadAnswered(first, leadId);
         await first.invoke("test.blockJob", { job: job.id, reason: REASON });
@@ -247,7 +248,7 @@ describe("kill -9 after a complete or cancel write and before the aborts", () =>
         const env = await hermetic();
         const first = start(env, "echo", "job-cancelled");
         await first.ready;
-        const job = await createJob(first, "cancel me while blocked");
+        const job = await createStartedJob(first, "cancel me while blocked");
         const leadId = job.leadConversation as string;
         await untilLeadAnswered(first, leadId);
         await first.invoke("test.blockJob", { job: job.id, reason: REASON });
@@ -272,7 +273,7 @@ describe("kill -9 after a complete or cancel write and before the aborts", () =>
         const env = await hermetic();
         const first = start(env, "echo", "job-completed");
         await first.ready;
-        const job = await createJob(first, "complete me while idle");
+        const job = await createStartedJob(first, "complete me while idle");
         const leadId = job.leadConversation as string;
         await untilLeadAnswered(first, leadId);
         await first.invoke("jobs.update", { job: job.id, definitionOfDone: "the work is stopped" });
@@ -292,7 +293,7 @@ describe("kill -9 after a complete or cancel write and before the aborts", () =>
         const env = await hermetic();
         const first = start(env, "invoke-parked", "job-completed");
         await first.ready;
-        const job = await createJob(first, "complete me with work in flight");
+        const job = await createStartedJob(first, "complete me with work in flight");
         await untilTrue(async () => (await conversationsOf(first, job.id)).length === 3, "both invoked conversations");
         await first.invoke("jobs.update", { job: job.id, definitionOfDone: "the work is stopped" });
         const completing = first
@@ -321,7 +322,7 @@ describe("kill -9 between a job's closed-mark commits and the aborts", () => {
     async function killedAfterClosedMarks(env: HermeticEnv): Promise<JobView> {
         const first = start(env, "invoke-parked", "conversations-closed");
         await first.ready;
-        const job = await createJob(first, "cancel me with work in flight");
+        const job = await createStartedJob(first, "cancel me with work in flight");
         await untilTrue(async () => (await conversationsOf(first, job.id)).length === 3, "both invoked conversations");
         const cancelling = first
             .invoke("jobs.cancel", { job: job.id, justification: "no longer needed" })
@@ -455,7 +456,7 @@ describe("kill -9 after a team member's abort stopped a lead, before the turn-en
         const env = await hermetic();
         const first = start(env, "gated", "turn-ended", true);
         await first.ready;
-        const job = await createJob(first, "stop the running lead");
+        const job = await createStartedJob(first, "stop the running lead");
         const leadId = job.leadConversation as string;
         await untilStatus(first, leadId, "running");
         await first.invoke("jobs.update", { job: job.id, definitionOfDone: "the report is filed" });
@@ -476,7 +477,7 @@ describe("kill -9 after a team member's abort stopped a lead, before the turn-en
         // applies no rule and the test kills it once the abort and its cascade have ended.
         const first = start(env, "invoke-parked");
         await first.ready;
-        const job = await createJob(first, "stop the parked lead");
+        const job = await createStartedJob(first, "stop the parked lead");
         const leadId = job.leadConversation as string;
         await untilTrue(async () => (await conversationsOf(first, job.id)).length === 3, "both invoked conversations");
         await first.invoke("jobs.update", { job: job.id, definitionOfDone: "the report is filed" });

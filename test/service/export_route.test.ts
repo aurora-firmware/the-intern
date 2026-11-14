@@ -16,6 +16,7 @@ import { createNetworkListenerComponent } from "../../src/listeners/network_list
 import { networkSection } from "../../src/listeners/network_section.ts";
 import { localSocketPath } from "../../src/listeners/socket_path.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { waitForJobStatus } from "../support/job_status.ts";
 
 const WAIT_MS = 20_000;
 const POLL_MS = 10;
@@ -192,6 +193,12 @@ describe("GET /export on the network listener", () => {
             id: string;
             leadConversation: string;
         };
+        await waitForJobStatus(
+            async () =>
+                ((await fixture.daemon.catalogue.invoke("jobs.get", { job: job.id }, webCaller)) as { status: string })
+                    .status,
+            "in_progress",
+        );
         await fixture.daemon.catalogue.invoke("jobs.worklog.add", { job: job.id, text: "a note" }, webCaller);
         const isBusy = async () => (await fixture.ctx().host.conversationInfo(job.leadConversation))?.busy === true;
         await waitFor(isBusy, "the lead's run to be held");

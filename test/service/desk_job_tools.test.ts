@@ -29,6 +29,7 @@ import { networkSection } from "../../src/listeners/network_section.ts";
 import { localSocketPath } from "../../src/listeners/socket_path.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { waitForJobStatus } from "../support/job_status.ts";
 
 const WAIT_MS = 20_000;
 const POLL_MS = 10;
@@ -45,6 +46,7 @@ type Seen = { text: string; isError: boolean };
 type ModelContext = Parameters<FauxResponseFactory>[0];
 type JobResult = {
     id: string;
+    status: string;
     number: string;
     description?: string;
     related: string[];
@@ -195,7 +197,8 @@ async function start() {
     }
     const ctx = captured as ServiceContext;
     const read = (job: string) => invoke("jobs.get", { job }) as Promise<JobResult>;
-    return { invoke, run, deskId, ctx, read };
+    const started = (job: string) => waitForJobStatus(async () => (await read(job)).status, "in_progress");
+    return { invoke, run, deskId, ctx, read, started };
 }
 
 const jsonOf = (result: Seen | undefined) => JSON.parse(result?.text ?? "null");
@@ -229,6 +232,7 @@ describe("the front-desk job tools", { timeout: TEST_TIMEOUT_MS }, () => {
         const blockedEmail = (await fixture.invoke("jobs.create", { text: "mail one" }, email)) as JobResult;
         await fixture.invoke("jobs.create", { text: "mail two" }, email);
         await fixture.invoke("jobs.create", { text: "from the command line" });
+        await fixture.started(blockedEmail.id);
         await fixture.ctx.jobStore.applyAction(
             blockedEmail.id,
             "block",

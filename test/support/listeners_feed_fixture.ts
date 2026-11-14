@@ -23,6 +23,7 @@ import { localSocketPath } from "../../src/listeners/socket_path.ts";
 import type { Caller, Catalogue } from "../../src/service/operations.ts";
 import { createFakeModel, type FakeModelOptions, type FakeReply, type FakeTranscript } from "./fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "./hermetic_env.ts";
+import { waitForJobStatus } from "./job_status.ts";
 
 export const WAIT_TIMEOUT_MS = 20_000;
 export const POLL_INTERVAL_MS = 10;
@@ -293,6 +294,10 @@ export async function startFixture(
         };
         const conversationId = created.leadConversation;
         jobIds.set(conversationId, created.id);
+        await waitForJobStatus(
+            async () => ((await invoke("jobs.get", { job: created.id })) as { status: string }).status,
+            "in_progress",
+        );
         await submitAndSettle(conversationId, `settle-${label}`);
         return conversationId;
     }

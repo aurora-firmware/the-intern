@@ -9,6 +9,7 @@ import type { WritePoint } from "../../src/jobs/jobs_component.ts";
 import { REMINDER_TEXT } from "../../src/jobs/turn_end_rule.ts";
 import { type DaemonProcess, type FakeScript, startDaemon } from "./daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "./hermetic_env.ts";
+import { waitForJobStatus } from "./job_status.ts";
 
 export const TEST_TIMEOUT_MS = 90_000;
 export const DAEMON_AUTHOR = { kind: "daemon" };
@@ -138,4 +139,11 @@ export async function assertBlockedAsStopped(daemon: DaemonProcess, job: JobView
     );
     assert.equal(await steersWith(daemon, leadId, REMINDER_TEXT), 0, "no reminder was submitted");
     assert.equal(await userInputsWith(daemon, leadId, REMINDER_TEXT), 0, "the lead took no reminder");
+}
+
+/** Creates a job and waits until it is In progress: a job starts on the admission grant, after its prompt is read. */
+export async function createStartedJob(daemon: DaemonProcess, text: string): Promise<JobView> {
+    const job = await createJob(daemon, text);
+    await waitForJobStatus(async () => (await jobOf(daemon, job.id)).status, "in_progress");
+    return job;
 }
