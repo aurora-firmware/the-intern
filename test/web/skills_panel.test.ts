@@ -184,4 +184,31 @@ describe("the Skills panel on the Job page in chrome", () => {
         t.assert.match((await left.first().textContent()) ?? "", new RegExp(leftOut.reason.split(":")[0] as string));
         t.assert.match((await left.first().textContent()) ?? "", new RegExp(leftOut.path.replaceAll("/", "\\/")));
     });
+
+    it("shows each skill change in the lead's activity, in order, naming the team member and the change", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const rig = await startRig();
+        const page = await openPanel(t, rig);
+        if (page === undefined) return;
+        const entries = page.locator(
+            `main details.activity[data-conversation="${rig.lead}"] li.activity-entry[data-kind="intern.skills"]`,
+        );
+
+        await rig.daemon.invoke("skills.enable", { conversation: rig.lead, name: SKILL });
+        await rig.daemon.invoke("skills.disable", { conversation: rig.lead, name: SKILL });
+
+        await page.waitForFunction(
+            (css) => document.querySelectorAll(css).length === 2,
+            `main details.activity[data-conversation="${rig.lead}"] li.activity-entry[data-kind="intern.skills"]`,
+            { timeout: WAIT_MS, polling: POLL_MS },
+        );
+        const enabled = (await entries.nth(0).textContent()) ?? "";
+        const disabled = (await entries.nth(1).textContent()) ?? "";
+        t.assert.match(enabled, /team member/i);
+        t.assert.match(enabled, new RegExp(SKILL));
+        t.assert.match(enabled, /\benabled\b/);
+        t.assert.match(disabled, new RegExp(SKILL));
+        t.assert.match(disabled, /\bdisabled\b/);
+    });
 });
