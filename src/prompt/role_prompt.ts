@@ -1,18 +1,7 @@
-import { formatSkillsForPrompt, type Skill } from "@earendil-works/pi-coding-agent";
 import type { JOB_TOOL_NAMES } from "../jobs/job_model.ts";
-import type { Seat } from "../roles/role_model.ts";
 import type { CatalogSkill } from "../skills/skill_resolution.ts";
 
 export type PromptSection = { key: string; text: string };
-
-export type RolePromptInput = {
-    preamble: string;
-    seat: Seat;
-    isLead: boolean;
-    contextFiles: { path: string; content: string }[];
-    roleSkills: Skill[];
-    workspaceSkills: Skill[];
-};
 
 type JobToolName = (typeof JOB_TOOL_NAMES)[number];
 const UPDATE_JOB: JobToolName = "update_job";
@@ -44,22 +33,6 @@ function renderWorkspaceContext(workspace: string, contextFiles: { path: string;
         lines.push("", `Instructions from ${file.path}:`, "", file.content);
     }
     return lines.join("\n");
-}
-
-// Every part is a pure function of the input, so equal input renders byte-identical text and the provider cache holds.
-export function renderRolePrompt(input: RolePromptInput): PromptSection[] {
-    const candidates: PromptSection[] = [
-        { key: "intern.preamble", text: input.preamble },
-        { key: "intern.role", text: input.seat.instructions },
-        { key: "intern.lead-duty", text: input.isLead ? LEAD_DUTY : "" },
-        { key: "intern.role-skills", text: formatSkillsForPrompt(input.roleSkills).trim() },
-        {
-            key: "intern.workspace-context",
-            text: renderWorkspaceContext(input.seat.workspace, input.contextFiles),
-        },
-        { key: "intern.workspace-skills", text: formatSkillsForPrompt(input.workspaceSkills).trim() },
-    ];
-    return candidates.filter((section) => section.text !== "");
 }
 
 export type PromptParts = {

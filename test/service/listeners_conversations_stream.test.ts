@@ -14,9 +14,10 @@ import {
     type Fixture,
     LAGGING_END,
     LISTENERS,
-    LOOP_INPUT,
     loopingReply,
+    loopUntilClosed,
     nextEvent,
+    openStalledFeeds,
     readToEnd,
     recordSubscriptionReads,
     startFixture,
@@ -168,19 +169,11 @@ describe("the end of a feed stream for several conversations", { timeout: TEST_T
     it("ends the others and sends one end with lagging when a stalled client leaves one subscription behind", async () => {
         const fixture = await startFixture(loopingReply);
         const [quiet, looping] = [await fixture.idleConversation("quiet"), await fixture.idleConversation("looping")];
-        const reads = recordSubscriptionReads(fixture.catalogue);
+        const { streams, reads } = await openStalledFeeds(fixture, idsQuery("conversations", [quiet, looping]), 2);
 
-        const stalled = await Promise.all(
-            LISTENERS.map((listener) => fixture.openFeed(listener, idsQuery("conversations", [quiet, looping]))),
-        );
-        for (const stream of stalled) {
-            await nextEvent(stream);
-            await nextEvent(stream);
-            stream.pause();
-        }
-        await fixture.submitAndSettle(looping, LOOP_INPUT);
-        for (const stream of stalled) stream.resume();
-        const endings = await Promise.all(stalled.map(readToEnd));
+        // Each stream reads two subscriptions, and its end closes both.
+        await loopUntilClosed(fixture, looping, reads, 2 * LISTENERS.length);
+        const endings = await Promise.all(streams.map(readToEnd));
 
         assert.deepEqual(endings, [
             { last: LAGGING_END, how: "ended" },

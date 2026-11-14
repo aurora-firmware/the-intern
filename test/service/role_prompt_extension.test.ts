@@ -1,28 +1,22 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { type FauxProviderRegistration, type FauxResponseFactory, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
-import { loadConfig } from "../../src/config/config_file.ts";
-import { createConfigStore } from "../../src/config/config_writer.ts";
-import { createLogger } from "../../src/daemon/logger.ts";
+import { createLogger, type LogFields } from "../../src/daemon/logger.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
 import { type HarnessHost, openHarnessHost } from "../../src/host/harness_host.ts";
 import { changeSeat, createSeatedConversation, type JobLinks, type SeatActor } from "../../src/host/seating.ts";
 import { createRolePromptExtension, ROLE_PROMPT_EXTENSION_NAME } from "../../src/prompt/role_prompt_extension.ts";
-import { createWorkspaceContextLoader } from "../../src/prompt/workspace_context.ts";
-import { createRoleCatalog } from "../../src/roles/role_catalog.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
-import { rolesSection, workspacesSection } from "../../src/roles/roles_section.ts";
-import { createFileStore } from "../../src/skills/file_store.ts";
-import { roleInstructionPath } from "../../src/skills/internal_folder.ts";
-import { createWorkspaceRegistry } from "../../src/workspaces/workspace_registry.ts";
+import { commonPromptPath, roleInstructionPath } from "../../src/skills/internal_folder.ts";
+import { createDiagnosticLog, type DiagnosticLog } from "../../src/skills/skill_discovery.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const WAIT_MS = 10_000;
-const PREAMBLE = "PREAMBLE-TEXT";
+const COMMON = "COMMON-TEXT";
 const job: JobLinks = { jobId: "job-1", isLead: true, origin: { kind: "request", wayIn: "cli" }, depth: 0 };
 const actor: SeatActor = { kind: "team_member", wayIn: "cli" };
 
@@ -69,42 +63,12 @@ async function writeWorkspace(root: string, name: string): Promise<string> {
     return workspace;
 }
 
-// The team's role catalog, stored in a configuration file, with the fake model as pi agent's default model.
-async function createCatalog(root: string, model: string) {
-    const file = join(root, "config.toml");
-    const dataDir = join(root, "catalog-data");
-    await mkdir(dataDir, { mode: 0o700 });
-    const sections = [rolesSection, workspacesSection];
-    const config = createConfigStore(file, sections, await loadConfig(file, sections));
-    const workspaces = createWorkspaceRegistry({
-        config,
-        dataDir,
-        account: { uid: process.getuid?.() ?? 0 },
-        defaultWorkspaceUsers: () => [],
-    });
-    await mkdir(join(dataDir, "instructions", "roles"), { recursive: true });
-    const catalog = createRoleCatalog({
-        config,
-        shipped: [],
-        workspaces,
-        dataDir,
-        instructionPath: (role) => roleInstructionPath(dataDir, role),
-        fileStore: createFileStore(),
-        models: { checkModelChoice: () => ({ ok: true }), defaultChoice: () => ({ model }) },
-    });
-    const registerWorkspace = async (name: string): Promise<string> => {
-        const workspace = await writeWorkspace(root, name);
-        // A workspace is registered only when no one but the service account can reach it.
-        await chmod(workspace, 0o700);
-        await workspaces.register(workspace);
-        return workspace;
-    };
-    return Object.assign(catalog, { registerWorkspace });
-}
-
 async function createFixture() {
     const env = await createHermeticEnv();
     envs.push(env);
+    const dataDir = join(env.root, "data");
+    await mkdir(join(dataDir, "instructions", "roles"), { recursive: true });
+    await writeFile(commonPromptPath(dataDir), COMMON);
     const prompts: string[] = [];
     const fake = registerFauxProvider();
     const answer: FauxResponseFactory = async (context) => {
@@ -125,33 +89,50 @@ async function createFixture() {
             api: { stream: implementation.stream, streamSimple: implementation.streamSimple },
         }),
     );
+    const logged: { message: string; fields: LogFields | undefined }[] = [];
     const logger = createLogger({ stream: { write: () => true } });
-    const realLoader = createWorkspaceContextLoader({ logger });
-    const loadedSeats: Seat[] = [];
-    const recordingLoader = {
-        load(seat: Seat) {
-            loadedSeats.push(seat);
-            return realLoader.load(seat);
+    const recordingLogger = {
+        ...logger,
+        error: (message: string, fields?: LogFields) => logged.push({ message, fields }),
+    };
+    const diagnostics = createDiagnosticLog(recordingLogger);
+    const reports: (readonly string[])[] = [];
+    const countingDiagnostics: DiagnosticLog = {
+        report(list) {
+            reports.push(list);
+            diagnostics.report(list);
         },
     };
     const host = await openHarnessHost({
         databaseFile: join(env.root, "state.sqlite"),
         models,
         harnessSettings: {},
-        extensions: [createRolePromptExtension({ preamble: PREAMBLE, loader: recordingLoader })],
+        extensions: [
+            createRolePromptExtension({
+                dataDir: () => dataDir,
+                searchPaths: () => [],
+                defaultsOf: () => new Set(),
+                diagnostics: countingDiagnostics,
+            }),
+        ],
         defaultCwd: process.cwd(),
         logger,
     });
     hosts.push(host);
-    const seatFor = async (role: string, overrides: Partial<Seat> = {}): Promise<Seat> => ({
-        role,
-        model: `${fake.getModel().provider}/${fake.getModel().id}`,
-        workspace: await writeWorkspace(env.root, `ws-${role}`),
-        instructions: `Instructions of ${role}.`,
-        tools: [],
-        skills: [await writeSkill(join(env.root, "role-skills"), `${role}-role-skill`)],
-        ...overrides,
-    });
+    const model = `${fake.getModel().provider}/${fake.getModel().id}`;
+    const seatFor = async (role: string, overrides: Partial<Seat> = {}): Promise<Seat> => {
+        await writeFile(roleInstructionPath(dataDir, role), `Instructions of ${role}.`);
+        await writeSkill(join(dataDir, "skills"), `${role}-role-skill`);
+        return {
+            role,
+            model,
+            workspace: await writeWorkspace(env.root, `ws-${role}`),
+            instructions: "",
+            tools: [],
+            skills: [`${role}-role-skill`],
+            ...overrides,
+        };
+    };
     let turn = 0;
     const say = async (conversationId: string): Promise<void> => {
         turn += 1;
@@ -164,8 +145,7 @@ async function createFixture() {
     };
     const seatConversation = async (seat: Seat, key = "k1", links: JobLinks = job) =>
         (await createSeatedConversation(host, { scope: "start-job", key, job: links, seat, actor })).conversationId;
-    const model = `${fake.getModel().provider}/${fake.getModel().id}`;
-    return { host, prompts, loadedSeats, model, root: env.root, seatFor, say, seatConversation };
+    return { host, prompts, logged, reports, dataDir, model, seatFor, say, seatConversation };
 }
 
 describe("the role prompt extension", () => {
@@ -173,26 +153,64 @@ describe("the role prompt extension", () => {
         assert.equal(ROLE_PROMPT_EXTENSION_NAME, "intern.role-prompt");
     });
 
-    it("sends the same system prompt on two consecutive turns while the seat is unchanged", async () => {
+    it("sends byte-identical system prompts while no instruction file, enabled set or skill folder changes", async () => {
         const { prompts, seatFor, say, seatConversation } = await createFixture();
         const id = await seatConversation(await seatFor("developer"));
 
         await say(id);
         await say(id);
+        await say(id);
 
-        assert.equal(prompts.length, 2);
+        assert.equal(prompts.length, 3);
         assert.match(prompts[0], /Instructions of developer\./);
         assert.equal(prompts[1], prompts[0]);
+        assert.equal(prompts[2], prompts[0]);
     });
 
-    it("sends the preamble before the role instructions", async () => {
+    it("sends the common prompt before the role instructions", async () => {
         const { prompts, seatFor, say, seatConversation } = await createFixture();
         const id = await seatConversation(await seatFor("developer"));
 
         await say(id);
 
-        assert.ok(prompts[0].indexOf(PREAMBLE) >= 0);
-        assert.ok(prompts[0].indexOf(PREAMBLE) < prompts[0].indexOf("Instructions of developer."));
+        assert.ok(prompts[0].indexOf(COMMON) >= 0);
+        assert.ok(prompts[0].indexOf(COMMON) < prompts[0].indexOf("Instructions of developer."));
+    });
+
+    it("sends the edited common prompt in the next request without a seat change", async () => {
+        const { prompts, dataDir, seatFor, say, seatConversation } = await createFixture();
+        const id = await seatConversation(await seatFor("developer"));
+        await say(id);
+
+        await writeFile(commonPromptPath(dataDir), "EDITED-COMMON");
+        await say(id);
+
+        assert.match(prompts[0], new RegExp(COMMON));
+        assert.match(prompts[1], /EDITED-COMMON/);
+        assert.equal(prompts[1].includes(COMMON), false);
+    });
+
+    it("sends the edited role file in the next request without a seat change", async () => {
+        const { prompts, dataDir, seatFor, say, seatConversation } = await createFixture();
+        const id = await seatConversation(await seatFor("developer"));
+        await say(id);
+
+        await writeFile(roleInstructionPath(dataDir, "developer"), "Edited instructions.");
+        await say(id);
+
+        assert.match(prompts[1], /Edited instructions\./);
+        assert.equal(prompts[1].includes("Instructions of developer."), false);
+    });
+
+    it("lists the skills the agent enables and leaves out a skill in the catalog that it doesn't", async () => {
+        const { prompts, dataDir, seatFor, say, seatConversation } = await createFixture();
+        await writeSkill(join(dataDir, "skills"), "unused-skill");
+        const id = await seatConversation(await seatFor("developer"));
+
+        await say(id);
+
+        assert.match(prompts[0], /developer-role-skill/);
+        assert.equal(prompts[0].includes("unused-skill"), false);
     });
 
     it("sends the new role and workspace and nothing of the previous seat after a seat change", async () => {
@@ -222,64 +240,48 @@ describe("the role prompt extension", () => {
         }
     });
 
-    it("sends only the preamble to a conversation that has no seat document", async () => {
+    it("sends only the common prompt to a conversation that has no seat document", async () => {
         const { host, prompts, seatFor, say } = await createFixture();
         const seat = await seatFor("developer");
 
         const id = await host.createConversation({ agent: { model: seat.model, cwd: seat.workspace } });
         await say(id);
 
-        assert.deepEqual(JSON.parse(prompts[0]), [
-            ["intern-preamble", `<intern-preamble>\n${PREAMBLE}\n</intern-preamble>`],
-        ]);
+        assert.deepEqual(JSON.parse(prompts[0]), [["intern-common", `<intern-common>\n${COMMON}\n</intern-common>`]]);
     });
 
-    it("keeps sending the instructions the agent was seated with and seats the skill names of the changed role", async () => {
-        const { prompts, model, root, say, seatConversation } = await createFixture();
-        const catalog = await createCatalog(root, model);
-        await catalog.create(
-            {
-                name: "developer",
-                tools: [],
-                skills: ["developer-role-skill"],
-                workspace: await catalog.registerWorkspace("ws-developer"),
-            },
-            { instructions: "Instructions of developer." },
-        );
-        assert.deepEqual(catalog.seatFor("developer").skills, ["developer-role-skill"]);
-        const seatedId = await seatConversation(catalog.seatFor("developer"), "seated-before");
-        await say(seatedId);
-
-        await catalog.change("developer", { skills: ["edited-role-skill"] }, { instructions: "Edited instructions." });
-        await say(seatedId);
-        assert.deepEqual(catalog.seatFor("developer").skills, ["edited-role-skill"]);
-        const seatedAfterId = await seatConversation(catalog.seatFor("developer"), "seated-after");
-        await say(seatedAfterId);
-
-        const [, seatedPrompt, newcomerPrompt] = prompts;
-        // An agent seated after the change gets the edited role, so the change reached the running system.
-        assert.match(newcomerPrompt, /Edited instructions\./);
-        assert.match(seatedPrompt, /Instructions of developer\./);
-        assert.equal(seatedPrompt.includes("Edited instructions."), false);
-    });
-
-    it("loads the seat's workspace once for the sections of one request", async () => {
-        const { loadedSeats, seatFor, say, seatConversation } = await createFixture();
-        const id = await seatConversation(await seatFor("developer"));
-
-        await say(id);
-
-        assert.equal(loadedSeats.length, 1);
-    });
-
-    it("loads the seat's workspace again for the next request", async () => {
-        const { loadedSeats, seatFor, say, seatConversation } = await createFixture();
+    it("leaves out a missing common prompt, logs one diagnostic and still answers", async () => {
+        const { prompts, logged, dataDir, seatFor, say, seatConversation } = await createFixture();
+        await rm(commonPromptPath(dataDir));
         const id = await seatConversation(await seatFor("developer"));
 
         await say(id);
         await say(id);
 
-        assert.equal(loadedSeats.length, 2);
+        assert.equal(prompts.length, 2);
+        assert.equal(prompts[0].includes("intern-common"), false);
+        assert.match(prompts[0], /Instructions of developer\./);
+        assert.equal(logged.length, 1);
+        assert.match(logged[0].message, /common\.md/);
+    });
+
+    it("reads the parts once for the sections of one request", async () => {
+        const { reports, seatFor, say, seatConversation } = await createFixture();
+        const id = await seatConversation(await seatFor("developer"));
+
+        await say(id);
+
+        assert.equal(reports.length, 1);
+    });
+
+    it("reads the parts again for the next request", async () => {
+        const { reports, seatFor, say, seatConversation } = await createFixture();
+        const id = await seatConversation(await seatFor("developer"));
+
+        await say(id);
+        await say(id);
+
+        assert.equal(reports.length, 2);
     });
 
     it("sends the lead duty to a lead whatever role is seated, and keeps it after a reseat", async () => {

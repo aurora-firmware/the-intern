@@ -10,16 +10,17 @@ import type { Logger } from "../daemon/logger.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { startReportDelivery } from "../host/reports.ts";
 import { createRolePromptExtension } from "../prompt/role_prompt_extension.ts";
-import { createWorkspaceContextLoader } from "../prompt/workspace_context.ts";
 import { createRoleCatalog, type RoleCatalog } from "../roles/role_catalog.ts";
 import { rolesSection, workspacesSection } from "../roles/roles_section.ts";
-import { loadPreamble, SHIPPED_ROLES } from "../roles/shipped_roles.ts";
+import { SHIPPED_ROLES } from "../roles/shipped_roles.ts";
 import type { Operation } from "../service/operations.ts";
 import { roleOperations } from "../service/role_operations.ts";
 import { seatOperations } from "../service/seat_operations.ts";
 import { workspaceOperations } from "../service/workspace_operations.ts";
 import { roleInstructionPath } from "../skills/internal_folder.ts";
+import { createDiagnosticLog } from "../skills/skill_discovery.ts";
 import { createSkillsComponent, type SkillsComponent } from "../skills/skills_component.ts";
+import { skillsSection } from "../skills/skills_section.ts";
 import { shippedToolsExtension } from "../tools/shipped_tools_extension.ts";
 import { roleWorkspacePath } from "../workspaces/workspace_folder.ts";
 import {
@@ -44,8 +45,8 @@ export async function createAgentsComponent(options: {
     skills?: SkillsComponent;
 }): Promise<AgentsComponent> {
     const skills = options.skills ?? createSkillsComponent({ logger: options.logger });
-    const preamble = await loadPreamble();
-    const loader = createWorkspaceContextLoader({ logger: options.logger });
+    const diagnostics = createDiagnosticLog(options.logger);
+    let searchPaths: () => readonly string[] = () => [];
     let runtime: AgentsRuntime | undefined;
     let host: HarnessHost | undefined;
     let reportDelivery: { stop(): void } | undefined;
@@ -99,7 +100,13 @@ export async function createAgentsComponent(options: {
         name: "agents",
         extensions: [
             ...(skills.component.extensions ?? []),
-            createRolePromptExtension({ preamble, loader }),
+            createRolePromptExtension({
+                dataDir: skills.dataDir,
+                searchPaths: () => searchPaths(),
+                defaultsOf: (role) => new Set(requireRuntime().catalog.get(role)?.skills ?? []),
+                diagnostics,
+                shippedRoot: skills.shippedRoot,
+            }),
             shippedToolsExtension,
             createCoordinationExtension({ host: requireHost, runtime: requireRuntime }),
         ],
@@ -109,6 +116,7 @@ export async function createAgentsComponent(options: {
         async checkModels(ctx) {
             await skills.component.checkModels?.(ctx);
             host = ctx.host;
+            searchPaths = () => ctx.config.current(skillsSection).paths;
             runtime = buildRuntime(ctx);
             runtime.catalog.checkConfigured();
         },

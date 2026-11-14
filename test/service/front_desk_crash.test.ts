@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { type DaemonProcess, type FakeScript, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { waitForJobStatus } from "../support/job_status.ts";
 
 const POLL_INTERVAL_MS = 10;
 const WAIT_BOUND_MS = 30_000;
@@ -19,7 +20,7 @@ const DESK_INPUT = "what is the status";
 
 type Entry = { kind: string; data: unknown };
 type Listing = { id: string; isFrontDesk: boolean; status: string };
-type JobView = { id: string; leadConversation?: string };
+type JobView = { id: string; status: string; leadConversation?: string };
 
 const envs: HermeticEnv[] = [];
 const daemons: DaemonProcess[] = [];
@@ -113,6 +114,10 @@ async function untilDeskRunning(daemon: DaemonProcess, deskId: string): Promise<
 async function createJob(daemon: DaemonProcess): Promise<string> {
     const job = (await daemon.invoke("jobs.create", { text: "a job for the desk to steer" })) as JobView;
     assert.ok(job.leadConversation, "the created job names its lead conversation");
+    await waitForJobStatus(
+        async () => ((await daemon.invoke("jobs.get", { job: job.id })) as JobView).status,
+        "in_progress",
+    );
     return job.leadConversation;
 }
 

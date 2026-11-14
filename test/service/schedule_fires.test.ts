@@ -23,6 +23,7 @@ import { roleInstructionPath } from "../../src/skills/internal_folder.ts";
 import { startDaemon } from "../support/daemon_process.ts";
 import { createFakeModel, type FakeModelOptions, type FakeTranscript } from "../support/fake_model.ts";
 import { createHermeticEnv } from "../support/hermetic_env.ts";
+import { waitForJobStatus } from "../support/job_status.ts";
 import { createTestClock, type ScheduleRig, startScheduleRig } from "../support/schedule_rig.ts";
 
 type ReplyFn = Parameters<typeof createFakeModel>[0];
@@ -119,6 +120,10 @@ async function fireRig(t: TestContext, extra = "", model: FakeModelOptions & { r
         history: () => ctx.jobStore.listScheduleRuns("nightly", {}),
     };
 }
+
+/** A job starts on the admission grant, after its prompt is read, so a test that completes a new job waits for it. */
+const untilInProgress = (rig: { ctx: ServiceContext }, job: string): Promise<void> =>
+    waitForJobStatus(async () => (await rig.ctx.jobStore.getJob(job)).status, "in_progress");
 
 async function waitFor(check: () => Promise<boolean>, description: string): Promise<void> {
     const deadline = Date.now() + WAIT_TIMEOUT_MS;
@@ -702,6 +707,7 @@ describe("missed due times and job endings", { timeout: TEST_TIMEOUT_MS }, () =>
         const rig = await fireRig(t);
         rig.clock.set(at(1, 1));
         await waitFor(async () => (await rig.history()).items.length === 1, "the first run");
+        await untilInProgress(rig, "S-1");
         await rig.invoke("jobs.update", { job: "S-1", definitionOfDone: "The work is done." });
         await rig.invoke("jobs.complete", { job: "S-1", justification: "Finished." });
         rig.clock.set(at(1, 2));
@@ -739,6 +745,7 @@ describe("missed due times and job endings", { timeout: TEST_TIMEOUT_MS }, () =>
         const rig = await fireRig(t);
         rig.clock.set(at(1, 1));
         await waitFor(async () => (await rig.history()).items.length === 1, "the first run");
+        await untilInProgress(rig, "S-1");
         await rig.invoke("jobs.update", { job: "S-1", definitionOfDone: "The work is done." });
         await rig.invoke("jobs.complete", { job: "S-1", justification: "Finished." });
         await sleep(100);
