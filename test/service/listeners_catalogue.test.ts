@@ -384,6 +384,21 @@ const INPUT_BUILDERS: Record<string, InputBuilder> = {
         await fixture.invoke("roles.create", { name, instructions: "Before.", tools: ["read"], skills });
         return { input: { name: "carry-out-a-part", role: name }, names: [name] };
     },
+    "skills.paths.list": async (fixture) => {
+        await clearSearchPaths(fixture);
+        return { input: {} };
+    },
+    "skills.paths.add": async (fixture, _seed, way) => {
+        await clearSearchPaths(fixture);
+        const path = await fixture.folder(`skill-path-add-${label(way)}`);
+        return { input: { path }, names: [path] };
+    },
+    "skills.paths.remove": async (fixture, _seed, way) => {
+        await clearSearchPaths(fixture);
+        const path = await fixture.folder(`skill-path-remove-${label(way)}`);
+        await fixture.invoke("skills.paths.add", { path });
+        return { input: { path } };
+    },
     "conversations.submit": async (fixture, _seed, way) => {
         const conversationId = await fixture.settledConversation(`submit-${label(way)}`);
         return { input: { conversationId, content: "more", requestId: "more" } };
@@ -492,6 +507,13 @@ const INPUT_BUILDERS: Record<string, InputBuilder> = {
         return { input: { path } };
     },
 };
+
+/** Leaves no skill search path listed, so each way starts from the same list. */
+async function clearSearchPaths(fixture: Fixture): Promise<void> {
+    for (const { path } of (await fixture.invoke("skills.paths.list", {})) as { path: string }[]) {
+        await fixture.invoke("skills.paths.remove", { path });
+    }
+}
 
 async function seedConversation(fixture: Fixture): Promise<Seed> {
     const job = await fixture.createJob();

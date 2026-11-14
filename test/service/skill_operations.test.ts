@@ -217,3 +217,92 @@ describe("skills.enable and skills.disable for a role", () => {
         assert.ok(!forRole.includes("carry-out-a-part"));
     });
 });
+
+type PathEntry = { path: string; ok: boolean; reason?: string };
+
+const pathsOf = (entries: unknown): string[] => (entries as PathEntry[]).map(({ path }) => path);
+
+describe("skills.paths", () => {
+    it("lists the search paths lowest first, each with whether it passes the check", async () => {
+        const rig = await start({ configToml: searchPathsToml("a", "b") });
+        const second = join(rig.dirs.root, "b");
+        chmodSync(second, 0o755);
+
+        const entries = (await rig.invoke("skills.paths.list")) as PathEntry[];
+
+        assert.deepEqual(pathsOf(entries), [join(rig.dirs.root, "a"), second]);
+        assert.equal(entries[0]?.ok, true);
+        assert.equal(entries[1]?.ok, false);
+        assert.match(entries[1]?.reason ?? "", /only to the service account/);
+    });
+
+    it("refuses a relative path, a missing folder and a folder other accounts can read, leaving config.toml unchanged", async () => {
+        const rig = await start();
+        const readable = join(rig.dirs.root, "readable");
+        mkdirSync(readable);
+        chmodSync(readable, 0o755);
+        const before = configText(rig);
+
+        for (const path of ["relative/skills", join(rig.dirs.root, "missing"), readable]) {
+            await assert.rejects(rig.invoke("skills.paths.add", { path }), refusal("invalid_input"));
+        }
+
+        assert.equal(configText(rig), before);
+    });
+
+    it("lists an added path last and reads its skills in the next catalog read", async () => {
+        const rig = await start({ configToml: searchPathsToml("a") });
+        const added = await rig.ownerOnlyFolder(join(rig.dirs.root, "b"));
+        await rig.writeSkill(added, "code-review", "Review code.");
+
+        const entries = (await rig.invoke("skills.paths.add", { path: added })) as PathEntry[];
+
+        assert.deepEqual(pathsOf(entries), [join(rig.dirs.root, "a"), added]);
+        assert.deepEqual(pathsOf(await rig.invoke("skills.paths.list")), [join(rig.dirs.root, "a"), added]);
+        const listing = (await rig.invoke("skills.list", { role: "gp" })) as Listing;
+        assert.ok(listing.skills.some((skill) => skill.name === "code-review"));
+    });
+
+    it("succeeds and changes nothing when the path is already listed", async () => {
+        const rig = await start({ configToml: searchPathsToml("a", "b") });
+        const before = configText(rig);
+
+        const entries = await rig.invoke("skills.paths.add", { path: join(rig.dirs.root, "a") });
+
+        assert.deepEqual(pathsOf(entries), [join(rig.dirs.root, "a"), join(rig.dirs.root, "b")]);
+        assert.equal(configText(rig), before);
+    });
+
+    it("removes a listed path", async () => {
+        const rig = await start({ configToml: searchPathsToml("a", "b") });
+
+        const entries = await rig.invoke("skills.paths.remove", { path: join(rig.dirs.root, "a") });
+
+        assert.deepEqual(pathsOf(entries), [join(rig.dirs.root, "b")]);
+        assert.doesNotMatch(configText(rig), /\/a"/);
+    });
+
+    it("refuses to remove a path that isn't listed as not found", async () => {
+        const rig = await start({ configToml: searchPathsToml("a") });
+        const before = configText(rig);
+
+        await assert.rejects(
+            rig.invoke("skills.paths.remove", { path: join(rig.dirs.root, "other") }),
+            refusal("not_found"),
+        );
+
+        assert.equal(configText(rig), before);
+    });
+
+    it("refuses add and remove with conflict when config.toml changed on disk", async () => {
+        const rig = await start({ configToml: searchPathsToml("a") });
+        const added = await rig.ownerOnlyFolder(join(rig.dirs.root, "b"));
+        writeFileSync(join(rig.dirs.configDir, "config.toml"), `${configText(rig)}\n# edited by hand\n`);
+
+        await assert.rejects(rig.invoke("skills.paths.add", { path: added }), refusal("conflict"));
+        await assert.rejects(
+            rig.invoke("skills.paths.remove", { path: join(rig.dirs.root, "a") }),
+            refusal("conflict"),
+        );
+    });
+});
