@@ -11,6 +11,7 @@ import { requestId } from "../model/request_id.ts";
 import type { ScheduleCard, ScheduleHistoryItem } from "../model/schedules.ts";
 import { isConnected } from "./connection_banner.ts";
 import { RefusalMessage } from "./refusal.ts";
+import { SkillsPanel } from "./skills_panel.ts";
 
 export type Entry = {
     name: string;
@@ -155,6 +156,20 @@ const historyRow = (item: ScheduleHistoryItem) =>
               item.skip.openRun === null ? null : [" ", jobLink(item.skip.openRun)],
           );
 
+/** The control that opens the Skills panel of the role the entry names, or `bob`'s when it names none, collapsed. */
+const EntrySkills = ({ role }: { role: string }) => {
+    const [isOpen, setOpen] = useState(false);
+    return h(
+        "details",
+        {
+            class: "entry-skills",
+            onToggle: (event: Event) => setOpen((event.currentTarget as HTMLDetailsElement).open),
+        },
+        h("summary", null, "Skills"),
+        isOpen ? h(SkillsPanel, { target: { role } }) : null,
+    );
+};
+
 /** An entry with its form, its actions and its history. */
 export const EntryCard = ({
     entry,
@@ -200,6 +215,7 @@ export const EntryCard = ({
             invoke("schedules.run", { idempotencyKey: requestId() }),
         ),
         actionButton("Remove", "button-destructive schedule-remove", isDisabled, invoke("schedules.remove", {})),
+        h(EntrySkills, { role: entry.role ?? "bob" }),
         h("ul", { class: "schedule-history" }, ...(card?.history ?? []).map(historyRow)),
     );
 };
