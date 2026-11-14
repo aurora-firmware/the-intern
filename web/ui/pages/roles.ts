@@ -13,7 +13,9 @@ import { type FeedConnection, pageClient } from "../feed_connection.ts";
 
 type Role = {
     name: string;
-    instructions: string;
+    instructions?: string;
+    instructionsVersion?: string;
+    instructionsMissing?: true;
     tools: string[];
     skills: string[];
     model?: string;
@@ -78,6 +80,21 @@ const fieldsOf = (role: Role | undefined): Fields => ({
 /** The role fields the form names; a choice left unset is left out, so the service keeps its value. */
 const inputOf = (fields: Fields): Record<string, unknown> => ({
     instructions: fields.instructions,
+    ...settingsOf(fields),
+});
+
+/** A change sends the instructions only when they differ, with the token of the file as the page read it. */
+const changeOf = (fields: Fields, role: Role): Record<string, unknown> => {
+    const { instructions, ...rest } = inputOf(fields);
+    if (instructions === (role.instructions ?? "")) return rest;
+    return {
+        instructions,
+        ...(role.instructionsVersion === undefined ? {} : { instructionsVersion: role.instructionsVersion }),
+        ...rest,
+    };
+};
+
+const settingsOf = (fields: Fields): Record<string, unknown> => ({
     tools: linesOf(fields.tools),
     skills: linesOf(fields.skills),
     ...(fields.model === NOT_SET ? {} : { model: fields.model }),
@@ -135,7 +152,7 @@ const levelsFor = (data: Data, model: string): string[] => {
 const settingsFields = (data: Data, fields: Fields, set: (name: keyof Fields) => (value: string) => void) => [
     text("Instructions", "instructions", fields.instructions, set("instructions")),
     text("Tools (one per line)", "tools", fields.tools, set("tools")),
-    text("Skills (absolute paths, one per line)", "skills", fields.skills, set("skills")),
+    text("Skills (names, one per line)", "skills", fields.skills, set("skills")),
     choice(
         "Default model",
         "model",
@@ -201,9 +218,16 @@ const RoleCard = ({ role, data, reload }: { role: Role; data: Data; reload: Relo
         "section",
         { class: "role", "data-role": role.name, "data-changed": String(role.changed) },
         h("h3", null, h("span", { "data-verbatim": "" }, role.name), origin),
+        role.instructionsMissing === true
+            ? h(
+                  "p",
+                  { class: "instructions-missing" },
+                  "This role's instruction file is missing. Saving instructions writes it again.",
+              )
+            : null,
         ...settingsFields(data, fields, set),
         failure !== undefined ? h(RefusalMessage, { error: failure.error }) : null,
-        button("Save", "role-save", invoke("roles.change", inputOf(fields))),
+        button("Save", "role-save", invoke("roles.change", changeOf(fields, role))),
         button("Restore", "role-restore", invoke("roles.restore", {})),
         button("Remove", "button-destructive role-remove", invoke("roles.remove", {})),
     );
@@ -286,7 +310,7 @@ export const RolesPage = ({ feed }: { feed: FeedConnection | null | undefined })
         h(
             "p",
             { class: "roles-note" },
-            "A change affects only agents seated afterwards; agents already seated keep theirs.",
+            "A change to a role's tools, default skills, default model, thinking level or workspace affects only agents seated afterwards. A change to its instructions reaches running agents from their next model request.",
         ),
         failure !== undefined ? h(RefusalMessage, { error: failure.error }) : null,
         data === undefined

@@ -1,3 +1,5 @@
+import { rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import type { Page } from "playwright-core";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
@@ -10,9 +12,16 @@ const POLL_MS = 100;
 const TEST_TIMEOUT_MS = 120_000;
 const NOTE = "main .roles-note";
 const CREATE_FORM = "main .role-create";
+const CHANGE_PATH = "/operations/roles.change";
 const BANNER = ".connection-banner";
 
-type Role = { name: string; instructions: string; shipped: boolean; changed: boolean };
+type Role = {
+    name: string;
+    instructions: string;
+    instructionsVersion?: string;
+    shipped: boolean;
+    changed: boolean;
+};
 
 const roleCard = (name: string) => `main .role[data-role="${name}"]`;
 
@@ -29,13 +38,13 @@ afterEach(async () => {
     for (const env of envs.splice(0)) await env.dispose();
 });
 
-async function startServer(): Promise<{ daemon: DaemonProcess; port: number }> {
+async function startServer(): Promise<{ daemon: DaemonProcess; port: number; env: HermeticEnv }> {
     const env = await createHermeticEnv();
     envs.push(env);
     const daemon = startDaemon({ hermetic: env, script: "echo", turnEndRule: false, networkListener: true });
     daemons.push(daemon);
     await daemon.ready;
-    return { daemon, port: await daemon.networkPort() };
+    return { daemon, port: await daemon.networkPort(), env };
 }
 
 const rolesOf = async (daemon: DaemonProcess): Promise<Role[]> =>
@@ -163,6 +172,107 @@ describe("the Roles page in chrome", () => {
         await openRoles(page, port);
 
         t.assert.match((await page.locator(NOTE).textContent()) ?? "", /only agents seated afterwards/);
+    });
+
+    it("states that instructions reach running agents from their next model request", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { port } = await startServer();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openRoles(page, port);
+
+        const note = (await page.locator(NOTE).textContent()) ?? "";
+        t.assert.match(note, /tools, default skills, default model, thinking level or workspace/);
+        t.assert.match(note, /running agents from their next model request/);
+    });
+
+    it("sends the instructions token with changed instructions and shows the new text", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { daemon, port } = await startServer();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openRoles(page, port);
+        const token = (await roleOf(daemon, "gp"))?.instructionsVersion;
+        const bodies: Record<string, unknown>[] = [];
+        page.on("request", (request) => {
+            if (new URL(request.url()).pathname === CHANGE_PATH) bodies.push(request.postDataJSON());
+        });
+
+        await page.fill(`${roleCard("gp")} textarea[name="instructions"]`, "Do it my way.");
+        await page.click(`${roleCard("gp")} .role-save`);
+        await waitFor(page, `document.querySelector('${roleCard("gp")}')?.dataset.changed === "true"`);
+
+        t.assert.equal(typeof token, "string");
+        t.assert.equal(bodies[0]?.instructionsVersion, token);
+        t.assert.equal(await page.inputValue(`${roleCard("gp")} textarea[name="instructions"]`), "Do it my way.");
+    });
+
+    it("leaves instructions and the token out of a save that changes only the tools", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { port } = await startServer();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openRoles(page, port);
+        const bodies: Record<string, unknown>[] = [];
+        page.on("request", (request) => {
+            if (new URL(request.url()).pathname === CHANGE_PATH) bodies.push(request.postDataJSON());
+        });
+
+        await page.fill(`${roleCard("gp")} textarea[name="tools"]`, "read");
+        await page.click(`${roleCard("gp")} .role-save`);
+        await waitFor(page, `document.querySelector('${roleCard("gp")}')?.dataset.changed === "true"`);
+
+        t.assert.equal("instructions" in (bodies[0] ?? {}), false);
+        t.assert.equal("instructionsVersion" in (bodies[0] ?? {}), false);
+    });
+
+    it("shows the conflict and keeps the typed text when the file was edited by hand", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { daemon, port, env } = await startServer();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openRoles(page, port);
+
+        await writeFile(join(env.dataDir, "instructions", "roles", "gp.md"), "Edited by hand.");
+        await page.fill(`${roleCard("gp")} textarea[name="instructions"]`, "My typed text.");
+        await page.click(`${roleCard("gp")} .role-save`);
+
+        await page.waitForSelector(`${roleCard("gp")} .refusal`, { timeout: WAIT_MS });
+        t.assert.equal(await page.inputValue(`${roleCard("gp")} textarea[name="instructions"]`), "My typed text.");
+        t.assert.notEqual((await roleOf(daemon, "gp"))?.instructions, "My typed text.");
+    });
+
+    it("shows that a role's instruction file is missing", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { daemon, port, env } = await startServer();
+        await daemon.invoke("roles.create", { name: "ghost", instructions: "Haunt.", tools: [] });
+        await rm(join(env.dataDir, "instructions", "roles", "ghost.md"));
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openRoles(page, port);
+
+        await page.waitForSelector(`${roleCard("ghost")} .instructions-missing`, { timeout: WAIT_MS });
+        t.assert.equal(await page.locator(`${roleCard("gp")} .instructions-missing`).count(), 0);
+    });
+
+    it("takes skills as names", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { port } = await startServer();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openRoles(page, port);
+
+        const label = await page.locator(`${roleCard("gp")} label:has(textarea[name="skills"])`).textContent();
+
+        t.assert.match(label ?? "", /Skills \(names, one per line\)/);
     });
 
     it("lists a role created elsewhere after a settings change", { timeout: TEST_TIMEOUT_MS }, async (t) => {
