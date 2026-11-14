@@ -29,14 +29,15 @@ function daemonModulesAmong(urls: string[]): string[] {
 }
 
 describe("bob command line", () => {
-    it("prints the top-level usage on standard output and exits 0 for --help, listing the schedules group and no reserved group", async () => {
+    it("prints the top-level usage on standard output and exits 0 for --help, listing the schedules and skills groups and no reserved group", async () => {
         const result = await runBob(["--help"]);
 
         assert.equal(result.status, 0);
         assert.ok(result.stdout.startsWith("Usage: bob <command>"), result.stdout);
         assert.ok(result.stdout.includes("serve"), result.stdout);
         assert.ok(result.stdout.includes("schedules"), result.stdout);
-        assert.ok(!/skills|instructions|knowledge|mail/.test(result.stdout), result.stdout);
+        assert.ok(result.stdout.includes("skills"), result.stdout);
+        assert.ok(!/knowledge|mail/.test(result.stdout), result.stdout);
         assert.equal(result.stderr, "");
     });
 
@@ -48,12 +49,12 @@ describe("bob command line", () => {
         assert.ok(result.stderr.includes("Usage: bob <command>"), result.stderr);
     });
 
-    it("says on standard error that skills aren't available yet and exits 2 for a reserved group", async () => {
-        const result = await runBob(["skills", "list"]);
+    it("says on standard error that knowledge isn't available yet and exits 2 for a reserved group", async () => {
+        const result = await runBob(["knowledge", "list"]);
 
         assert.equal(result.status, 2);
         assert.equal(result.stdout, "");
-        assert.ok(result.stderr.includes("skills"), result.stderr);
+        assert.ok(result.stderr.includes("knowledge"), result.stderr);
         assert.ok(result.stderr.includes("isn't available yet"), result.stderr);
     });
 
