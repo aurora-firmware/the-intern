@@ -182,14 +182,18 @@ describe("skills.disable for one running agent", () => {
         const { rig } = await start();
         const { lead } = await startJob(rig, "gp", "job");
         await rig.invoke("skills.enable", { name: CODE_REVIEW, conversation: lead });
-        assert.deepEqual(listedIn(await say(rig, lead, "before")), ["carry-out-a-part", CODE_REVIEW]);
+        assert.deepEqual(listedIn(await say(rig, lead, "before")), [
+            "bob-command-line",
+            "carry-out-a-part",
+            CODE_REVIEW,
+        ]);
 
         const result = (await rig.invoke("skills.disable", { name: "carry-out-a-part", conversation: lead })) as {
             enabledSkills: string[];
         };
 
         assert.deepEqual(result.enabledSkills, ["bob-command-line", CODE_REVIEW]);
-        assert.deepEqual(listedIn(await say(rig, lead, "after")), [CODE_REVIEW]);
+        assert.deepEqual(listedIn(await say(rig, lead, "after")), ["bob-command-line", CODE_REVIEW]);
     });
 
     it("refuses a skill the agent's workspace supplies as invalid input", async () => {
