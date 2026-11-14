@@ -321,7 +321,15 @@ describe("network listener", () => {
             { name: "reviewer", instructions: "Review the work.", tools: ["read"], skills: [] },
             caller,
         );
-        await firstDaemon.catalogue.invoke("roles.change", { name: "reviewer", instructions: "Review hard." }, caller);
+        const listed = (await firstDaemon.catalogue.invoke("roles.list", {}, caller)) as {
+            roles: { name: string; instructionsVersion?: string }[];
+        };
+        const instructionsVersion = listed.roles.find((role) => role.name === "reviewer")?.instructionsVersion;
+        await firstDaemon.catalogue.invoke(
+            "roles.change",
+            { name: "reviewer", instructions: "Review hard.", instructionsVersion },
+            caller,
+        );
         assert.equal(await firstDaemon.stop(), 0);
 
         const secondAgents = await createAgentsComponent({ logger: createLogger({ stream: { write: () => true } }) });

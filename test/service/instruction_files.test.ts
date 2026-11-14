@@ -333,7 +333,15 @@ describe("a role changed after its agent was seated", () => {
             thinkingLevel: "high",
             workspace: folder,
         });
-        await started.invoke("roles.change", { name: "reviewer", instructions: "Review it twice." });
+        const { roles } = (await started.invoke("roles.list", {})) as {
+            roles: { name: string; instructionsVersion?: string }[];
+        };
+        const instructionsVersion = roles.find((role) => role.name === "reviewer")?.instructionsVersion;
+        await started.invoke("roles.change", {
+            name: "reviewer",
+            instructions: "Review it twice.",
+            instructionsVersion,
+        });
         const system = await say(started, reviewer, "again reviewer");
 
         const after = await readConversationMeta(started.ctx.host, reviewer);
