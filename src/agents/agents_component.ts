@@ -21,7 +21,7 @@ import { roleInstructionPath } from "../skills/internal_folder.ts";
 import { createDiagnosticLog } from "../skills/skill_discovery.ts";
 import { createSkillsComponent, type SkillsComponent } from "../skills/skills_component.ts";
 import { skillsSection } from "../skills/skills_section.ts";
-import { shippedToolsExtension } from "../tools/shipped_tools_extension.ts";
+import { createShippedToolsExtension } from "../tools/shipped_tools_extension.ts";
 import { roleWorkspacePath } from "../workspaces/workspace_folder.ts";
 import {
     createWorkspaceRegistry,
@@ -107,7 +107,7 @@ export async function createAgentsComponent(options: {
                 diagnostics,
                 shippedRoot: skills.shippedRoot,
             }),
-            shippedToolsExtension,
+            createShippedToolsExtension({ runtimeDir: () => skills.runtimeDir() }),
             createCoordinationExtension({ host: requireHost, runtime: requireRuntime }),
         ],
         async prepareFiles(input) {
