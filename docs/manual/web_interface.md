@@ -101,6 +101,18 @@ actions:
   activity shows them as coming from a team member by the web interface. If the agent is waiting for reports, the page
   says "held until it continues": the service keeps your words and delivers them when the agent goes on.
 
+### Skills of a conversation
+
+Each conversation has a collapsed **Skills** control. Open it to see the skills of that agent and the instruction files
+that build its prompt. [The Skills panel](#the-skills-panel) describes what the panel shows and does. It is offered for
+every conversation of the job, including those of a To do job. A check box you change for a running agent takes effect
+from its next model request.
+
+The activity shows each change of a skill, in order with the other entries, as a **Skill changed** entry such as
+"code-review enabled by team member by web interface". It names who made the change: a team member and the way in,
+an agent and its role, or a job source, as in "job source schedule".
+A change made with `bob skills enable` shows the same way, at once.
+
 ### Conversation controls
 
 Under Stop and Redirect, each conversation has a collapsed **Settings** area with three controls:
@@ -122,8 +134,90 @@ directly: type its text and, if you want, a title. The job appears on the Board 
 
 The Roles page lists every role with its instructions, tools, skills, default model, thinking level and workspace.
 You can create a role, change any role's settings, restore a shipped role you changed, and remove a role you created.
-A change affects only agents seated afterwards; agents already seated keep their settings. The rules for roles are in
-[Roles, workspaces and agents sharing a job](roles_and_agents.md).
+The rules for roles are in [Roles, workspaces and agents sharing a job](roles_and_agents.md).
+
+A role's instructions are the text of its instruction file, `instructions/roles/<name>.md` in the data directory. The
+page reads the file and writes it when you save. What a change reaches depends on what you changed, and the page says
+so above the list:
+
+- A change to a role's instructions reaches running agents of that role from their next model request.
+- A change to a role's tools, default skills, default model, thinking level or workspace affects only agents seated
+  afterwards. Agents already seated keep their settings.
+
+If the file changed on disk since the page read it, for example by a hand edit, the service refuses the save as a
+conflict and shows its message, and nothing is overwritten. If the file is gone, the role shows a notice, and saving
+instructions writes it again. A role whose file is missing or empty can't be seated.
+
+Each role has a collapsed **Skills** control that opens its [Skills panel](#the-skills-panel). The check boxes there
+set the skills the role starts with, so they affect only agents seated afterwards.
+
+### Skills and instructions section
+
+Below the roles, the **Skills and instructions** section holds what belongs to no single role:
+
+- **Common prompt.** **Edit** opens the common prompt, the first part of every agent's prompt, in the
+  [file editor](#edit-a-file). An edit reaches every running agent from its next model request. **Restore** copies
+  the installed version back.
+- **Skill search paths.** The folders, besides the internal folder, that skills come from. Type an absolute path in
+  **Folder** and select **Add**, or select **Remove** beside a path. The service refuses a path that isn't an existing
+  folder only you can use, and the page shows its message. A path the service can't use shows an `unusable` badge with
+  the reason.
+- **Shipped role instructions.** **Restore** for each shipped role copies back the installed version of its instruction
+  file.
+- **Shipped skills.** **Restore** for each shipped skill copies back the installed version; the `edited` badge marks one
+  you changed.
+
+Restore overwrites your edits to that file. The page offers no way to create or delete a skill folder; put a skill
+folder where a search path or workspace holds it, as [Roles, workspaces and agents sharing a job](roles_and_agents.md)
+describes.
+
+## The Skills panel
+
+The Skills panel is the same on the Job, Roles and Schedules pages. It shows what `bob skills list` and
+`bob instructions list` print for one role or one agent, and lets you change the skills and edit the files. Select
+**Skills** to open it. It stays current without a reload.
+
+- **Skills.** Each skill has a check box, its description, its source (`internal`, `path <folder>` or
+  `workspace <folder>`) and the badges `edited` or `deleted` for a shipped skill. Check the box to enable the skill and
+  clear it to disable it. A skill of the agent's workspace is always on and its box can't be changed. A skill that a
+  copy higher in priority shadows is listed under that copy as "Shadows ...".
+- **Notices.** "Not found" lists enabled names that no skill matches. "Left out" lists a skill that failed its check,
+  with the reason.
+- **Instruction files.** The files that build the prompt, in the order the prompt reads them: the common prompt, the
+  role's file and the context files of the workspace. Each has the badges `shipped`, `edited` or `missing`, and an
+  **Edit** button.
+- **Edit.** Beside each skill and each instruction file, opens its file in the [file editor](#edit-a-file).
+
+The service refuses a change it can't make, for example an unknown skill name. The page shows its message beside the
+skill and leaves the box as the service has it.
+
+Where the panel is opened decides whose skills it shows:
+
+| From                                   | Shows                                              | A change affects                  |
+| -------------------------------------- | -------------------------------------------------- | --------------------------------- |
+| A conversation on the Job page         | The agent in that conversation                     | That agent, from its next model request |
+| A role on the Roles page               | The role                                           | Agents seated with it afterwards  |
+| A schedule entry on the Schedules page | The entry's role, or `bob` when the entry has none | Agents seated with it afterwards  |
+
+### Edit a file
+
+**Edit** opens the file's text in a box under the panel, with its path above it. For a skill it opens the skill's
+`SKILL.md`. Change the text and select **Save**. The service writes the file, and the change reaches running agents as
+the table above says. **Close** hides the box.
+
+You can edit only these files:
+
+- a file inside a skill folder, in the internal folder, a search path or a registered workspace's `.pi/skills`
+- a file in the internal folder's `instructions` folder
+- the `AGENTS.md` or `CLAUDE.md` file directly inside a registered workspace
+
+The files of a workspace's parent folders are listed but can't be opened here. A file that isn't UTF-8 text or is
+larger than 1 MiB is refused. The editor never creates or deletes a file.
+
+If the file changed on disk after the editor read it, the service refuses **Save** as a conflict. The page shows the
+refusal, keeps the text you typed and offers **Use the text from disk**. Select it to replace your text with the file's
+current text, then make your edit again and save. Until you select it, nothing you typed is lost and nothing on disk is
+overwritten. Any other refusal shows its reason the same way and keeps your text.
 
 ## Workspaces
 
@@ -136,6 +230,10 @@ service refuses a path that doesn't exist, and the page shows its message.
 The Schedules page lists the schedule entries, each with its next due time, its recent scheduled runs linked to their
 Job pages and its skipped fires with the reason. You can add, change, run now and remove an entry there. The page stays
 current without a reload. [Schedules](schedules.md) describes the entries, the skip rules and the run history.
+
+Each entry has a collapsed **Skills** control that opens the [Skills panel](#the-skills-panel) of the entry's role, or
+of `bob` when the entry names none. It shows the role's skills, so you can check what a scheduled run starts with. A
+change there is a change to the role and affects only agents seated afterwards.
 
 ## Status
 
@@ -172,10 +270,11 @@ your kept text. You don't reload.
 - **No notifications.** It sends no pop-ups or sounds when a job blocks. Check the Board.
 - **No names on actions.** Nobody enters a name. The record shows the way in, `web interface`, and the network address
   and port of the browser's connection.
-- **No file browsing or editing.** You can't open a workspace's files. An agent's file changes appear only in its tool
-  calls and results.
+- **No file browsing.** You can't open a workspace's files, except its `AGENTS.md` and `CLAUDE.md` and the skill files
+  the [Skills panel](#the-skills-panel) lists. An agent's other file changes appear only in its tool calls and results.
+- **No creating or deleting skill folders or files.** You edit the text of files that exist.
 - **No login and no encryption.** See the warning above.
-- **No pages for skills, instruction files or knowledge sources.** Each comes with its feature.
+- **No page for knowledge sources.** It comes with its feature.
 - **No import.** It stays on the command line.
 - **No export to a path on the service's machine.** The browser downloads the file; use
   [`bob export <file>`](commands.md#bob-export-file) for a file on the machine itself.
