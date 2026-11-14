@@ -109,6 +109,23 @@ async function untilModelRequestInFlight(daemon: DaemonProcess, conversationId: 
     assert.equal(entries.filter((entry) => entry.kind === "pi.assistant").length, 0, "the model already answered");
 }
 
+/**
+ * Waits until one run holds the only worker thread and the other waits for it. Each run asks for the thread once its
+ * prompt is read, so a run just submitted or resumed may not have asked yet.
+ */
+async function untilAdmitted(daemon: DaemonProcess, when: string): Promise<void> {
+    const deadline = Date.now() + WAIT_BOUND_MS;
+    let workerThreads: Status["workerThreads"] | undefined;
+    while (Date.now() < deadline) {
+        ({ workerThreads } = (await daemon.invoke("daemon.status", {})) as Status);
+        if (workerThreads.inUse === 1 && workerThreads.waiting.length === 1) return;
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    }
+    assert.fail(
+        `one run does not hold the worker thread with the other waiting ${when}: ${JSON.stringify(workerThreads)}`,
+    );
+}
+
 async function submissionState(daemon: DaemonProcess, submissionId: string): Promise<string> {
     return ((await daemon.invoke("submissions.get", { submissionId })) as { state: string }).state;
 }
@@ -189,16 +206,13 @@ describe("kill -9 during an admission change", () => {
             await submit(first, conversationIds[0], "alpha"),
             await submit(first, conversationIds[1], "beta"),
         ];
-        const { workerThreads: beforeKill } = (await first.invoke("daemon.status", {})) as Status;
-        assert.equal(beforeKill.inUse, 1, "the first run is not holding the worker thread");
-        assert.equal(beforeKill.waiting.length, 1, "the second conversation is not waiting");
+        await untilAdmitted(first, "before the kill");
         await crash(first);
 
         const second = start(env, "slow", 1);
         await second.ready;
 
-        const { workerThreads } = (await second.invoke("daemon.status", {})) as Status;
-        assert.equal(workerThreads.inUse + workerThreads.waiting.length, 2);
+        await untilAdmitted(second, "after the restart");
         const statuses = (await conversationsOf(second)).map((conversation) => conversation.status);
         assert.deepEqual(statuses.toSorted(), ["running", "waiting for a worker thread"]);
         for (const submissionId of submissionIds)

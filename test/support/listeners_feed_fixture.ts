@@ -29,6 +29,8 @@ export const WAIT_TIMEOUT_MS = 20_000;
 export const POLL_INTERVAL_MS = 10;
 export const SETTLE_WAIT_MS = 30_000;
 export const EVENT_TIMEOUT_MS = 10_000;
+/** How long the loop may run again before a client that stops reading must have been ended. */
+export const STALL_DEADLINE_MS = 60_000;
 
 export const ENTRIES_PAGE_LIMIT = 500;
 export const LOOPBACK = "127.0.0.1";
@@ -37,7 +39,7 @@ export const IN_PROCESS: Caller = { actor: { kind: "team_member" } };
 export const COMMAND_LINE: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
 export const quietLogger = createLogger({ stream: { write: () => true } });
 export const LISTENERS = ["local socket", "network listener"] as const;
-/** About three commits per step, so a run of this many steps produces well over the 1000 deltas of the bound. */
+/** About three commits per step, so a run of this many steps produces more deltas than the 1000 of the bound. */
 export const LOOP_STEPS = 450;
 export const LOOP_INPUT = "loop";
 
@@ -211,7 +213,7 @@ export type Fixture = {
     /** The ID of the job whose lead is the conversation `idleConversation` returned. */
     jobIdOf(conversationId: string): string;
     /** Submits input in-process and waits until it is done and the conversation idle again. */
-    submitAndSettle(conversationId: string, content: string): Promise<void>;
+    submitAndSettle(conversationId: string, content: string, requestId?: string): Promise<void>;
     entries(conversationId: string): Promise<Entry[]>;
 };
 
@@ -273,8 +275,12 @@ export async function startFixture(
         return stream;
     }
 
-    async function submitAndSettle(conversationId: string, content: string): Promise<void> {
-        const submit = { conversationId, content, requestId: `${conversationId}-${content}` };
+    async function submitAndSettle(
+        conversationId: string,
+        content: string,
+        requestId = `${conversationId}-${content}`,
+    ): Promise<void> {
+        const submit = { conversationId, content, requestId };
         const { submissionId } = (await invoke("conversations.submit", submit)) as { submissionId: string };
         const waited = (await invoke("submissions.wait", { submissionId, timeoutMs: SETTLE_WAIT_MS })) as {
             state: string;
@@ -356,8 +362,14 @@ export async function readToEnd(stream: FeedStream): Promise<{ last?: FeedEvent;
 
 export type Subscription = { next(): Promise<unknown>; close(): void };
 
-/** Records what each subscription `feed.subscribe` hands a listener: each delta read, then the reason it closed. */
-export function recordSubscriptionReads(catalogue: Catalogue): unknown[][] {
+/**
+ * Records what each subscription `feed.subscribe` hands a listener: each delta read, then the reason it closed.
+ * `onClosed` is told the index of each subscription that closes, once its reason is recorded.
+ */
+export function recordSubscriptionReads(
+    catalogue: Catalogue,
+    onClosed: (subscription: number) => void = () => {},
+): unknown[][] {
     const readsBySubscription: unknown[][] = [];
     const invoke = catalogue.invoke.bind(catalogue);
     mock.method(catalogue, "invoke", async (name: string, input: unknown, caller: Caller) => {
@@ -365,10 +377,11 @@ export function recordSubscriptionReads(catalogue: Catalogue): unknown[][] {
         if (name !== "feed.subscribe") return result;
         const subscription = result as Subscription;
         const reads: unknown[] = [];
-        readsBySubscription.push(reads);
+        const index = readsBySubscription.push(reads) - 1;
         // A subscription closed after the stream ended is not read again, so its reason is recorded when it closes.
         void (subscription as unknown as { closed: Promise<unknown> }).closed.then((reason) => {
             reads.push({ closed: reason });
+            onClosed(index);
         });
         const next = subscription.next;
         subscription.next = async () => {
@@ -379,6 +392,74 @@ export function recordSubscriptionReads(catalogue: Catalogue): unknown[][] {
         return subscription;
     });
     return readsBySubscription;
+}
+
+/** Feed streams that stopped reading after their snapshots, and the reads of the subscriptions behind them. */
+export type StalledFeeds = { streams: FeedStream[]; reads: unknown[][] };
+
+/**
+ * Opens the feed `query` over each listener, one after another, reads its `snapshots` snapshots and stops reading. A
+ * stream is read again as soon as a subscription behind it closes: its connection is still full, and the listener
+ * closes a connection that cannot take the stream's `end` event within a second.
+ */
+export async function openStalledFeeds(fixture: Fixture, query: string, snapshots: number): Promise<StalledFeeds> {
+    const streams: FeedStream[] = [];
+    const streamOfSubscription: number[] = [];
+    const reads = recordSubscriptionReads(fixture.catalogue, (subscription) => {
+        streams[streamOfSubscription[subscription] as number]?.resume();
+    });
+    for (const listener of LISTENERS) {
+        const firstSubscription = reads.length;
+        const stream = await fixture.openFeed(listener, query);
+        for (let subscription = firstSubscription; subscription < reads.length; subscription++) {
+            streamOfSubscription[subscription] = streams.length;
+        }
+        for (let event = 0; event < snapshots; event++) assert.equal((await nextEvent(stream)).name, "snapshot");
+        stream.pause();
+        streams.push(stream);
+    }
+    return { streams, reads };
+}
+
+/** How many loop runs a conversation made, and the time they took together. */
+export type Loops = { count: number; runTimeMs: number };
+
+const isClosedRead = (read: unknown): boolean => typeof read === "object" && read !== null && "closed" in read;
+
+/** Runs `LOOP_INPUT` once more in the conversation, as its loop run number `loop`, and returns the time it took. */
+async function runLoop(fixture: Fixture, conversationId: string, loop: number): Promise<number> {
+    const startedAt = performance.now();
+    await fixture.submitAndSettle(conversationId, LOOP_INPUT, `${conversationId}-${LOOP_INPUT}-${loop}`);
+    return performance.now() - startedAt;
+}
+
+/** Runs `LOOP_INPUT` in the conversation `count` times, one after another. */
+export async function runLoops(fixture: Fixture, conversationId: string, count: number): Promise<Loops> {
+    const loops: Loops = { count: 0, runTimeMs: 0 };
+    while (loops.count < count) loops.runTimeMs += await runLoop(fixture, conversationId, ++loops.count);
+    return loops;
+}
+
+/**
+ * Runs `LOOP_INPUT` in the conversation until each of the `subscriptions` recorded subscriptions has closed. The
+ * deltas a client that stops reading leaves behind wait in its subscription only once its connection holds no more,
+ * and how much a connection holds depends on the system, so the runs go on until the bound has closed the stream.
+ * Fails when a subscription is still open at the deadline.
+ */
+export async function loopUntilClosed(
+    fixture: Fixture,
+    conversationId: string,
+    reads: readonly unknown[][],
+    subscriptions: number,
+): Promise<Loops> {
+    const areClosed = () => reads.length === subscriptions && reads.every((read) => isClosedRead(read.at(-1)));
+    const deadline = Date.now() + STALL_DEADLINE_MS;
+    const loops: Loops = { count: 0, runTimeMs: 0 };
+    while (!areClosed()) {
+        assert.ok(Date.now() < deadline, `a subscription is still open after ${loops.count} runs of the loop`);
+        loops.runTimeMs += await runLoop(fixture, conversationId, ++loops.count);
+    }
+    return loops;
 }
 
 /** Polls `read` until it equals `expected` or the wait ends, then asserts it does. */

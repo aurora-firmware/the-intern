@@ -141,9 +141,13 @@ export async function assertBlockedAsStopped(daemon: DaemonProcess, job: JobView
     assert.equal(await userInputsWith(daemon, leadId, REMINDER_TEXT), 0, "the lead took no reminder");
 }
 
-/** Creates a job and waits until it is In progress: a job starts on the admission grant, after its prompt is read. */
+/** Waits until the job is In progress: a job starts on the admission grant, after its lead's prompt is read. */
+export const untilInProgress = (daemon: DaemonProcess, job: string): Promise<void> =>
+    waitForJobStatus(async () => (await jobOf(daemon, job)).status, "in_progress");
+
+/** Creates a job and waits until it is In progress. */
 export async function createStartedJob(daemon: DaemonProcess, text: string): Promise<JobView> {
     const job = await createJob(daemon, text);
-    await waitForJobStatus(async () => (await jobOf(daemon, job.id)).status, "in_progress");
+    await untilInProgress(daemon, job.id);
     return job;
 }

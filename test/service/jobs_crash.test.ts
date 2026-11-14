@@ -27,6 +27,7 @@ import {
     start,
     steersWith,
     TEST_TIMEOUT_MS,
+    untilInProgress,
     untilKilled,
     untilStatus,
     untilTrue,
@@ -113,7 +114,8 @@ describe("kill -9 after the job write and before its lead starts", () => {
 
         const [job] = ((await second.invoke("jobs.list", {})) as { jobs: JobView[] }).jobs;
         assert.ok(job);
-        assert.equal(job.status, "in_progress");
+        // Rule 1 seats the lead at startup; the job starts on the lead's admission grant, which may come after ready.
+        await untilInProgress(second, job.id);
         const leads = (await conversationsOf(second, job.id)).filter((conversation) => conversation.isLead);
         assert.equal(leads.length, 1);
         assert.deepEqual(await repairsOf(second, job.id), [1]);
@@ -239,6 +241,9 @@ describe("kill -9 after input reached the lead of a Blocked job and before the r
         assert.equal(stored.blockedReason, undefined);
         assert.notEqual((await listingOf(second, leadId)).status, "parked");
         assert.deepEqual(await repairsOf(second, job.id), [3]);
+        // The unparked lead answers the input in a run of the second daemon, once its prompt is read.
+        await untilTrue(async () => (await echoesOf(second, leadId, ANSWER)) > 0, "the lead to answer");
+        await untilStatus(second, leadId, "idle");
         assert.equal(await echoesOf(second, leadId, ANSWER), 1, "the lead took the answer once");
     });
 });
