@@ -48,7 +48,7 @@ describe("the shipped about-the-intern skill", () => {
 
     it("names the skill and describes it in its frontmatter", async () => {
         const text = await readFile(join(SKILL_FOLDER, "SKILL.md"), "utf8");
-        assert.match(text, /^---\nname: about-the-intern\ndescription: .+\n---\n/);
+        assert.match(text, /^---\n\nname: about-the-intern\ndescription: .+\n---\n/);
     });
 });
 

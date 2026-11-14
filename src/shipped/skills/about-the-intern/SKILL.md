@@ -1,4 +1,5 @@
 ---
+
 name: about-the-intern
 description: "Explain how The Intern works and how a team member uses and configures it, from the user manual. Use it to answer questions about jobs, roles, workspaces, schedules, skills and instructions, the front desk, the `bob` commands, the web interface and running the service."
 ---
