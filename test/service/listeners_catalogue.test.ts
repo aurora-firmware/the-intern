@@ -372,6 +372,7 @@ const INPUT_BUILDERS: Record<string, InputBuilder> = {
     "models.list": async () => ({ input: {} }),
     "roles.list": async () => ({ input: {} }),
     "workspaces.list": async () => ({ input: {} }),
+    "skills.list": async () => ({ input: { role: "gp" } }),
     "conversations.submit": async (fixture, _seed, way) => {
         const conversationId = await fixture.settledConversation(`submit-${label(way)}`);
         return { input: { conversationId, content: "more", requestId: "more" } };
