@@ -909,20 +909,20 @@ pi-durable, and `skill_resolution.ts`, `role_prompt.ts` and the internal folder'
   `enabled-skills`. Documents written before S-008 have no `enabledSkills`, and their stored tool selection lacks
   `skill` (S-008 REQ-008). After admission is restored and before the repair rules and `host.resume()`, each such
   conversation gets, in one commit of its own, the running version's default skill names of its seat's role (none when
-  the role is gone), and `skill` added to its seat's tools and its pi-durable tool selection. A crash before the flag
-  is written repeats the write only for the documents still without the field. Until then the enable and disable
-  write, the system prompt, the `skill` tool and `skills.list` take a missing field as the role's current defaults.
-  No team member's read runs before step 7 ends, so none meets a document without the field. The instance feed's facts
-  and `conversations.get` and `conversations.list` take a missing field as an empty set and never read the older
-  `seat.skills`. The write delivers
-  no input and adds no redelivery path or repair rule.
+  the role is gone), and `skill` added to its seat's tools and its pi-durable tool selection. A crash before the flag is
+  written repeats the write only for the documents still without the field. Until then the enable and disable write, the
+  system prompt, the `skill` tool and `skills.list` take a missing field as the role's current defaults. No team
+  member's read runs before step 7 ends, so none meets a document without the field. The instance feed's facts and
+  `conversations.get` and `conversations.list` take a missing field as an empty set and never read the older
+  `seat.skills`. The write delivers no input and adds no redelivery path or repair rule.
 
 ### The internal folder
 
 ADR-009 states the rules; `src/skills/internal_folder.ts` builds them.
 
 - **The manifest format.** `<data dir>/shipped-files.json` is
-  `{ "version": 1, "files": { "<relative path>": "<hash>" } }`, written with mode `0600` through a temporary file in the same folder and a rename.
+  `{ "version": 1, "files": { "<relative path>": "<hash>" } }`, written with mode `0600` through a temporary file in
+  the same folder and a rename.
 - **The start rule's removals.** Removing a recorded file the version no longer ships also removes any skill folder it
   leaves empty.
 - **Restore.** A skill's restore copies the shipped folder to a temporary sibling, removes the old folder and renames
