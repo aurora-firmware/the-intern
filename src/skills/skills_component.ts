@@ -12,6 +12,7 @@ import type { Logger } from "../daemon/logger.ts";
 import { upgradeEnabledSkills } from "../host/skill_set.ts";
 import { rolesSection, workspacesSection } from "../roles/roles_section.ts";
 import type { Operation } from "../service/operations.ts";
+import { skillOperations } from "../service/skill_operations.ts";
 import { migrateOlderKeys } from "./config_migration.ts";
 import { createFileStore, type FileChangeHub, type FileStore } from "./file_store.ts";
 import { DEFAULT_SHIPPED_ROOT, prepareInternalFolder } from "./internal_folder.ts";
@@ -125,7 +126,7 @@ export function createSkillsComponent(options: SkillsComponentOptions): SkillsCo
         },
     };
 
-    return {
+    const skills: SkillsComponent = {
         component,
         sections: [skillsSection as ConfigSection<unknown>],
         operations: [],
@@ -138,4 +139,6 @@ export function createSkillsComponent(options: SkillsComponentOptions): SkillsCo
         },
         agentsRuntime,
     };
+    skills.operations.push(...skillOperations(skills));
+    return skills;
 }
