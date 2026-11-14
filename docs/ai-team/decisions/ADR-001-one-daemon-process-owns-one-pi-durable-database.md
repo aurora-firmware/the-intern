@@ -34,19 +34,21 @@ exceptions in decision 4.
      pi-durable's tables. The host reads the job schema version before pi-durable opens the file, and a newer one stops
      startup with the file unchanged.
    - The file has one connection, shared by pi-durable and the job store, so their transactions queue in call order.
-     Neither runs inside the other's transaction.
+     Neither runs inside the other's transaction. The job store reaches the connection through the host's interface and
+     imports no pi package.
    - `jobs.export` copies the whole file with SQLite's online backup while work goes on, and is the only way to copy
      it (S-004 REQ-016). The import step runs while the daemon is stopped, under the owner lock, places a copy only
      where no database, `-wal` or `-shm` file exists, and refuses a copy with a newer job or pi-durable schema (S-004
-     REQ-017). Neither
-     converts the file, and the first start on a copy repairs it as after a crash.
+     REQ-017). Neither converts the file, and the first start on a copy repairs it as after a crash.
 2. **pi-durable sits behind a narrow host.** Only the harness host module (`src/host/`) and the-intern's own pi-durable
    extensions import pi-durable, and no other extension is loaded. Every other component uses the host's interface.
    - Listener and client library code imports neither the host nor `pi-durable`, `pi-ai`, `chord` or
      `pi-coding-agent`. Listeners reach the daemon's state only through the catalogue, the feed and the lifecycle
-     hooks, and may load only the path layout, `src/daemon/state_layout.ts`.
+     hooks. They import the daemon and feed modules only as types, and may load only the path layout,
+     `src/daemon/state_layout.ts`. Daemon components use `pi-ai`, `chord` and `pi-coding-agent` where they need them.
    - The export route `GET /export` (S-003 REQ-016) adds no operation: it calls `jobs.export` through the catalogue into
-     a folder of its own under the state directory's `exports` folder, sends the file and removes the folder.
+     a folder of its own under the state directory's `exports` folder, sends the file and removes the folder. Its
+     removal of leftovers at start touches no state the daemon resumes from, so it is no recovery under decision 4.
      `docs/development/architecture.md`, The export route, gives its refusals and clean-up.
    - The service layer knows no transport, so every operation can be called in-process (S-002 REQ-016).
 3. **Worker threads are logical capacity slots.** One event loop runs every agent run, and one active run holds one
@@ -55,21 +57,23 @@ exceptions in decision 4.
 4. **Durability belongs to the runtime.** Resume, exactly-once admission, queued input and checkpoints come from
    pi-durable. The daemon writes no retry loop, intake table or recovery of its own, except the two bounded exceptions
    below. The host sets `settings.restartLimit` to `Infinity`, so every start resumes every unfinished task (S-002
-   REQ-008).
+   REQ-008); a finite limit needs S-002 amended first.
 
    **First bounded exception: the-intern's own facts about a conversation, and redelivery from them.**
    - The facts are held messages (`held`), awaiting links (`awaiting`), the parked state (`parked`), the abort mark
      (`aborted`), the stop mark (`stopped`), the closed mark (`closed`) and the enabled set (`enabledSkills`) in the
      conversation's `intern.conversation` document, and creation keys in `intern.invocations` and `intern.idempotency`,
-     the front desk's fixed key included. Each is written in the commit of the change it describes. A new kind of fact
-     amends this decision first.
+     the front desk's fixed key included. Each is written in the commit of the change it describes.
    - The abort mark records that an invoker is owed an "aborted" report. Only a lone abort of an awaited invoked
      conversation sets it, never a cascade or a job abort (S-001 REQ-019).
-   - The stop mark records that a team member's abort stopped a lead of an In progress job that was running, waiting or
-     parked. It stays live until an input entry follows it, and decides the turn-end rule first (S-004 REQ-008).
+   - The stop mark holds the ID of the lead's newest transcript entry when a team member's abort, never a cascade,
+     stops the lead of an In progress job that runs, has input queued, is parked or awaits a report. Nothing clears it.
+     It is live until an input entry (`pi.user`, the steer record or an ADR-004 kind) follows that entry, and a live
+     mark decides the turn-end rule first (S-004 REQ-008).
    - The closed mark records that the conversation's job is Done. The job's abort sets it on every conversation of the
      job, and nothing clears it. That commit also empties the conversation's pi-durable inbox, settling each item
-     `unanswered`. Every control operation and steering tool refuses a closed conversation (S-001 REQ-026).
+     `unanswered`. Every operation and tool that would change a closed conversation refuses it, input included (S-001
+     REQ-026, S-008 REQ-006), and no redelivery path submits input to one.
    - The enabled set holds the skills the agent has enabled. Every seat write resets it to the role's defaults in the
      same commit (S-008 REQ-006). One upgrade write at startup step 7 gives the documents written before S-008 their
      set, once; it is a conversion, not a recovery.
@@ -78,7 +82,8 @@ exceptions in decision 4.
      until the job's abort closes the lead.
    - Per job, one in-process serial section orders the job abort's closed-mark commits with every input admission,
      control operation and conversation creation of that job. It holds no input, so it orders and doesn't queue. The
-     front desk has no job and no section.
+     front desk has no job and takes no section: input from every way in shares its one transcript in the order
+     pi-durable admits it, and the daemon adds no lock of its own (S-001 REQ-021).
    - The only recovery is redelivery of input the facts show as undelivered: held messages when the conversation
      continues, and the report or "aborted" report of each awaited conversation, at start and when a run ends or the
      mark's commit is published. Each redelivered input carries a request id fixed by the fact: the held message's own,
@@ -90,7 +95,7 @@ exceptions in decision 4.
      missing marks at the next start (S-004 REQ-007).
    - Nothing else: no retry, no timer, no list that holds input for a conversation that can take it, and no repair of
      pi-durable's state beyond the closed-mark commit's inbox removal (ADR-003) and the abort of a closed conversation's
-     compaction.
+     compaction. A new kind of fact or a new redelivery path amends this decision first.
 
    **Second bounded exception: ordered job writes, and four repair rules.**
    - The job write commits first and its pi-durable change after: a job before its lead starts, a block before the lead
@@ -101,8 +106,8 @@ exceptions in decision 4.
         id.
      2. A Blocked job whose lead isn't parked gets it parked.
      3. A job that isn't Done whose lead holds input it hasn't taken since the job blocked, or has taken input since
-        then, is set In progress and the lead continues. The block records the newest entry id (`blockedAfterEntry`)
-        for this.
+        then, is set In progress and the lead continues. The block records the lead's newest entry id
+        (`blockedAfterEntry`), and an input entry after it, as the stop mark defines it, shows input taken.
      4. A Done job with a conversation that isn't closed, or still runs, compacts or holds queued input, gets it closed
         and aborted.
    - The rules make no call that turns scheduling on, so they run before `host.resume()`. The inputs they owe are
@@ -111,11 +116,14 @@ exceptions in decision 4.
      the same rule applied to saved state, not a fifth rule. A reminder's request id is `reminder:<jobId>:<n>`, so a
      repeated check submits it once.
    - Nothing else: no rule that rebuilds job fields from conversation state, no retry of a failed job write, and no
-     timer that checks jobs. The scheduler (S-007) is a job source, not such a timer.
+     timer that checks jobs. The scheduler (S-007) is a job source, not such a timer. A fifth rule, another startup
+     check, or a new pairing of a job write with a pi-durable change that the four rules don't repair amends this
+     decision first.
 5. **A storage error ends the process.** When a storage error closes the harness, the daemon logs it, stops taking
    calls and exits non-zero within the 10-second stop bound, and the supervisor restarts it (S-002 REQ-004, REQ-007).
    An error from the daemon's own `commit()` or `mintId()`, and a failed job store write (S-004 REQ-020), are storage
-   errors too. The daemon never reopens the database itself.
+   errors too. The daemon never reopens the database itself. It learns that the harness failed from
+   `harness.closed`; `onReport` reports are diagnostics it logs, not the exit trigger.
 
 ## Consequences
 

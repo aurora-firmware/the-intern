@@ -29,10 +29,10 @@ build step, bundler or generated output.
    `text/javascript` through `amaro`'s strip-only `transformSync`, `amaro` being pinned as a production dependency to
    the version Node 24 bundles. It loads `amaro` at the first `.ts` request and caches the result by path, modification
    time and size. Strip mode keeps every line in place, so stack traces match the source.
-3. **Preact renders the pages.** `preact` is a pinned production dependency. Pages call `h()` with no JSX, with props as
-   an object literal or `null`, so `tsc` checks every prop: `web/tsconfig.json` maps `preact` through `paths` to
-   `web/types/preact.d.ts`, which declares a stricter `h` and is neither served nor shipped. Routing is a small hash
-   router of our own.
+3. **Preact renders the pages.** `preact` is a pinned production dependency. Pages call `h()` with no JSX and no
+   template strings, with props as an object literal or `null`, so `tsc` checks every prop: `web/tsconfig.json` maps
+   `preact` through `paths` to `web/types/preact.d.ts`, which declares a stricter `h` and is neither served nor shipped.
+   Routing is a small hash router of our own.
 4. **A fixed table serves what lies outside `web/ui/`.** `static_files.ts` maps exactly four addresses:
 
    | Address | File |

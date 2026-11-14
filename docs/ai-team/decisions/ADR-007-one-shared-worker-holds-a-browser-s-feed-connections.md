@@ -38,8 +38,10 @@ make their own calls and hold no stream.
    and takes an `AbortSignal`. Feed requests use `cache: "no-store"`.
 6. **Connection state lives in the worker.** It subscribes again at once after `lagging` and after 1 second after
    `stopped`, `unavailable` or an unreachable service, and tells every tab when the connection is lost or a snapshot
-   arrives, for the banner (S-006 REQ-014). It calls `daemon.status` every 10 seconds, bounded at 5, and a tab's
-   failed call makes it check at once. The logic is a pure module, `web/ui/feed_hub.ts`, tested in `test/unit`.
+   arrives, for the banner (S-006 REQ-014). It calls `daemon.status` every 10 seconds with a 5-second bound and treats a
+   failure or a `stopping` phase as a lost connection. A tab whose call gets `unavailable` or finds the service
+   unreachable tells the worker, which checks at once. The logic is a pure module, `web/ui/feed_hub.ts`, tested in
+   `test/unit`.
 7. **Tabs leaving.** A tab tells the worker on `pagehide` that it follows nothing and asks again on `pageshow`. A
    crashed tab's conversations stay in the union until the worker ends.
 8. **No secure-context API.** Pages and the worker use none. Request ids come from `crypto.getRandomValues`, and text a

@@ -25,8 +25,8 @@ same commit as the-intern's own writes.
    is busy when `run` is set.
 2. **Idle: append.** Append the entry with `tx.appendEntry`.
 3. **Busy: queue.** Create a queued `write` submission with `tx.createSubmission` and push
-   `{ id, mode: "write", entry }` onto the conversation's `InboxDoc` items, as submission admission does. The running run places it at its next
-   boundary.
+   `{ id, mode: "write", entry }` onto the conversation's `InboxDoc` items, as submission admission does. The running
+   run places it at its next boundary.
 4. **One commit.** The-intern's own writes stay in that commit, so they and the entry are durable together or not at
    all.
 

@@ -310,6 +310,9 @@ small.
   except for an abort. An abort's facts are written in one commit just before pi-durable's abort, not in pi-durable's
   abort commit. The second: job writes are committed before their pi-durable change, and four startup repair rules are
   the only job recovery (S-004 REQ-018).
+- **Report delivery.** Report delivery hears the commits that set an abort mark through `watchConversationMeta` in
+  `src/host/host_observation.ts` and handles them in its one serial queue, like the end of a run; the abort itself never
+  calls delivery.
 
 ## Web interface
 
@@ -909,9 +912,22 @@ pi-durable, and `skill_resolution.ts`, `role_prompt.ts` and the internal folder'
   the role is gone), and `skill` added to its seat's tools and its pi-durable tool selection. A crash before the flag
   is written repeats the write only for the documents still without the field. Until then the enable and disable
   write, the system prompt, the `skill` tool and `skills.list` take a missing field as the role's current defaults.
-  No team member's read runs before step 7 ends, so the instance feed and `conversations.get` and
-  `conversations.list` take a missing field as an empty set and never read the older `seat.skills`. The write delivers
+  No team member's read runs before step 7 ends, so none meets a document without the field. The instance feed's facts
+  and `conversations.get` and `conversations.list` take a missing field as an empty set and never read the older
+  `seat.skills`. The write delivers
   no input and adds no redelivery path or repair rule.
+
+### The internal folder
+
+ADR-009 states the rules; `src/skills/internal_folder.ts` builds them.
+
+- **The manifest format.** `<data dir>/shipped-files.json` is
+  `{ "version": 1, "files": { "<relative path>": "<hash>" } }`, written with mode `0600` through a temporary file in the same folder and a rename.
+- **The start rule's removals.** Removing a recorded file the version no longer ships also removes any skill folder it
+  leaves empty.
+- **Restore.** A skill's restore copies the shipped folder to a temporary sibling, removes the old folder and renames
+  the copy in, so files a team member added to it go too; a file's restore replaces it atomically. The manifest write
+  comes last, so a crash in between leaves restored text that the next start or restore records.
 
 ### The skill catalog
 
@@ -1090,14 +1106,14 @@ it records.
 - **pi agent's skill loader for the catalog, or its `formatSkillsForPrompt` for the listing.** See
   [tech_stack.md](tech_stack.md), Skills and instructions.
 - **A skill cache cleared by file watches, or a per-seat cache as before S-008.** See ADR-009, Alternatives Considered,
-  "Cache the prompt parts and watch the files".
+  "A cache cleared by file watches".
 - **The `read` tool for the front desk, or skill text inlined in the prompt.** S-008, Alternatives Considered.
 - **The enabled set inside the seat.** S-008 REQ-006 makes it no part of the seat, and a change records no seat change;
   it sits beside the seat in the same document, so a seat write still resets it in the same commit.
 - **A scheduling library, or one timer per entry.** See [tech_stack.md](tech_stack.md), Schedules. One tick reads the
   entries as they are, so a change needs no timers rebuilt, and a clock jump needs no special case.
 - **Skipped fires as pi-durable documents or a file.** S-004 chose tables for saved job data (ADR-001, Alternatives
-  Considered, "The job record in pi-durable document families"), and skips must travel with the database and be read
+  Considered, "The job record in pi-durable documents"), and skips must travel with the database and be read
   in order with jobs.
 - **The open run check in the scheduler, before `createJob`.** Two starts could both pass it. REQ-006 asks for one step,
   and only the store's transaction gives it.
