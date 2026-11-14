@@ -68,7 +68,7 @@ const SkillItem = ({
             }),
             h("span", { class: "skill-name", "data-verbatim": "" }, row.name),
         ),
-        row.description !== "" ? h("span", { class: "skill-description" }, row.description) : null,
+        row.description !== "" ? h("span", { class: "skill-description", "data-verbatim": "" }, row.description) : null,
         h("span", { class: "skill-source", "data-verbatim": "" }, row.sourceText),
         ...row.marks.map((mark) => h("span", { class: "badge" }, mark)),
         ...row.shadowed.map((copy) =>
