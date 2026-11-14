@@ -343,12 +343,12 @@ describe("skills and instructions of an agent", () => {
         await rig.invoke("skills.enable", { name: "code-review", conversation });
         writeFileSync(join(workspace, "AGENTS.md"), "Work carefully.\n");
 
-        const listing = (await rig.invoke("skills.list", { conversation })) as Listing & {
-            skills: { enabled: boolean }[];
+        const listing = (await rig.invoke("skills.list", { conversation })) as {
+            skills: { name: string; path: string; enabled: boolean }[];
         };
         const files = await instructionFilesOf(rig, { conversation });
 
-        const enabled = listing.skills.filter((skill) => skill.enabled) as unknown as { name: string; path: string }[];
+        const enabled = listing.skills.filter((skill) => skill.enabled);
         assert.deepEqual(enabled.map(({ name }) => name).sort(), [
             "about-the-intern",
             "bob-command-line",
