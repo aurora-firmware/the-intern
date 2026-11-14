@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
     type FauxProviderRegistration,
     type FauxResponseFactory,
@@ -20,8 +21,14 @@ import { type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { createDeskComponent } from "../../src/desk/desk_component.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
-import { type HarnessHost, openHarnessHost } from "../../src/host/harness_host.ts";
-import { createSeatedConversation, type JobLinks, type SeatActor } from "../../src/host/seating.ts";
+import { toConversationId } from "../../src/host/conversation_id.ts";
+import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
+import {
+    conversationMetaDoc,
+    createSeatedConversation,
+    type JobLinks,
+    type SeatActor,
+} from "../../src/host/seating.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import { DEFAULT_SHIPPED_ROOT } from "../../src/skills/internal_folder.ts";
 import { readCatalog } from "../../src/skills/skill_discovery.ts";
@@ -119,6 +126,7 @@ async function createFixture() {
         harnessSettings: {},
         extensions: [
             createSkillToolExtension({
+                defaultsOf: (role) => new Set(role === "older" ? ["older-default"] : []),
                 catalogFor: (path) =>
                     readCatalog({
                         dataDir: join(env.root, "data"),
@@ -133,16 +141,22 @@ async function createFixture() {
     });
     hosts.push(host);
     const model = `${fake.getModel().provider}/${fake.getModel().id}`;
-    const seatWith = async (enabled: string[]) =>
+    const seatWith = async (enabled: string[], role = "gp") =>
         (
             await createSeatedConversation(host, {
                 scope: "s",
-                key: `k${enabled.join()}`,
+                key: `k${role}${enabled.join()}`,
                 job,
-                seat: { role: "gp", model, workspace, tools: [SKILL_TOOL_NAME], skills: enabled },
+                seat: { role, model, workspace, tools: [SKILL_TOOL_NAME], skills: enabled },
                 actor,
             })
         ).conversationId;
+    // A document written before the enabled set has none.
+    const dropEnabledSet = (conversationId: string) =>
+        internalHarness(host).commit(async (tx) => {
+            const meta = await tx.doc(conversationMetaDoc, toConversationId(conversationId));
+            delete meta.enabledSkills;
+        }, BACKGROUND_CONTEXT);
     let turn = 0;
     // One run: the model calls the tool once, then answers; the result is what the model saw after the call.
     const callSkill = async (conversationId: string, input: { name: string; file?: string }) => {
@@ -161,12 +175,15 @@ async function createFixture() {
         assert.ok(result, "the model saw a tool result");
         return result;
     };
-    return { env, skills, workspace, seatWith, callSkill };
+    return { env, skills, workspace, seatWith, callSkill, dropEnabledSet };
 }
 
 describe("the skill tool extension", () => {
     it("is named intern.skill-tool and brings exactly the skill tool", () => {
-        const extension = createSkillToolExtension({ catalogFor: async () => ({}) as never });
+        const extension = createSkillToolExtension({
+            catalogFor: async () => ({}) as never,
+            defaultsOf: () => new Set(),
+        });
 
         assert.equal(SKILL_TOOL_EXTENSION_NAME, "intern.skill-tool");
         assert.equal(extension.name, SKILL_TOOL_EXTENSION_NAME);
@@ -200,6 +217,18 @@ describe("the skill tool extension", () => {
 
         assert.equal(result.isError, false);
         assert.equal(result.text, "echo bundled\n");
+    });
+
+    it("reads a document with no enabled set as the role's default skills, as the prompt does", async () => {
+        const { skills, seatWith, callSkill, dropEnabledSet } = await createFixture();
+        await writeSkill(skills, "older-default", "DEFAULT-BODY\n");
+        const id = await seatWith([], "older");
+        await dropEnabledSet(id);
+
+        const result = await callSkill(id, { name: "older-default" });
+
+        assert.equal(result.isError, false);
+        assert.match(result.text, /DEFAULT-BODY/);
     });
 
     it("refuses a skill that is not enabled for the agent, naming it and returning no file text", async () => {
@@ -260,6 +289,22 @@ describe("the skill tool extension", () => {
         assert.equal(result.isError, true);
         assert.match(result.text, /inside the skill's folder/);
         assert.doesNotMatch(result.text, /root:/);
+    });
+
+    it("refuses a SKILL.md that is a symbolic link out of the skill's folder", async () => {
+        const { env, skills, seatWith, callSkill } = await createFixture();
+        const outside = join(env.root, "outside.md");
+        await writeFile(outside, "---\nname: hijacked\ndescription: Linked.\n---\n\nOUTSIDE-SKILL-TEXT\n");
+        const folder = join(skills, "hijacked");
+        await mkdir(folder, { recursive: true });
+        await symlink(outside, join(folder, "SKILL.md"));
+        const id = await seatWith(["hijacked"]);
+
+        const result = await callSkill(id, { name: "hijacked" });
+
+        assert.equal(result.isError, true);
+        assert.match(result.text, /inside the skill's folder/);
+        assert.doesNotMatch(result.text, /OUTSIDE-SKILL-TEXT/);
     });
 
     it("cuts a file longer than 2000 lines and says so", async () => {

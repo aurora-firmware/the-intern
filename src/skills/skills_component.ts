@@ -52,12 +52,18 @@ export function createSkillsComponent(options: SkillsComponentOptions): SkillsCo
         return recordedDataDir;
     };
 
+    const agentsRuntime = (): AgentsRuntime => {
+        if (connectedRuntime === undefined) throw new Error("the skills component isn't connected to the agents");
+        return connectedRuntime();
+    };
+
     const component: DaemonComponent = {
         name: "skills",
         extensions: [
             createSkillToolExtension({
                 catalogFor: (workspace) =>
                     readCatalog({ dataDir: dataDir(), shippedRoot, searchPaths: searchPaths(), workspace }),
+                defaultsOf: (role) => new Set(agentsRuntime().catalog.get(role)?.skills ?? []),
             }),
         ],
         async prepareFiles({ dirs, config }) {
@@ -88,9 +94,6 @@ export function createSkillsComponent(options: SkillsComponentOptions): SkillsCo
         connectAgents(runtime) {
             connectedRuntime = runtime;
         },
-        agentsRuntime() {
-            if (connectedRuntime === undefined) throw new Error("the skills component isn't connected to the agents");
-            return connectedRuntime();
-        },
+        agentsRuntime,
     };
 }

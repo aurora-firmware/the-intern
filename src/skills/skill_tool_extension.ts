@@ -3,7 +3,7 @@
  * bundles. It only reads, so a call cut short by a restart is safe to run again.
  */
 import { readFile, realpath, stat } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { basename, isAbsolute, relative, resolve } from "node:path";
 import type { Context } from "@earendil-works/chord/context";
 import { type Static, Type } from "@earendil-works/pi-ai";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateHead } from "@earendil-works/pi-coding-agent";
@@ -30,6 +30,8 @@ const CLOSING_BYTES = 512;
 export type SkillToolOptions = {
     /** The catalog for a seat's workspace, read afresh at each call. */
     catalogFor: (workspace: string) => Promise<Catalog>;
+    /** The skill names a role enables by default, for a document written before the enabled set, as the prompt does. */
+    defaultsOf: (role: string) => ReadonlySet<string>;
 };
 
 const parameters = Type.Object({
@@ -92,15 +94,14 @@ async function callSkill(
     if (meta === undefined || meta.jobId === "")
         return refusal("this conversation has no seat, so no skill is enabled.");
     const catalog = await options.catalogFor(meta.seat.workspace);
-    const { enabled } = enabledSkillsOf(catalog, new Set(meta.enabledSkills ?? []));
+    const { enabled } = enabledSkillsOf(catalog, new Set(meta.enabledSkills ?? options.defaultsOf(meta.seat.role)));
     const skill = enabled.find((candidate) => candidate.name === args.name);
     if (skill === undefined) {
         return refusal(
             `the skill ${args.name} is not enabled for you; enabled: ${enabled.map((s) => s.name).join(", ")}.`,
         );
     }
-    if (args.file === undefined) return textOf(await readFile(skill.file, "utf8"));
-    const located = await locateFile(skill, args.file);
+    const located = await locateFile(skill, args.file ?? basename(skill.file));
     return "problem" in located ? refusal(located.problem) : textOf(await readFile(located.path, "utf8"));
 }
 
