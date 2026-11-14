@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { roleInstructionPath } from "../../src/skills/internal_folder.ts";
 import { runBob } from "../support/bob_process.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
@@ -99,5 +100,58 @@ describe("bob skills commands", () => {
         assert.ok(added.stdout.includes(extra), added.stdout);
         assert.equal(removed.status, 0, removed.stderr);
         assert.ok(!removed.stdout.includes(extra), removed.stdout);
+    });
+});
+
+describe("bob instructions commands", () => {
+    it("lists the common prompt and bob.md, marking bob.md edited after an edit, and exits 0 (AC-003.1)", async () => {
+        const fixture = await readyDaemon();
+        await appendFile(roleInstructionPath(fixture.env.dataDir, "bob"), "\nAlso be brief.\n");
+
+        const listed = await bob(fixture, ["instructions", "list", "--role", "bob"]);
+
+        assert.equal(listed.status, 0, listed.stderr);
+        const lines = listed.stdout.split("\n");
+        assert.ok(lines[0]?.startsWith("common  "), listed.stdout);
+        const roleLine = lines.find((line) => line.startsWith("role  "));
+        assert.ok(roleLine?.includes("bob.md"), listed.stdout);
+        assert.ok(roleLine?.includes("edited"), roleLine);
+        assert.ok(!listed.stdout.includes("Also be brief"), "no command prints file text");
+    });
+
+    it("prints what the operation returned with --json", async () => {
+        const fixture = await readyDaemon();
+        const { conversation } = fixture;
+
+        const byRole = await bob(fixture, ["instructions", "list", "--role", "bob", "--json"]);
+        const byConversation = await bob(fixture, ["instructions", "list", "--conversation", conversation, "--json"]);
+
+        assert.deepEqual(JSON.parse(byRole.stdout), await fixture.daemon.invoke("instructions.list", { role: "bob" }));
+        assert.deepEqual(
+            JSON.parse(byConversation.stdout),
+            await fixture.daemon.invoke("instructions.list", { conversation }),
+        );
+    });
+
+    it("restores the common prompt and a shipped role, each exiting 0", async () => {
+        const fixture = await readyDaemon();
+        await appendFile(roleInstructionPath(fixture.env.dataDir, "bob"), "\nAlso be brief.\n");
+
+        const common = await bob(fixture, ["instructions", "restore", "common"]);
+        const role = await bob(fixture, ["instructions", "restore", "bob", "--json"]);
+
+        assert.equal(common.status, 0, common.stderr);
+        assert.ok(common.stdout.startsWith("common  "), common.stdout);
+        assert.equal(role.status, 0, role.stderr);
+        assert.equal((JSON.parse(role.stdout) as { edited: boolean }).edited, false);
+    });
+
+    it("refuses to restore a team role and exits 1 (AC-003.3)", async () => {
+        const fixture = await readyDaemon();
+
+        const refused = await bob(fixture, ["instructions", "restore", "reviewer"]);
+
+        assert.equal(refused.status, 1);
+        assert.match(refused.stderr, /neither the common prompt nor a shipped role/);
     });
 });
