@@ -27,11 +27,15 @@ See [Roles, workspaces and agents sharing a job](roles_and_agents.md): the shipp
 
 ## Configuring skills
 
-This page comes with its feature.
+See [Skills and instructions](skills_and_instructions.md): the internal folder, skill search paths and their
+priority, enabling skills for a role or one agent, the `skill` tool, restoring shipped files and how upgrades keep
+your edits.
 
 ## Configuring instructions
 
-This page comes with its feature.
+See [Skills and instructions](skills_and_instructions.md#edit-the-text): edit the common prompt and a role's
+instructions in place by hand, on the web or through an agent; an edit reaches running agents from their next model
+request.
 
 ## Configuring knowledge sources
 
