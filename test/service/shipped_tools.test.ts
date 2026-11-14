@@ -23,7 +23,7 @@ import {
     SHIPPED_TOOL_NAMES,
     SKILL_TOOL_NAME,
 } from "../../src/roles/role_model.ts";
-import { SHIPPED_TOOLS_EXTENSION_NAME, shippedToolsExtension } from "../../src/tools/shipped_tools_extension.ts";
+import { createShippedToolsExtension, SHIPPED_TOOLS_EXTENSION_NAME } from "../../src/tools/shipped_tools_extension.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const quietLogger = createLogger({ stream: { write: () => true } });
@@ -106,7 +106,14 @@ async function createFixture(steps: Step[]) {
         databaseFile: join(env.root, "state.sqlite"),
         models,
         harnessSettings: {},
-        extensions: [...(agents.component.extensions ?? []), ...(jobs.component.extensions ?? [])],
+        // No daemon runs step 3 here, so the agents component's own shipped tools don't know the runtime directory yet.
+        extensions: [
+            ...(agents.component.extensions ?? []).filter(
+                (extension) => extension.name !== SHIPPED_TOOLS_EXTENSION_NAME,
+            ),
+            createShippedToolsExtension({ runtimeDir: () => env.runtimeDir }),
+            ...(jobs.component.extensions ?? []),
+        ],
         defaultCwd: process.cwd(),
         logger: createLogger({ stream: { write: () => true } }),
     });
@@ -142,6 +149,7 @@ async function createFixture(steps: Step[]) {
 describe("the shipped tools extension", () => {
     it("is named intern.tools and brings exactly the shipped tools", () => {
         assert.equal(SHIPPED_TOOLS_EXTENSION_NAME, "intern.tools");
+        const shippedToolsExtension = createShippedToolsExtension({ runtimeDir: () => "/runtime" });
         assert.equal(shippedToolsExtension.name, SHIPPED_TOOLS_EXTENSION_NAME);
         assert.deepEqual(shippedToolsExtension.tools?.map((tool) => tool.name).sort(), [...SHIPPED_TOOL_NAMES].sort());
     });
