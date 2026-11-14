@@ -52,3 +52,22 @@ describe("bob skills usage errors", () => {
         });
     }
 });
+
+describe("bob instructions usage errors", () => {
+    const cases: [string, string[]][] = [
+        ["list with no flag", ["instructions", "list"]],
+        ["list with both flags", ["instructions", "list", "--role", "bob", "--conversation", "5"]],
+    ];
+    for (const [name, argv] of cases) {
+        it(`prints usage on standard error and exits 2 for ${name}`, async () => {
+            const { io, stdout, stderr } = memoryIo();
+
+            const status = await main(argv, io);
+
+            assert.equal(status, 2);
+            assert.equal(stdout(), "");
+            assert.match(stderr(), ONE_OF_FLAGS);
+            assert.match(stderr(), /Usage: bob instructions list/);
+        });
+    }
+});
