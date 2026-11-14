@@ -2,6 +2,7 @@
  * Enabling and disabling a skill for one running agent (S-008 REQ-006, AC-006.1, AC-006.2, AC-006.5): the change applies
  * from the agent's next model request, touches no other agent, resets on a seat change, is refused for a closed or
  * unknown conversation and for a skill the agent's workspace supplies, and is recorded with the team member as actor.
+ * An agent enables a skill for itself by running `bob skills enable` through `bash` (REQ-014, AC-014.1).
  */
 import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
@@ -214,5 +215,59 @@ describe("skills.disable for one running agent", () => {
         };
 
         assert.ok(!result.enabledSkills.includes(CODE_REVIEW));
+    });
+});
+
+describe("an agent enabling a skill for itself through bob", () => {
+    const ENABLE_IT = "enable lint for yourself";
+
+    /** A rig whose search path holds `lint` and whose model runs `bob skills enable lint` through `bash` on ENABLE_IT. */
+    async function startWithLintOnSearchPath(): Promise<SkillsRig> {
+        const reply = (transcript: FakeTranscript): FakeReply => {
+            const last = transcript.at(-1);
+            if (last?.role === "user" && last.text.includes(ENABLE_IT)) {
+                return {
+                    toolCall: {
+                        name: "bash",
+                        arguments: { command: "bob skills enable lint --conversation $BOB_CONVERSATION_ID" },
+                    },
+                };
+            }
+            return "ok";
+        };
+        const rig = await startSkillsRig({ reply });
+        rigs.push(rig);
+        const searchPath = await rig.ownerOnlyFolder(join(rig.dirs.root, "search-skills"));
+        await rig.writeSkill(searchPath, "lint", "Lint the code.");
+        await rig.restart(`[skills]\npaths = ["${searchPath}"]\n`);
+        return rig;
+    }
+
+    it("lists the skill in the agent's next model request", async () => {
+        const rig = await startWithLintOnSearchPath();
+
+        const { lead } = await startJob(rig, "gp", ENABLE_IT);
+
+        await until(async () => (await rig.systemPrompts(lead)).length >= 2, "the request after the bash call");
+        const prompts = await rig.systemPrompts(lead);
+        assert.ok(!listedIn(prompts[0] as string).includes("lint"));
+        assert.ok(listedIn(prompts.at(-1) as string).includes("lint"));
+    });
+
+    it("records the enable with a team member at the command line as actor", async () => {
+        const rig = await startWithLintOnSearchPath();
+        const { lead } = await startJob(rig, "gp", ENABLE_IT);
+        await until(async () => (await rig.systemPrompts(lead)).length >= 2, "the request after the bash call");
+
+        const { entries } = (await rig.invoke("conversations.entries", {
+            conversationId: lead,
+            limit: 500,
+        })) as { entries: { kind: string; data: { actor: unknown; skill: string; change: string } }[] };
+
+        const recorded = entries.filter((entry) => entry.kind === "intern.skills");
+        assert.equal(recorded.length, 1);
+        assert.deepEqual(recorded[0]?.data.actor, TEAM_MEMBER);
+        assert.equal(recorded[0]?.data.skill, "lint");
+        assert.equal(recorded[0]?.data.change, "enabled");
     });
 });
