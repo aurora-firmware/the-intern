@@ -502,10 +502,22 @@ const INPUT_BUILDERS: Record<string, InputBuilder> = {
     "roles.change": async (fixture, _seed, way) => {
         const name = `changed-${label(way)}`;
         await fixture.invoke("roles.create", { name, instructions: "Before.", tools: ["read"], skills: [] });
-        return { input: { name, instructions: "After." }, names: [name] };
+        const { roles } = (await fixture.invoke("roles.list", {})) as {
+            roles: { name: string; instructionsVersion?: string }[];
+        };
+        const instructionsVersion = roles.find((role) => role.name === name)?.instructionsVersion;
+        return { input: { name, instructions: "After.", instructionsVersion }, names: [name] };
     },
     "roles.restore": async (fixture) => {
-        await fixture.invoke("roles.change", { name: "gp", instructions: "Changed for the test." });
+        const { roles } = (await fixture.invoke("roles.list", {})) as {
+            roles: { name: string; instructionsVersion?: string }[];
+        };
+        const instructionsVersion = roles.find((role) => role.name === "gp")?.instructionsVersion;
+        await fixture.invoke("roles.change", {
+            name: "gp",
+            instructions: "Changed for the test.",
+            instructionsVersion,
+        });
         return { input: { name: "gp" } };
     },
     "roles.remove": async (fixture, _seed, way) => {

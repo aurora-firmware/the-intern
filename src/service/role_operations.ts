@@ -191,6 +191,13 @@ export function roleOperations(component: AgentsComponent) {
         parse: parseChange,
         run: (_ctx, { name, change, instructions, instructionsVersion }) =>
             mappingRefusals(async () => {
+                // An unknown role is left to the catalog, which refuses it not_found.
+                if (instructions !== undefined && instructionsVersion === undefined && catalog().get(name)) {
+                    throw new ServiceError(
+                        "invalid_input",
+                        `Role "${name}" instructions need instructionsVersion, the token roles.list returned with them`,
+                    );
+                }
                 const changed = await catalog().change(name, change, { instructions, instructionsVersion });
                 return { role: await withInstructions(changed) };
             }),

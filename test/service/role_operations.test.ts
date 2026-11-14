@@ -143,6 +143,9 @@ async function refusal(action: Promise<unknown>): Promise<ServiceError> {
     throw new assert.AssertionError({ message: "expected the operation to be refused" });
 }
 
+const tokenOf = async (roles: () => Promise<{ name: string; instructionsVersion?: string }[]>, name: string) =>
+    (await roles()).find((role) => role.name === name)?.instructionsVersion;
+
 const reviewer = { name: "reviewer", instructions: "Review the work.", tools: ["read"], skills: [] };
 
 describe("the role operations", () => {
@@ -165,7 +168,12 @@ describe("the role operations", () => {
         assert.doesNotMatch(await fileText(env), /Review the work/);
         assert.ok((await first.roles()).some((role) => role.name === "reviewer"));
 
-        await first.invoke("roles.change", { name: "reviewer", instructions: "Review hard." });
+        const token = await tokenOf(first.roles, "reviewer");
+        await first.invoke("roles.change", {
+            name: "reviewer",
+            instructions: "Review hard.",
+            instructionsVersion: token,
+        });
         assert.equal(await readFile(instructionFile(env), "utf8"), "Review hard.");
         assert.doesNotMatch(await fileText(env), /Review hard/);
         assert.equal((await first.roles()).find((role) => role.name === "reviewer")?.instructions, "Review hard.");
@@ -323,7 +331,12 @@ describe("the role operations", () => {
         const env = await hermetic();
         const { invoke, roles } = await start(env);
         const shippedInstructions = (await roles()).find((role) => role.name === "gp")?.instructions;
-        await invoke("roles.change", { name: "gp", instructions: "Something else.", tools: ["read"] });
+        await invoke("roles.change", {
+            name: "gp",
+            instructions: "Something else.",
+            tools: ["read"],
+            instructionsVersion: await tokenOf(roles, "gp"),
+        });
         assert.equal((await roles()).find((role) => role.name === "gp")?.instructions, "Something else.");
         assert.match(await fileText(env), /\[roles\.gp\]/);
 
@@ -393,6 +406,43 @@ describe("the role operations", () => {
         assert.equal(await readFile(instructionFile(env), "utf8"), "Edited by hand.");
     });
 
+    it("refuses invalid_input naming the token and leaves the file and table unchanged when instructions come without a token", async () => {
+        const env = await hermetic();
+        const { invoke } = await start(env);
+        await invoke("roles.create", reviewer);
+        const before = await fileText(env);
+
+        const error = await refusal(
+            invoke("roles.change", { name: "reviewer", instructions: "Review hard.", tools: ["bash"] }),
+        );
+
+        assert.equal(error.code, "invalid_input");
+        assert.match(error.message, /instructionsVersion/);
+        assert.equal(await readFile(instructionFile(env), "utf8"), "Review the work.");
+        assert.equal(await fileText(env), before);
+    });
+
+    it("accepts a change without instructions when it carries no token", async () => {
+        const { invoke } = await start(await hermetic());
+        await invoke("roles.create", reviewer);
+
+        const answer = (await invoke("roles.change", { name: "reviewer", tools: ["bash"] })) as {
+            role: { tools: string[] };
+        };
+
+        assert.deepEqual(answer.role.tools, ["bash"]);
+    });
+
+    it("ends with not_found when the role is unknown, with a token", async () => {
+        const { invoke } = await start(await hermetic());
+
+        const error = await refusal(
+            invoke("roles.change", { name: "nobody", instructions: "x", instructionsVersion: "t" }),
+        );
+
+        assert.equal(error.code, "not_found");
+    });
+
     it("changes nothing in the table when the token is old", async () => {
         const env = await hermetic();
         const { invoke, roles } = await start(env);
@@ -428,10 +478,14 @@ describe("the role operations", () => {
 
     it("announces files_changed with kind role for each file a role operation writes or removes", async () => {
         const env = await hermetic();
-        const { invoke, announced } = await start(env);
+        const { invoke, roles, announced } = await start(env);
 
         await invoke("roles.create", reviewer);
-        await invoke("roles.change", { name: "reviewer", instructions: "Review hard." });
+        await invoke("roles.change", {
+            name: "reviewer",
+            instructions: "Review hard.",
+            instructionsVersion: await tokenOf(roles, "reviewer"),
+        });
         await invoke("roles.remove", { name: "reviewer" });
 
         const expected = { path: instructionFile(env), kind: "role" };
@@ -443,8 +497,12 @@ describe("the role operations", () => {
 
     it("announces files_changed with kind role for the file roles.restore writes", async () => {
         const env = await hermetic();
-        const { invoke, announced } = await start(env);
-        await invoke("roles.change", { name: "gp", instructions: "Something else." });
+        const { invoke, roles, announced } = await start(env);
+        await invoke("roles.change", {
+            name: "gp",
+            instructions: "Something else.",
+            instructionsVersion: await tokenOf(roles, "gp"),
+        });
         announced.length = 0;
 
         await invoke("roles.restore", { name: "gp" });

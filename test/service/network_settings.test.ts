@@ -55,7 +55,15 @@ describe("the network settings in the configuration file", () => {
             { name: "reviewer", instructions: "Review the work.", tools: ["read"], skills: [] },
             caller,
         );
-        await first.catalogue.invoke("roles.change", { name: "reviewer", instructions: "Review hard." }, caller);
+        const listed = (await first.catalogue.invoke("roles.list", {}, caller)) as {
+            roles: { name: string; instructionsVersion?: string }[];
+        };
+        const instructionsVersion = listed.roles.find((role) => role.name === "reviewer")?.instructionsVersion;
+        await first.catalogue.invoke(
+            "roles.change",
+            { name: "reviewer", instructions: "Review hard.", instructionsVersion },
+            caller,
+        );
         await first.stop();
 
         const text = await readFile(file, "utf8");
