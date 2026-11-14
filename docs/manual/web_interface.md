@@ -110,7 +110,8 @@ from its next model request.
 
 The activity shows each change of a skill, in order with the other entries, as a **Skill changed** entry such as
 "code-review enabled by team member by web interface". It names who made the change: a team member and the way in,
-an agent and its role, or the daemon. A change made with `bob skills enable` shows the same way, at once.
+an agent and its role, or a job source, as in "job source schedule".
+A change made with `bob skills enable` shows the same way, at once.
 
 ### Conversation controls
 
