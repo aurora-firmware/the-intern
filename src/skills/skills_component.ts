@@ -11,6 +11,7 @@ import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
 import { upgradeEnabledSkills } from "../host/skill_set.ts";
 import { rolesSection, workspacesSection } from "../roles/roles_section.ts";
+import { fileOperations } from "../service/file_operations.ts";
 import { instructionOperations } from "../service/instruction_operations.ts";
 import type { Operation } from "../service/operations.ts";
 import { skillOperations } from "../service/skill_operations.ts";
@@ -140,6 +141,6 @@ export function createSkillsComponent(options: SkillsComponentOptions): SkillsCo
         },
         agentsRuntime,
     };
-    skills.operations.push(...skillOperations(skills), ...instructionOperations(skills));
+    skills.operations.push(...skillOperations(skills), ...instructionOperations(skills), ...fileOperations(skills));
     return skills;
 }
