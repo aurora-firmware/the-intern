@@ -1,7 +1,7 @@
 ---
 
 name: bob-command-line
-description: Use the `bob` commands from bash to read and manage The Intern: jobs, conversations, roles, workspaces, schedules, skills and instructions. Use it when you need to look at or change something in The Intern itself.
+description: "Use the `bob` commands from bash to read and manage The Intern, which covers jobs, conversations, roles, workspaces, schedules, skills and instructions. Use it when you need to look at or change something in The Intern itself."
 ---
 
 # The `bob` command line
