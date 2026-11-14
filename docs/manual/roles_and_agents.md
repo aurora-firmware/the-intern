@@ -7,9 +7,9 @@ The Intern ships, how you configure roles and workspaces, and how agents share t
 
 A role is what an agent is made from. A role brings:
 
-- instructions, which tell the agent how to work
+- instructions, which tell the agent how to work, kept in a file you can edit
 - tools, chosen from the tools The Intern ships
-- skills, which the agent reads when it needs them
+- skills, which the agent reads when it needs them, by name
 - a default model, a default thinking level and a default workspace
 
 The Intern ships three roles:
@@ -23,16 +23,24 @@ The Intern ships three roles:
 You can create your own roles, change any role (including `bob`, `gp` and `desk`) and remove the roles you created. You
 can't remove a shipped role. You also can't remove a role that a schedule entry names, or a role whose default
 workspace, the one The Intern creates for it, a schedule entry names. The refusal names the entry. A role whose default
-workspace is one you set isn't held by that.
+workspace is one you set isn't held by that. A role that an open conversation is seated with can't be removed either:
+the refusal is `conflict` and names the conversations.
 
-A change to a role affects only agents seated after the change. An agent that is already working keeps its
-instructions, tools, skills, model, thinking level and workspace until its seat changes.
+A change to a role's tools, default skills, model, thinking level or workspace affects only agents seated after the
+change. An agent that is already working keeps its tools, enabled skills, model, thinking level and workspace until its
+seat changes. A change to a role's instructions is the exception: it reaches the agents of the role from their next
+model request. See [Skills and instructions](skills_and_instructions.md).
+
+A role of your own whose instruction file is missing or empty can't be seated. A seat change, the start of a job's lead
+and a job that names the role are refused, and a handoff or an invocation gives the agent an error result. Each refusal
+names the file.
 
 ## The configuration file
 
 Roles and workspaces live in `config.toml` in the config directory (see
 [Running The Intern](running_the_intern.md#the-configuration-file)). The file has a `[roles.<name>]` table for each
-role you create or change, and a `[workspaces]` table.
+role you create or change, a `[skills]` table and a `[workspaces]` table. The [Skills and
+instructions](skills_and_instructions.md) page describes `[skills]`.
 
 ### The `[roles.<name>]` tables
 
@@ -41,9 +49,8 @@ and hyphens, in at most 40 characters in all.
 
 | Key              | Meaning                                                                       | Default                                  |
 | ---------------- | ----------------------------------------------------------------------------- | ---------------------------------------- |
-| `instructions`   | A string with the role's instructions. It can't be empty.                     | None for your own roles: required. For a shipped role, the shipped text. |
 | `tools`          | A list of tool names: `read`, `write`, `edit` and `bash`.                      | None for your own roles: required. For `bob` and `gp`, all four. For `desk`, an empty list. |
-| `skills`         | A list of absolute paths to skill folders.                                     | An empty list. For `gp`, its shipped skill. |
+| `skills`         | A list of skill names. It is the set of skills an agent starts with.           | An empty list. For a shipped role, the defaults of the running version, listed below. |
 | `model`          | The role's default model, written `provider/id`.                               | The default model of the service account's pi login. |
 | `thinking_level` | The role's default thinking level. It must be one the model supports.          | The default thinking level of the pi login. |
 | `workspace`      | The absolute path of the role's default workspace. It must be registered.      | The role's own workspace, described below. |
@@ -56,8 +63,33 @@ history of a schedule entry. A tool list can't leave them out, so you don't list
 `complete_job` must be the only tool call of its turn. An agent seated before the job tools existed keeps its tools
 until its seat changes.
 
+A table has no `instructions` key. A role's instructions are the text of its file, `instructions/roles/<role>.md` in
+the internal folder under the data directory. You write them when you create the role, and edit the file afterwards.
+[Skills and instructions](skills_and_instructions.md#edit-the-text) describes the ways to edit it. An older
+`config.toml` that still holds `instructions` is converted at the first start of this version, as
+[Configuration files from an earlier version](skills_and_instructions.md#configuration-files-from-an-earlier-version)
+describes.
+
 For a shipped role, set only the keys you want to change. Any key you leave out keeps its shipped value. For your own
-role, `instructions` and `tools` are required.
+role, `tools` is required, and you give its instructions when you create it.
+
+The shipped roles start with these skills:
+
+| Role   | Skills                                  |
+| ------ | --------------------------------------- |
+| `bob`  | `about-the-intern`, `bob-command-line`  |
+| `gp`   | `carry-out-a-part`, `bob-command-line`  |
+| `desk` | `about-the-intern`                      |
+
+A shipped role with no `skills` key gets the defaults of the running version. Once you change its skills, the list is
+yours and an upgrade doesn't change it.
+
+The list is only where an agent starts. Each agent has its own enabled set, which you or the agent change while it
+works, and which a change of seat resets to the new role's defaults. A name in the list that no skill matches doesn't
+stop the service: the agent goes without it. [Enable skills](skills_and_instructions.md#enable-skills) describes both.
+
+Every agent, the front desk included, is also offered the `skill` tool, whatever its role's tool list says. It reads the
+text of a skill the agent has enabled. You don't list it. See [The `skill` tool](skills_and_instructions.md#the-skill-tool).
 
 The service refuses to start, and names the role and the key, when a table has a key it doesn't know, a value of the
 wrong type, a tool it doesn't ship, a model or thinking level it can't resolve, or a workspace that isn't registered.
@@ -66,25 +98,31 @@ An example that creates a role and changes `bob`'s model:
 
 ```toml
 [roles.reviewer]
-instructions = "You review changes and report what is wrong, never how to fix it."
 tools = ["read", "bash"]
-skills = ["/home/you/skills/code-review"]
+skills = ["code-review"]
 thinking_level = "high"
 
 [roles.bob]
 model = "anthropic/claude-sonnet-4-5"
 ```
 
-The `desk` role has an empty tool set: it changes no file and runs no command. In the front desk it is offered only the
-tools for reading jobs, conversations, and the daemon's status and usage; for creating and editing jobs; for schedule
+This creates the role `reviewer` in `config.toml`. Its instructions, such as "You review changes and report what is
+wrong, never how to fix it.", are in `<data dir>/instructions/roles/reviewer.md`. The skill `code-review` has to come
+from a [skill search path](skills_and_instructions.md#where-skills-come-from) or the agent's workspace. Until it
+does, `bob skills list` shows it as missing.
+
+The `desk` role has an empty tool set: it changes no file and runs no command. In the front desk it is offered the `skill`
+tool and the tools for reading jobs, conversations, and the daemon's status and usage; for creating and editing jobs; for schedule
 entries; and for passing input to or stopping a job's conversations. See [The front desk and `bob chat`](front_desk.md).
 
 ### Undo a change to a shipped role
 
-A change to `bob`, `gp` or `desk` is kept in your configuration. The installed copy is never edited. To restore the
-shipped role, remove its `[roles.bob]`, `[roles.gp]` or `[roles.desk]` table from the file, or only the keys you want
-to undo, and restart the service. You can also restore a shipped role while the service runs, with
-`bob roles restore <name>`.
+A change to `bob`, `gp` or `desk` is kept in your configuration, and a change to its instructions in its file in the
+internal folder. The installed copy is never edited. To restore the shipped role while the service runs, use
+`bob roles restore <name>`. It removes the change from `config.toml`, so the role's skills are the defaults of the
+running version again, and it puts the shipped text back in the role's instruction file. Removing the role's table, or
+only the keys you want to undo, and restarting the service restores the settings but not the instructions. For those,
+run `bob instructions restore <name>`.
 
 ### The `[workspaces]` table
 
@@ -136,21 +174,33 @@ the entry. Change the entry or the file, then start again. Changing a role isn't
 
 ### Instructions and skills from the workspace
 
-An agent reads the `AGENTS.md` or `CLAUDE.md` files of its workspace, and the skills in it. It also reads the
-`AGENTS.md` files of every parent folder of the workspace. You are responsible for what those parent folders
-contribute, so check them when you register a workspace.
+An agent reads the `AGENTS.md` or `CLAUDE.md` files of its workspace, and the skills in its `.pi/skills` folder. It
+also reads the `AGENTS.md` files of every parent folder of the workspace. You are responsible for what those parent
+folders contribute, so check them when you register a workspace.
+
+The prompt takes these files after the common prompt and the role's instructions, and the skills of the workspace are
+always enabled for the agent. A skill of the workspace wins over a skill of the same name from anywhere else. An edit
+to one of these files reaches the agents working in that workspace from their next model request, and so does a skill
+folder you add or remove. See [Where skills come from](skills_and_instructions.md#where-skills-come-from).
 
 ## Changing settings while the service runs
 
 You can change roles and workspaces while the service runs, and the change applies at once. The Intern checks it as it
 checks the file at startup. An invalid change is refused with the reason, and nothing changes. A valid change is
-written to `config.toml`.
+written to `config.toml`. A change to a role's instructions is written to the role's instruction file instead.
+
+What applies when:
+
+- An edit to a role's instructions or to the common prompt, by any means, reaches running agents from their next model
+  request. No restart and no new seat is needed.
+- A change to a role's tools, default skills, model, thinking level or workspace affects only agents seated afterwards.
+- A change to one agent's enabled skills applies from that agent's next model request.
 
 The service reads hand edits of `config.toml` only at startup. After you edit the file by hand, restart the service
 before you make a change another way. See [Running The Intern](running_the_intern.md#the-configuration-file).
 
 Use `bob roles create`, `change`, `remove` and `restore` for roles, and `bob workspaces register` and `unregister` for
-workspaces. To move a running conversation to a changed role, use `bob conversations seat <id>`. The
+workspaces. `bob skills` and `bob instructions` cover skills and instruction files. To move a running conversation to a changed role, use `bob conversations seat <id>`. The
 [Command reference](commands.md#roles) lists their options.
 
 ## Sharing a job

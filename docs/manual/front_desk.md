@@ -40,6 +40,14 @@ changes no file and runs no command. It edits no schedule file either: it works 
 schedule tools. It can't hand off, invoke agents, or block or complete a job. When you ask it for work, it creates a
 job and the job's agents do the work.
 
+## How it knows The Intern
+
+The front desk has the `skill` tool, like every agent, and the `desk` role starts with the skill `about-the-intern`.
+When you ask how The Intern works or how to set something up, the front desk reads that skill through `skill`, and
+answers from it. The tool only reads text: it needs no file tool, and the front desk still can't read any other file.
+The skill is drawn from this manual, and you can edit or restore it like any shipped skill. See
+[Skills and instructions](skills_and_instructions.md).
+
 ## A Done job
 
 When a job is Done, whether completed or cancelled, all of its conversations are closed for good. The front desk can
