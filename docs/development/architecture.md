@@ -1018,8 +1018,10 @@ to use `$BOB_CONVERSATION_ID`.
   listens as it listens to the configuration. `[skills]` and role changes arrive as `settings_changed` from the
   existing configuration listener.
 - **Reads.** `ConversationListing` gains `enabledSkills`, so `conversations.get` and `conversations.list` return it.
-  `toHostEntry` shows an `intern.skills` entry by its data, as it shows a seat record, in `conversations.entries` and
-  the conversation feed.
+  The feed's facts and these reads take a document without the field as an empty set, never as the older
+  `seat.skills`: no request is served before step 7's upgrade write gives every document the field (ADR-001
+  decision 4). `toHostEntry` shows an `intern.skills` entry by its data, as it shows a seat record, in
+  `conversations.entries` and the conversation feed.
 - **`skills.list`** returns `{ skills, missing, leftOut, seat? }`. Each skill has `name`, `description`, `source`
   (`{ kind, path? }`), `path` (its folder), `enabled`, `shipped`, `edited` and `shadowed` (each `{ path, source }`). A
   shipped skill whose folder is deleted is listed with `edited: true` and `deleted: true`. `leftOut` holds `{ path,
