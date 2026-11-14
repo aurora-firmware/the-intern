@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
+import { DEFAULT_SHIPPED_ROOT } from "../../src/skills/internal_folder.ts";
 import type { HermeticEnv } from "../support/hermetic_env.ts";
 import { type SkillsRig, startSkillsRig } from "../support/skills_rig.ts";
 
@@ -28,8 +30,10 @@ type Listing = {
 };
 
 const rigs: SkillsRig[] = [];
+const shippedRoots: string[] = [];
 
 afterEach(async () => {
+    for (const root of shippedRoots.splice(0)) rmSync(root, { recursive: true, force: true });
     for (const rig of rigs.splice(0)) await rig.stop();
 });
 
@@ -304,5 +308,116 @@ describe("skills.paths", () => {
             rig.invoke("skills.paths.remove", { path: join(rig.dirs.root, "a") }),
             refusal("conflict"),
         );
+    });
+});
+
+/** A copy of the installed shipped text that also holds the two shipped skills `bob` enables by default. */
+function shippedRootWithSkills(): string {
+    const root = mkdtempSync(join(tmpdir(), "intern-shipped-"));
+    shippedRoots.push(root);
+    cpSync(DEFAULT_SHIPPED_ROOT, root, { recursive: true });
+    for (const name of ["about-the-intern", "bob-command-line"]) {
+        mkdirSync(join(root, "skills", name), { recursive: true });
+        writeFileSync(
+            join(root, "skills", name, "SKILL.md"),
+            `---\nname: ${name}\ndescription: Shipped ${name}.\n---\n\nBody.\n`,
+        );
+    }
+    return root;
+}
+
+type InstructionFile = { kind: string; path: string; shipped: boolean; edited: boolean; missing: boolean };
+
+const instructionFilesOf = async (rig: SkillsRig, input: object): Promise<InstructionFile[]> =>
+    ((await rig.invoke("instructions.list", input)) as { files: InstructionFile[] }).files;
+
+describe("skills and instructions of an agent", () => {
+    it("lists the enabled skills with their paths, then the common prompt, the role's file and the workspace's AGENTS.md", async () => {
+        const rig = await start({ configToml: searchPathsToml("a"), shippedRoot: shippedRootWithSkills() });
+        const codeReview = await rig.writeSkill(join(rig.dirs.root, "a"), "code-review", "Review code.");
+        const workspace = join(rig.dirs.dataDir, "workspaces", "bob");
+        const job = (await rig.invoke("jobs.create", { text: "Look around.", role: "bob" })) as {
+            leadConversation: string;
+        };
+        const conversation = job.leadConversation;
+        await rig.invoke("skills.enable", { name: "code-review", conversation });
+        writeFileSync(join(workspace, "AGENTS.md"), "Work carefully.\n");
+
+        const listing = (await rig.invoke("skills.list", { conversation })) as {
+            skills: { name: string; path: string; enabled: boolean }[];
+        };
+        const files = await instructionFilesOf(rig, { conversation });
+
+        const enabled = listing.skills.filter((skill) => skill.enabled);
+        assert.deepEqual(enabled.map(({ name }) => name).sort(), [
+            "about-the-intern",
+            "bob-command-line",
+            "code-review",
+        ]);
+        assert.equal(enabled.find(({ name }) => name === "code-review")?.path, codeReview);
+        const data = rig.dirs.dataDir;
+        assert.deepEqual(
+            files.slice(0, 3).map(({ kind, path }) => ({ kind, path })),
+            [
+                { kind: "common", path: join(data, "instructions", "common.md") },
+                { kind: "role", path: join(data, "instructions", "roles", "bob.md") },
+                { kind: "workspace", path: join(workspace, "AGENTS.md") },
+            ],
+        );
+        assert.deepEqual(
+            files.slice(0, 2).map(({ shipped, edited, missing }) => ({ shipped, edited, missing })),
+            [
+                { shipped: true, edited: false, missing: false },
+                { shipped: true, edited: false, missing: false },
+            ],
+        );
+    });
+
+    it("lists a role's files from the role's default workspace", async () => {
+        const rig = await start();
+        writeFileSync(join(rig.dirs.dataDir, "workspaces", "bob", "AGENTS.md"), "Work carefully.\n");
+
+        const files = await instructionFilesOf(rig, { role: "bob" });
+
+        assert.deepEqual(
+            files.map(({ kind }) => kind),
+            ["common", "role", "workspace"],
+        );
+    });
+
+    it("lists a team role's missing file as missing and not shipped", async () => {
+        const rig = await start();
+        await rig.invoke("roles.create", { name: "scribe", instructions: "Write.", tools: ["read"], skills: [] });
+        rmSync(join(rig.dirs.dataDir, "instructions", "roles", "scribe.md"), { force: true });
+
+        const files = await instructionFilesOf(rig, { role: "scribe" });
+
+        const role = files.find(({ kind }) => kind === "role");
+        assert.equal(role?.path, join(rig.dirs.dataDir, "instructions", "roles", "scribe.md"));
+        assert.deepEqual(
+            { shipped: role?.shipped, edited: role?.edited, missing: role?.missing },
+            {
+                shipped: false,
+                edited: false,
+                missing: true,
+            },
+        );
+    });
+
+    it("refuses a call that names both a role and a conversation, or neither", async () => {
+        const rig = await start();
+
+        await assert.rejects(
+            rig.invoke("instructions.list", { role: "bob", conversation: "1" }),
+            refusal("invalid_input"),
+        );
+        await assert.rejects(rig.invoke("instructions.list", {}), refusal("invalid_input"));
+    });
+
+    it("refuses an unknown role and an unknown conversation as not found", async () => {
+        const rig = await start();
+
+        await assert.rejects(rig.invoke("instructions.list", { role: "nobody" }), refusal("not_found"));
+        await assert.rejects(rig.invoke("instructions.list", { conversation: "0" }), refusal("not_found"));
     });
 });

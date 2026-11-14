@@ -373,6 +373,7 @@ const INPUT_BUILDERS: Record<string, InputBuilder> = {
     "roles.list": async () => ({ input: {} }),
     "workspaces.list": async () => ({ input: {} }),
     "skills.list": async () => ({ input: { role: "gp" } }),
+    "instructions.list": async () => ({ input: { role: "gp" } }),
     "skills.enable": async (fixture, _seed, way) => {
         const name = `enabling-${label(way)}`;
         await fixture.invoke("roles.create", { name, instructions: "Before.", tools: ["read"], skills: [] });
