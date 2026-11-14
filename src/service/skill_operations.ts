@@ -6,7 +6,9 @@
 import { isDeepStrictEqual } from "node:util";
 import { ConfigChangeRefused } from "../config/config_writer.ts";
 import type { ServiceContext } from "../daemon/daemon.ts";
+import { ConversationClosedError } from "../host/job_section.ts";
 import { readConversationMeta } from "../host/seating.ts";
+import { setEnabledSkill } from "../host/skill_set.ts";
 import { RoleRefusedError } from "../roles/role_catalog.ts";
 import type { Seat } from "../roles/role_model.ts";
 import { type RolesConfig, rolesSection } from "../roles/roles_section.ts";
@@ -16,11 +18,12 @@ import { type CatalogSkill, enabledSkillsOf, type SkillSource } from "../skills/
 import type { SkillsComponent } from "../skills/skills_component.ts";
 import { skillsSection } from "../skills/skills_section.ts";
 import { roleWorkspacePath } from "../workspaces/workspace_folder.ts";
-import { defineOperation, type Operation, ServiceError } from "./operations.ts";
+import { type Caller, defineOperation, type Operation, ServiceError } from "./operations.ts";
+import { seatActorFor } from "./seat_operations.ts";
 
 type ListInput = { role: string } | { conversation: string };
 
-type ChangeInput = { name: string; role: string };
+type ChangeInput = { name: string } & ({ role: string } | { conversation: string });
 
 type ListedSkill = {
     name: string;
@@ -59,10 +62,9 @@ function parseList(raw: unknown): ListInput {
 
 function parseChange(raw: unknown): ChangeInput {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("input must be an object");
-    const { name, role } = raw as Record<string, unknown>;
+    const { name, ...target } = raw as Record<string, unknown>;
     if (typeof name !== "string" || name === "") throw new Error("name must be a non-empty string");
-    if (typeof role !== "string" || role === "") throw new Error("role must be a non-empty string");
-    return { name, role };
+    return { name, ...parseList(target) };
 }
 
 const isShippedRole = (role: string): boolean => (SHIPPED_ROLE_NAMES as readonly string[]).includes(role);
@@ -185,18 +187,62 @@ export function skillOperations(component: SkillsComponent) {
         return { enabledSkills };
     };
 
+    const readTargetCatalog = (ctx: ServiceContext, target: Target) =>
+        readCatalog({
+            dataDir: component.dataDir(),
+            shippedRoot: component.shippedRoot,
+            searchPaths: ctx.config.current(skillsSection).paths,
+            workspace: target.workspace,
+        });
+
+    /** Changes the enabled set of one seated conversation, after checking the name against the agent's catalog. */
+    const changeConversationSkills = async (
+        ctx: ServiceContext,
+        conversation: string,
+        { name, enable }: { name: string; enable: boolean },
+        caller: Caller,
+    ): Promise<{ enabledSkills: string[] }> => {
+        const target = await conversationTarget(ctx, conversation);
+        const held = (await readTargetCatalog(ctx, target)).skills.find((skill) => skill.name === name);
+        if (enable && held === undefined) {
+            throw new ServiceError("not_found", `The catalog of conversation ${conversation} holds no skill ${name}`);
+        }
+        if (!enable && held?.source.kind === "workspace") {
+            throw new ServiceError(
+                "invalid_input",
+                `The workspace of conversation ${conversation} supplies skill ${name}, which stays enabled`,
+            );
+        }
+        const callerRole =
+            caller.actor.kind === "agent"
+                ? (await readConversationMeta(ctx.host, caller.actor.conversationId))?.seat.role
+                : undefined;
+        const defaultsOf = (role: string): string[] => [...(component.agentsRuntime().catalog.get(role)?.skills ?? [])];
+        try {
+            const enabledSkills = await setEnabledSkill(
+                ctx.host,
+                conversation,
+                { name, enable, actor: seatActorFor(caller, callerRole) },
+                defaultsOf,
+            );
+            return { enabledSkills };
+        } catch (error) {
+            if (error instanceof ConversationClosedError) throw new ServiceError("conflict", error.message);
+            throw error;
+        }
+    };
+
     const enableOperation = defineOperation<ServiceContext, ChangeInput, { enabledSkills: string[] }>({
         name: "skills.enable",
         kind: "control",
         parse: parseChange,
-        async run(ctx, { name, role }) {
-            const target = roleTarget(role);
-            const catalog = await readCatalog({
-                dataDir: component.dataDir(),
-                shippedRoot: component.shippedRoot,
-                searchPaths: ctx.config.current(skillsSection).paths,
-                workspace: target.workspace,
-            });
+        async run(ctx, input, caller) {
+            const { name } = input;
+            if ("conversation" in input) {
+                return changeConversationSkills(ctx, input.conversation, { name, enable: true }, caller);
+            }
+            const { role } = input;
+            const catalog = await readTargetCatalog(ctx, roleTarget(role));
             if (!catalog.skills.some((skill) => skill.name === name)) {
                 throw new ServiceError("not_found", `The catalog of role ${role} holds no skill ${name}`);
             }
@@ -208,7 +254,12 @@ export function skillOperations(component: SkillsComponent) {
         name: "skills.disable",
         kind: "control",
         parse: parseChange,
-        async run(ctx, { name, role }) {
+        async run(ctx, input, caller) {
+            const { name } = input;
+            if ("conversation" in input) {
+                return changeConversationSkills(ctx, input.conversation, { name, enable: false }, caller);
+            }
+            const { role } = input;
             roleTarget(role);
             return changeRoleSkills(ctx, role, (skills) => skills.filter((skill) => skill !== name));
         },
