@@ -16,7 +16,7 @@ import { SHIPPED_ROLE_NAMES } from "../roles/shipped_roles.ts";
 import { readCatalog } from "../skills/skill_discovery.ts";
 import { type CatalogSkill, enabledSkillsOf, type SkillSource } from "../skills/skill_resolution.ts";
 import type { SkillsComponent } from "../skills/skills_component.ts";
-import { skillsSection } from "../skills/skills_section.ts";
+import { checkSearchPath, SearchPathError, skillsSection } from "../skills/skills_section.ts";
 import { roleWorkspacePath } from "../workspaces/workspace_folder.ts";
 import { type Caller, defineOperation, type Operation, ServiceError } from "./operations.ts";
 import { seatActorFor } from "./seat_operations.ts";
@@ -65,6 +65,32 @@ function parseChange(raw: unknown): ChangeInput {
     const { name, ...target } = raw as Record<string, unknown>;
     if (typeof name !== "string" || name === "") throw new Error("name must be a non-empty string");
     return { name, ...parseList(target) };
+}
+
+type PathInput = { path: string };
+
+type SearchPathEntry = { path: string; ok: boolean; reason?: string };
+
+function parsePath(raw: unknown): PathInput {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("input must be an object");
+    const { path } = raw as Record<string, unknown>;
+    if (typeof path !== "string" || path === "") throw new Error("path must be a non-empty string");
+    return { path };
+}
+
+/** Each search path with the result of the check a search path must pass. */
+async function describeSearchPaths(paths: readonly string[]): Promise<SearchPathEntry[]> {
+    return Promise.all(
+        paths.map(async (path): Promise<SearchPathEntry> => {
+            try {
+                await checkSearchPath(path);
+                return { path, ok: true };
+            } catch (error) {
+                if (error instanceof SearchPathError) return { path, ok: false, reason: error.reason };
+                throw error;
+            }
+        }),
+    );
 }
 
 const isShippedRole = (role: string): boolean => (SHIPPED_ROLE_NAMES as readonly string[]).includes(role);
@@ -265,7 +291,69 @@ export function skillOperations(component: SkillsComponent) {
         },
     });
 
+    /** Writes the new list through one `ConfigStore.update`; a list that stays the same writes nothing. */
+    const changeSearchPaths = async (
+        { config }: ServiceContext,
+        change: (paths: readonly string[]) => string[],
+    ): Promise<SearchPathEntry[]> => {
+        const unchanged = Symbol("unchanged");
+        try {
+            await config.update(skillsSection, (current) => {
+                const paths = change(current.paths);
+                if (isDeepStrictEqual(paths, current.paths)) throw unchanged;
+                return { ...current, paths };
+            });
+        } catch (error) {
+            if (error !== unchanged) {
+                if (error instanceof ConfigChangeRefused)
+                    throw new ServiceError(refusalCodes[error.kind], error.message);
+                throw error;
+            }
+        }
+        return describeSearchPaths(config.current(skillsSection).paths);
+    };
+
+    const pathsListOperation = defineOperation<ServiceContext, Record<string, never>, SearchPathEntry[]>({
+        name: "skills.paths.list",
+        kind: "read",
+        parse: () => ({}),
+        run: ({ config }) => describeSearchPaths(config.current(skillsSection).paths),
+    });
+
+    const pathsAddOperation = defineOperation<ServiceContext, PathInput, SearchPathEntry[]>({
+        name: "skills.paths.add",
+        kind: "control",
+        parse: parsePath,
+        async run(ctx, { path }) {
+            try {
+                await checkSearchPath(path);
+            } catch (error) {
+                if (error instanceof SearchPathError) throw new ServiceError("invalid_input", error.message);
+                throw error;
+            }
+            return changeSearchPaths(ctx, (paths) => (paths.includes(path) ? [...paths] : [...paths, path]));
+        },
+    });
+
+    const pathsRemoveOperation = defineOperation<ServiceContext, PathInput, SearchPathEntry[]>({
+        name: "skills.paths.remove",
+        kind: "control",
+        parse: parsePath,
+        run: (ctx, { path }) =>
+            changeSearchPaths(ctx, (paths) => {
+                if (!paths.includes(path)) throw new ServiceError("not_found", `${path} is not a skill search path`);
+                return paths.filter((listed) => listed !== path);
+            }),
+    });
+
     // biome-ignore lint/suspicious/noExplicitAny: heterogeneous operations cannot share a narrower type
-    const operations: Operation<ServiceContext, any, any>[] = [listOperation, enableOperation, disableOperation];
+    const operations: Operation<ServiceContext, any, any>[] = [
+        listOperation,
+        enableOperation,
+        disableOperation,
+        pathsListOperation,
+        pathsAddOperation,
+        pathsRemoveOperation,
+    ];
     return operations;
 }
