@@ -7,6 +7,7 @@ import type { AgentsRuntime } from "../agents/agents_component.ts";
 import type { ConfigSection } from "../config/config_file.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
+import { upgradeEnabledSkills } from "../host/skill_set.ts";
 import { rolesSection, workspacesSection } from "../roles/roles_section.ts";
 import type { Operation } from "../service/operations.ts";
 import { migrateOlderKeys } from "./config_migration.ts";
@@ -81,6 +82,10 @@ export function createSkillsComponent(options: SkillsComponentOptions): SkillsCo
         async checkModels(ctx) {
             hub = ctx.fileChanges;
             searchPaths = () => ctx.config.current(skillsSection).paths;
+        },
+        // Step 7, after admission is restored and before the jobs repair rules and `host.resume()`.
+        async repair(ctx) {
+            await upgradeEnabledSkills(ctx.host, (role) => [...(agentsRuntime().catalog.get(role)?.skills ?? [])]);
         },
     };
 
