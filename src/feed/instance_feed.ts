@@ -18,7 +18,7 @@ import type { FileChange, FileChangeHub } from "../skills/file_store.ts";
 import { createSubscription, FEED_MAX_PENDING, type Subscription } from "./observation_feed.ts";
 
 export type InstanceSnapshot = {
-    conversations: Pick<ConversationListing, "id" | "jobId" | "isLead" | "seat" | "status">[];
+    conversations: Pick<ConversationListing, "id" | "jobId" | "isLead" | "seat" | "enabledSkills" | "status">[];
     admission: AdmissionSnapshot;
     workerThreads: { count: number; inUse: number };
     jobs: { number: string; title: string; status: JobStatus }[];
@@ -27,6 +27,7 @@ export type InstanceSnapshot = {
 export type InstanceDelta = { seq: number } & (
     | { type: "conversation_created" | "run_started" | "run_finished"; conversationId: string }
     | { type: "seat_changed"; conversationId: string; seat: SeatSummary }
+    | { type: "skills_changed"; conversationId: string; enabledSkills: string[] }
     | { type: "status_changed"; conversationId: string; status: ConversationListing["status"] }
     | { type: "admission_changed"; admission: AdmissionSnapshot }
     | { type: "settings_changed"; section: string }
@@ -50,6 +51,7 @@ type ConversationFacts = {
     jobId: string | null;
     isLead: boolean;
     seat: SeatSummary;
+    enabledSkills: string[];
     isParked: boolean;
     isClosed: boolean;
 };
@@ -61,6 +63,7 @@ function factsOf(meta: ConversationMeta): ConversationFacts {
         jobId: meta.jobId,
         isLead: meta.isLead,
         seat: { role, model, ...(thinkingLevel !== undefined && { thinkingLevel }), workspace },
+        enabledSkills: [...(meta.enabledSkills ?? [])],
         isParked: meta.parked !== null,
         isClosed: meta.closed === true,
     };
@@ -110,8 +113,13 @@ export async function createInstanceFeed(options: {
         const after = factsOf(meta);
         factsById.set(conversationId, after);
         if (!before || !isReady) return;
-        if (JSON.stringify(before.seat) !== JSON.stringify(after.seat)) {
+        const isSeatChanged = JSON.stringify(before.seat) !== JSON.stringify(after.seat);
+        if (isSeatChanged) {
             publish({ type: "seat_changed", conversationId, seat: after.seat });
+        }
+        // A seat change resets the set, so its delta follows `seat_changed` even when the set came out the same.
+        if (isSeatChanged || JSON.stringify(before.enabledSkills) !== JSON.stringify(after.enabledSkills)) {
+            publish({ type: "skills_changed", conversationId, enabledSkills: after.enabledSkills });
         }
         if (before.isParked !== after.isParked || before.isClosed !== after.isClosed) {
             publish({ type: "status_changed", conversationId, status: statusOf(conversationId, after) });
@@ -222,6 +230,7 @@ export async function createInstanceFeed(options: {
                     jobId: facts?.jobId ?? null,
                     isLead: facts?.isLead ?? false,
                     seat: facts?.seat ?? null,
+                    enabledSkills: facts?.enabledSkills ?? [],
                     status: conversationStatus(
                         { id, busy: busyById.get(id) ?? false, isParked: facts?.isParked, isClosed: facts?.isClosed },
                         state,

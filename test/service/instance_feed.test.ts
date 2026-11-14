@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
@@ -20,9 +21,17 @@ import {
 } from "../../src/feed/instance_feed.ts";
 import { createObservationFeed, type ObservationFeed, type Subscription } from "../../src/feed/observation_feed.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
+import { toConversationId } from "../../src/host/conversation_id.ts";
 import { type HarnessHost, hostDatabase, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import { continueParked, parkConversation } from "../../src/host/invocation.ts";
-import { changeSeat, createSeatedConversation, SEAT_RECORD_KIND, type SeatActor } from "../../src/host/seating.ts";
+import {
+    changeSeat,
+    conversationMetaDoc,
+    createSeatedConversation,
+    SEAT_RECORD_KIND,
+    type SeatActor,
+} from "../../src/host/seating.ts";
+import { setEnabledSkill } from "../../src/host/skill_set.ts";
 import type { JobAuthor } from "../../src/jobs/job_model.ts";
 import {
     createJobStore,
@@ -476,9 +485,17 @@ describe("the instance feed seats and parked status", () => {
             jobId: "job-1",
             isLead: true,
             seat: { role: "developer", model: fixture.modelId, workspace: process.cwd() },
+            enabledSkills: [],
             status: "idle",
         });
-        assert.deepEqual(find(plain), { id: plain, jobId: null, isLead: false, seat: null, status: "idle" });
+        assert.deepEqual(find(plain), {
+            id: plain,
+            jobId: null,
+            isLead: false,
+            seat: null,
+            enabledSkills: [],
+            status: "idle",
+        });
     });
 
     it("snapshots a parked conversation with status parked", async () => {
@@ -565,6 +582,111 @@ describe("the instance feed seats and parked status", () => {
         const record = entries.findLast((entry) => entry.kind === SEAT_RECORD_KIND);
         assert.ok(record, "the seat record is in the conversation's history");
         assert.equal((record.data as { next: { role: string } }).next.role, "reviewer");
+    });
+});
+
+// Leaves the document as one written before S-008: no enabled set, and a stored seat that still lists skills.
+async function leaveWithoutEnabledSet(host: HarnessHost, conversationId: string): Promise<void> {
+    await internalHarness(host).commit(async (tx) => {
+        const meta = await tx.doc(conversationMetaDoc, toConversationId(conversationId));
+        delete meta.enabledSkills;
+        meta.seat.skills = ["older-seat-skill"];
+    }, BACKGROUND_CONTEXT);
+}
+
+describe("the instance feed's enabled skills", () => {
+    const defaultsOf = (): string[] => [];
+
+    it("publishes one skills_changed delta with the new set when a skill is enabled", async () => {
+        const fixture = await openFixture();
+        const id = await createSeated(fixture, "k1");
+        const feed = await fixture.open();
+        const subscription = feed.subscribe();
+
+        await setEnabledSkill(fixture.host, id, { name: "review", enable: true, actor: ACTOR }, defaultsOf);
+
+        const deltas = await collectUntil(subscription, (all) => all.some((delta) => delta.type === "skills_changed"));
+        assert.deepEqual(deltas, [{ seq: 1, type: "skills_changed", conversationId: id, enabledSkills: ["review"] }]);
+    });
+
+    it("publishes skills_changed with the new role's defaults right after seat_changed", async () => {
+        const fixture = await openFixture();
+        const id = await createSeated(fixture, "k1");
+        await setEnabledSkill(fixture.host, id, { name: "review", enable: true, actor: ACTOR }, defaultsOf);
+        const feed = await fixture.open();
+        const subscription = feed.subscribe();
+
+        await changeSeat(fixture.host, id, {
+            seat: { ...seatFor(fixture, "reviewer"), skills: ["audit"] },
+            actor: ACTOR,
+        });
+
+        const deltas = await collectUntil(subscription, (all) => all.some((delta) => delta.type === "skills_changed"));
+        assert.deepEqual(
+            deltas.map(({ type }) => type),
+            ["seat_changed", "skills_changed"],
+        );
+        assert.deepEqual(deltas.at(-1), {
+            seq: 2,
+            type: "skills_changed",
+            conversationId: id,
+            enabledSkills: ["audit"],
+        });
+    });
+
+    it("publishes no skills_changed for a document change that keeps the set", async () => {
+        const fixture = await openFixture();
+        const id = await createSeated(fixture, "k1");
+        const feed = await fixture.open();
+        const subscription = feed.subscribe();
+
+        await parkConversation(fixture.host, id, { waitingFor: "answer", continueOn: "each" });
+        await fixture.config.change(labelSection, { label: "marker" });
+
+        const deltas = await collectUntil(subscription, (all) =>
+            all.some((delta) => delta.type === "settings_changed"),
+        );
+        assert.equal(
+            deltas.some((delta) => delta.type === "skills_changed"),
+            false,
+        );
+    });
+
+    it("snapshots an empty set for a seated document without an enabled set, never its older seat skills", async () => {
+        const fixture = await openFixture();
+        const id = await createSeated(fixture, "k1");
+        await leaveWithoutEnabledSet(fixture.host, id);
+        const feed = await fixture.open();
+
+        const { snapshot } = feed.subscribe();
+
+        assert.deepEqual(snapshot.conversations.find((conversation) => conversation.id === id)?.enabledSkills, []);
+    });
+
+    it("publishes skills_changed with an empty set when a document loses its enabled set", async () => {
+        const fixture = await openFixture();
+        const id = await createSeated(fixture, "k1");
+        await setEnabledSkill(fixture.host, id, { name: "review", enable: true, actor: ACTOR }, defaultsOf);
+        const feed = await fixture.open();
+        const subscription = feed.subscribe();
+
+        await leaveWithoutEnabledSet(fixture.host, id);
+
+        const deltas = await collectUntil(subscription, (all) => all.some((delta) => delta.type === "skills_changed"));
+        assert.deepEqual(deltas.at(-1), { seq: 1, type: "skills_changed", conversationId: id, enabledSkills: [] });
+    });
+
+    it("gives each conversation's enabled set in the snapshot", async () => {
+        const fixture = await openFixture();
+        const id = await createSeated(fixture, "k1");
+        await setEnabledSkill(fixture.host, id, { name: "review", enable: true, actor: ACTOR }, defaultsOf);
+        const feed = await fixture.open();
+
+        const { snapshot } = feed.subscribe();
+
+        assert.deepEqual(snapshot.conversations.find((conversation) => conversation.id === id)?.enabledSkills, [
+            "review",
+        ]);
     });
 });
 
