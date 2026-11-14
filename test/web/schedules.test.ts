@@ -273,6 +273,61 @@ describe("the Schedules page in chrome", () => {
     });
 });
 
+describe("the Skills panel of a schedule entry in chrome", () => {
+    type Listing = { skills: { name: string; enabled: boolean }[] };
+    const enabledSet = async (daemon: DaemonProcess, role: string): Promise<Map<string, boolean>> =>
+        new Map(
+            ((await daemon.invoke("skills.list", { role })) as Listing).skills.map((skill) => [
+                skill.name,
+                skill.enabled,
+            ]),
+        );
+
+    /** A skill both roles have enabled, then disabled for `gp` alone, so that the two roles' panels differ. */
+    async function skillOnlyBobHas(daemon: DaemonProcess): Promise<string> {
+        const gp = await enabledSet(daemon, "gp");
+        const bob = await enabledSet(daemon, "bob");
+        const name = [...gp].find(([skill, isEnabled]) => isEnabled && bob.get(skill) === true)?.[0];
+        if (name === undefined) throw new Error("gp and bob share no enabled skill");
+        await daemon.invoke("skills.disable", { role: "gp", name });
+        return name;
+    }
+
+    const boxOf = (page: Page, entry: string, skill: string) =>
+        page.locator(`${cardOf(entry)} .entry-skills .skill-row[data-skill="${skill}"] input[type=checkbox]`);
+
+    it("shows the skills of the role the entry names", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { daemon, port } = await startServer();
+        await daemon.invoke("schedules.create", { name: "seated", cron: "0 3 * * *", request: "Go.", role: "gp" });
+        const skill = await skillOnlyBobHas(daemon);
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await page.goto(pageUrl(port, "/ui/#/schedules"));
+        await page.waitForSelector(cardOf("seated"), { timeout: WAIT_MS });
+
+        await page.click(`${cardOf("seated")} .entry-skills > summary`);
+
+        await boxOf(page, "seated", skill).waitFor({ timeout: WAIT_MS });
+        t.assert.equal(await boxOf(page, "seated", skill).isChecked(), false);
+    });
+
+    it("shows bob's skills when the entry names no role", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { daemon, port } = await startServer();
+        const skill = await skillOnlyBobHas(daemon);
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await page.goto(pageUrl(port, "/ui/#/schedules"));
+        await page.waitForSelector(entryCard, { timeout: WAIT_MS });
+
+        await page.click(`${entryCard} .entry-skills > summary`);
+
+        await boxOf(page, ENTRY, skill).waitFor({ timeout: WAIT_MS });
+        t.assert.equal(await boxOf(page, ENTRY, skill).isChecked(), true);
+    });
+});
+
 describe("a scheduled run's Job page in chrome", () => {
     const ORIGIN = 'main [data-field="origin"] .job-value';
 
