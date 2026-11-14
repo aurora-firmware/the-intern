@@ -1,4 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, describe, it, type TestContext } from "node:test";
 import type { Page } from "playwright-core";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
@@ -13,8 +14,11 @@ const TYPED = "typed in the editor";
 const HAND_EDIT = "edited by hand on disk\n";
 
 type Job = { id: string; number: string };
-type Rig = { daemon: DaemonProcess; port: number; job: Job; lead: string };
-type SkillListing = { skills: { name: string; enabled: boolean }[] };
+type Rig = { env: HermeticEnv; daemon: DaemonProcess; port: number; job: Job; lead: string };
+type SkillListing = {
+    skills: { name: string; enabled: boolean; shadowed: { path: string }[] }[];
+    leftOut: { path: string; reason: string }[];
+};
 type InstructionListing = { files: { kind: string; path: string }[] };
 
 const envs: HermeticEnv[] = [];
@@ -37,7 +41,7 @@ async function startRig(): Promise<Rig> {
     const job = (await daemon.invoke("jobs.create", { text: "job one" })) as Job;
     const detail = (await daemon.invoke("jobs.get", { job: job.id })) as { leadConversation?: string };
     if (detail.leadConversation === undefined) throw new Error(`job ${job.number} has no lead conversation`);
-    return { daemon, port: await daemon.networkPort(), job, lead: detail.leadConversation };
+    return { env, daemon, port: await daemon.networkPort(), job, lead: detail.leadConversation };
 }
 
 const panelOf = (page: Page, rig: Rig) =>
@@ -152,5 +156,32 @@ describe("the Skills panel on the Job page in chrome", () => {
         }
         t.assert.equal(await readFile(path, "utf8"), saved);
         t.assert.equal(await editor.locator(".refusal").count(), 0);
+    });
+
+    it("shows the copies a skill shadows and the paths left out", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const rig = await startRig();
+        const folders = [join(rig.env.root, "twins-a"), join(rig.env.root, "twins-b")];
+        for (const folder of folders) {
+            await mkdir(join(folder, "twin"), { recursive: true, mode: 0o700 });
+            await chmod(folder, 0o700);
+            await writeFile(join(folder, "twin", "SKILL.md"), "---\nname: twin\ndescription: a twin\n---\n\nBody.\n");
+            await rig.daemon.invoke("skills.paths.add", { path: folder });
+        }
+        await mkdir(join(folders[1] as string, "broken"));
+        await writeFile(join(folders[1] as string, "broken", "SKILL.md"), "---\nname: broken\n---\n\nBody.\n");
+        const listing = (await rig.daemon.invoke("skills.list", { conversation: rig.lead })) as SkillListing;
+        const shadowedPath = listing.skills.find((skill) => skill.name === "twin")?.shadowed[0]?.path;
+        const leftOut = listing.leftOut[0];
+        if (shadowedPath === undefined || leftOut === undefined)
+            throw new Error("the rig has no shadowed copy or left-out path");
+        const page = await openPanel(t, rig);
+        if (page === undefined) return;
+
+        const row = panelOf(page, rig).locator('.skill-row[data-skill="twin"] .skill-shadowed');
+        await row.waitFor({ timeout: WAIT_MS });
+        t.assert.match((await row.textContent()) ?? "", new RegExp(shadowedPath.replaceAll("/", "\\/")));
+        const left = panelOf(page, rig).locator(".skills-left-out li");
+        t.assert.match((await left.first().textContent()) ?? "", new RegExp(leftOut.reason.split(":")[0] as string));
+        t.assert.match((await left.first().textContent()) ?? "", new RegExp(leftOut.path.replaceAll("/", "\\/")));
     });
 });
