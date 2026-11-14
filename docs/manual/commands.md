@@ -19,13 +19,13 @@ configuration file, cache or history of its own.
 
 A command is a group and a verb, such as `bob jobs list`, or a top-level command, such as `bob chat`. The top-level
 commands are `serve`, `status`, `usage`, `export`, `import`, `follow` and `chat`. The groups are `jobs`,
-`conversations`, `roles`, `workspaces`, `models` and `schedules`.
+`conversations`, `roles`, `workspaces`, `models`, `schedules`, `skills` and `instructions`.
 
 In the usage lines below, `<name>` is a required argument. Options come after the arguments and take a value unless the
 table says they are switches. Give an option once, except `--tool` and `--skill`, which you repeat for several values.
 
-The groups `skills`, `instructions`, `knowledge` and `mail` are reserved for later features.
-They have no command yet: `bob skills list` prints that the group isn't available yet and exits with status 2.
+The groups `knowledge` and `mail` are reserved for later features.
+They have no command yet: `bob knowledge list` prints that the group isn't available yet and exits with status 2.
 
 ## Options every command shares
 
@@ -387,12 +387,18 @@ tools, skills and instructions; with `--json` it prints that role. When no role 
 
 | Option                    | Meaning                                              |
 | ------------------------- | ---------------------------------------------------- |
-| `--instructions <value>`  | The role's instructions.                             |
+| `--instructions <value>`  | The text of the role's instruction file.             |
 | `--tool <value>`          | A tool the role may use; repeat for several.         |
-| `--skill <value>`         | The absolute path of a skill; repeat for several.    |
+| `--skill <value>`         | The name of a skill the role starts with; repeat for several. |
 | `--model <value>`         | The role's model.                                    |
 | `--thinking <value>`      | The role's thinking level.                           |
 | `--workspace <value>`     | The role's default workspace.                        |
+
+A role's instructions are the text of its instruction file, `instructions/roles/<name>.md` in the data directory, and
+its skills are names. `--instructions` writes that file. `bob roles change` reads the role's file first, so a file you
+edited by hand since is refused as a `conflict` instead of overwritten; run the command again to write over what it
+now reads. `bob roles show` prints `Instructions: missing` when the file is gone. To list the files that build a
+prompt, or to enable a skill for a role, use [`bob instructions`](#instructions) and [`bob skills`](#skills).
 
 ## Workspaces
 
@@ -455,3 +461,77 @@ sends only the options you give. The service checks every value, and a refusal e
 | `--model <value>`         | The model of the run's lead.                             |
 | `--thinking-level <value>` | The thinking level of the run's lead.                   |
 | `--workspace <value>`     | The workspace of the run.                                |
+
+## Skills
+
+`<name>` is a skill's name and `<path>` is the absolute path of a folder. Every skills command takes `--json`,
+`--runtime-dir <value>` and `--help`. See [Roles, workspaces and agents sharing a job](roles_and_agents.md).
+
+| Command                           | What it does                                                   |
+| --------------------------------- | -------------------------------------------------------------- |
+| `bob skills list`                 | List the skills of a role or a conversation.                   |
+| `bob skills enable <name>`        | Enable a skill for a role or a conversation.                   |
+| `bob skills disable <name>`       | Disable a skill for a role or a conversation.                  |
+| `bob skills paths`                | List the skill search paths.                                   |
+| `bob skills add-path <path>`      | Add a skill search path.                                       |
+| `bob skills remove-path <path>`   | Remove a skill search path.                                    |
+| `bob skills restore <name>`       | Restore a shipped skill to its installed version.              |
+
+`list`, `enable` and `disable` take these options. Give exactly one of them; with none, or both, the command prints its
+usage on standard error and exits 2.
+
+| Option                    | Meaning                                              |
+| ------------------------- | ---------------------------------------------------- |
+| `--role <value>`          | The role whose skills to use.                        |
+| `--conversation <value>`  | The conversation whose agent's skills to use.        |
+
+`list` prints one line per skill with its name, its source (`internal`, `path <folder>` or `workspace <folder>`), the
+path of its `SKILL.md` and the marks `enabled`, `edited` and `deleted`. A skill that a copy higher in priority shadows
+prints an indented `shadowed:` line under the copy in use. For a conversation, the first line is `seat:` with the
+agent's role, model, thinking level and workspace. Then come one `missing:` line per enabled name that no skill
+matches, and one `left out:` line per skill that failed its check, with the reason. It never prints a skill's text.
+With `--json` it prints an object with `skills`, `missing` and `leftOut`, and for a conversation `seat`.
+
+`enable` and `disable` print one line, such as `code-review enabled` or `code-review disabled`. With `--json` they print
+an object with `enabledSkills`, the new set of names. The service refuses an unknown name, with exit 1.
+
+`paths` lists the search paths, lowest priority first, one per line. A path that fails the check, because it is missing
+or other accounts can reach it, prints `unusable:` and the reason after it. `add-path` and `remove-path` print the
+paths as they stand after the change. With `--json` all three print an array of objects with `path`, `ok` and, when
+`ok` is false, `reason`. The service refuses a path that isn't absolute or doesn't exist (`invalid_input`), a path
+that isn't listed when you remove it (`not_found`), and a change when `config.toml` changed on disk meanwhile
+(`conflict`); each exits 1. Adding a path that is already listed changes nothing and exits 0.
+
+`restore` copies the installed version of a shipped skill back, over your edits or in place of a deleted copy, and
+prints the skill as `list` does. With `--json` it prints that skill. A name that isn't a shipped skill exits 1.
+
+```
+bob skills enable code-review --conversation 5
+bob skills list --conversation 5
+```
+
+## Instructions
+
+`<name>` is `common` or the name of a shipped role. Every instructions command takes `--json`, `--runtime-dir <value>`
+and `--help`. No instructions command prints the text of a file.
+
+| Command                           | What it does                                                   |
+| --------------------------------- | -------------------------------------------------------------- |
+| `bob instructions list`           | List the instruction files of a role or a conversation.        |
+| `bob instructions restore <name>` | Restore the common prompt or a shipped role's instructions to the installed version. |
+
+`list` takes these options. Give exactly one of them; with none, or both, the command prints its usage on standard
+error and exits 2.
+
+| Option                    | Meaning                                              |
+| ------------------------- | ---------------------------------------------------- |
+| `--role <value>`          | The role whose instruction files to list.            |
+| `--conversation <value>`  | The conversation whose agent's instruction files to list. |
+
+`list` prints one line per file, in the order the prompt reads them, with its kind (`common`, `role` or `workspace`),
+its path and the marks `shipped`, `edited` and `missing`. With `--json` it prints an object with `files`, each with
+`kind`, `path`, `shipped`, `edited` and `missing`.
+
+`restore` copies the installed version of the common prompt (`bob instructions restore common`) or of a shipped role's
+instructions (`bob instructions restore reviewer`) back, and prints that file's line as `list` does. With `--json` it
+prints that file. A name that is neither `common` nor a shipped role exits 1.
