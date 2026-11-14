@@ -1,14 +1,22 @@
 /**
- * The instructions operation (S-008 REQ-009): `instructions.list` names the files an agent's prompt is built from, in
+ * The instructions operations: `instructions.list` (S-008 REQ-009) names the files an agent's prompt is built from, in
  * the order the prompt reads them, with whether each ships with the product, was edited and is missing. It returns no
- * file text.
+ * file text. `instructions.restore` (REQ-003) copies the installed common prompt or a shipped role's instructions back.
  */
 
 import { access } from "node:fs/promises";
 import type { ServiceContext } from "../daemon/daemon.ts";
 import { type ConversationMeta, readConversationMeta } from "../host/seating.ts";
 import { readPromptParts } from "../prompt/prompt_sources.ts";
-import { commonPromptPath, roleInstructionPath, shippedFileStates } from "../skills/internal_folder.ts";
+import { SHIPPED_ROLE_NAMES } from "../roles/shipped_roles.ts";
+import {
+    commonPromptPath,
+    NotShippedError,
+    restoreShippedFile,
+    roleInstructionPath,
+    type ShippedFileState,
+    shippedFileStates,
+} from "../skills/internal_folder.ts";
 import type { SkillsComponent } from "../skills/skills_component.ts";
 import { roleWorkspacePath } from "../workspaces/workspace_folder.ts";
 import { defineOperation, type Operation, ServiceError } from "./operations.ts";
@@ -22,6 +30,15 @@ type InstructionFile = {
     edited: boolean;
     missing: boolean;
 };
+
+type RestoreInput = { name: string };
+
+function parseRestore(raw: unknown): RestoreInput {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("input must be an object");
+    const { name } = raw as Record<string, unknown>;
+    if (typeof name !== "string" || name === "") throw new Error("name must be a non-empty string");
+    return { name };
+}
 
 function parseList(raw: unknown): ListInput {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("input must be an object");
@@ -46,6 +63,30 @@ async function exists(path: string): Promise<boolean> {
     } catch {
         return false;
     }
+}
+
+/** The shipped instruction file a restore name stands for, or undefined when no shipped file has that name. */
+function shippedInstruction(name: string): { kind: "common" | "role"; shippedName: string } | undefined {
+    if (name === "common") return { kind: "common", shippedName: "instructions/common.md" };
+    if ((SHIPPED_ROLE_NAMES as readonly string[]).includes(name)) {
+        return { kind: "role", shippedName: `instructions/roles/${name}.md` };
+    }
+    return undefined;
+}
+
+/** One instruction file as `instructions.list` shows it. */
+async function internalFile(
+    kind: "common" | "role",
+    path: string,
+    state: ShippedFileState | undefined,
+): Promise<InstructionFile> {
+    return {
+        kind,
+        path,
+        shipped: state !== undefined,
+        edited: state?.edited ?? false,
+        missing: !(await exists(path)),
+    };
 }
 
 export function instructionOperations(component: SkillsComponent) {
@@ -83,27 +124,13 @@ export function instructionOperations(component: SkillsComponent) {
                 diagnostics: { report: () => {} },
                 shippedRoot: component.shippedRoot,
             });
-            const internal = async (
-                kind: "common" | "role",
-                path: string,
-                shippedName: string,
-            ): Promise<InstructionFile> => {
-                const state = states[shippedName];
-                return {
-                    kind,
-                    path,
-                    shipped: state !== undefined,
-                    edited: state?.edited ?? false,
-                    missing: !(await exists(path)),
-                };
-            };
             return {
                 files: [
-                    await internal("common", commonPromptPath(dataDir), "instructions/common.md"),
-                    await internal(
+                    await internalFile("common", commonPromptPath(dataDir), states["instructions/common.md"]),
+                    await internalFile(
                         "role",
                         roleInstructionPath(dataDir, seat.role),
-                        `instructions/roles/${seat.role}.md`,
+                        states[`instructions/roles/${seat.role}.md`],
                     ),
                     ...contextFiles.map(
                         ({ path }): InstructionFile => ({
@@ -119,7 +146,35 @@ export function instructionOperations(component: SkillsComponent) {
         },
     });
 
+    const restoreOperation = defineOperation<ServiceContext, RestoreInput, InstructionFile>({
+        name: "instructions.restore",
+        kind: "control",
+        parse: parseRestore,
+        async run(_ctx, { name }) {
+            const shipped = shippedInstruction(name);
+            if (shipped === undefined) {
+                throw new ServiceError("not_found", `${name} is neither the common prompt nor a shipped role`);
+            }
+            const dataDir = component.dataDir();
+            try {
+                await restoreShippedFile({
+                    dataDir,
+                    shippedRoot: component.shippedRoot,
+                    store: component.fileStore,
+                    relativePath: shipped.shippedName,
+                    announce: shipped.kind,
+                });
+            } catch (error) {
+                if (error instanceof NotShippedError) throw new ServiceError("not_found", error.message);
+                throw error;
+            }
+            const path = shipped.kind === "common" ? commonPromptPath(dataDir) : roleInstructionPath(dataDir, name);
+            const states = await shippedFileStates({ dataDir, shippedRoot: component.shippedRoot });
+            return internalFile(shipped.kind, path, states[shipped.shippedName]);
+        },
+    });
+
     // biome-ignore lint/suspicious/noExplicitAny: heterogeneous operations cannot share a narrower type
-    const operations: Operation<ServiceContext, any, any>[] = [listOperation];
+    const operations: Operation<ServiceContext, any, any>[] = [listOperation, restoreOperation];
     return operations;
 }
