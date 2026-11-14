@@ -152,7 +152,7 @@ describe("the internal folder at startup", () => {
         assert.throws(() => skills.dataDir(), /before startup step 3/);
 
         await skills.component.prepareFiles?.({
-            dirs: { dataDir: env.dataDir } as never,
+            dirs: { dataDir: env.dataDir, runtimeDir: env.runtimeDir } as never,
             config: { values: new Map() } as never,
             logger,
         });
