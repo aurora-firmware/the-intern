@@ -73,8 +73,13 @@ export const validateRoleDefinition = (role: RoleDefinition): void => {
 
 export const applyRoleChange = (base: RoleDefinition, change: RoleChange): RoleDefinition => ({ ...base, ...change });
 
-const placeTools = (place: SeatPlace): readonly string[] =>
-    place === "front_desk" ? FRONT_DESK_TOOL_NAMES : [...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES];
+// Every seat is offered `skill`, whatever the role's tools are (S-008 REQ-008).
+export const SKILL_TOOL_NAME = "skill";
+
+const placeTools = (place: SeatPlace): readonly string[] => [
+    ...(place === "front_desk" ? FRONT_DESK_TOOL_NAMES : [...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES]),
+    SKILL_TOOL_NAME,
+];
 
 export const resolveSeat = (
     role: RoleDefinition,

@@ -12,6 +12,8 @@ import type { Operation } from "../service/operations.ts";
 import { migrateOlderKeys } from "./config_migration.ts";
 import { createFileStore, type FileChangeHub, type FileStore } from "./file_store.ts";
 import { DEFAULT_SHIPPED_ROOT, prepareInternalFolder } from "./internal_folder.ts";
+import { readCatalog } from "./skill_discovery.ts";
+import { createSkillToolExtension } from "./skill_tool_extension.ts";
 import { skillsSection } from "./skills_section.ts";
 
 export type SkillsComponentOptions = {
@@ -41,9 +43,23 @@ export function createSkillsComponent(options: SkillsComponentOptions): SkillsCo
     const fileStore = createFileStore({ changes: () => hub });
     let recordedDataDir: string | undefined;
     let connectedRuntime: (() => AgentsRuntime) | undefined;
+    let searchPaths: () => readonly string[] = () => [];
+
+    const dataDir = (): string => {
+        if (recordedDataDir === undefined) {
+            throw new Error("the data directory is not known before startup step 3 has run");
+        }
+        return recordedDataDir;
+    };
 
     const component: DaemonComponent = {
         name: "skills",
+        extensions: [
+            createSkillToolExtension({
+                catalogFor: (workspace) =>
+                    readCatalog({ dataDir: dataDir(), shippedRoot, searchPaths: searchPaths(), workspace }),
+            }),
+        ],
         async prepareFiles({ dirs, config }) {
             recordedDataDir = dirs.dataDir;
             await prepareInternalFolder({ dataDir: dirs.dataDir, shippedRoot, store: fileStore });
@@ -58,6 +74,7 @@ export function createSkillsComponent(options: SkillsComponentOptions): SkillsCo
         // Writes before this step announce nothing: the start rule of step 3 has no feed to tell.
         async checkModels(ctx) {
             hub = ctx.fileChanges;
+            searchPaths = () => ctx.config.current(skillsSection).paths;
         },
     };
 
@@ -67,12 +84,7 @@ export function createSkillsComponent(options: SkillsComponentOptions): SkillsCo
         operations: [],
         fileStore,
         shippedRoot,
-        dataDir() {
-            if (recordedDataDir === undefined) {
-                throw new Error("the data directory is not known before startup step 3 has run");
-            }
-            return recordedDataDir;
-        },
+        dataDir,
         connectAgents(runtime) {
             connectedRuntime = runtime;
         },

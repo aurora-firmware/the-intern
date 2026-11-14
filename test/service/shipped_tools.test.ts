@@ -17,7 +17,12 @@ import { type HarnessHost, openHarnessHost } from "../../src/host/harness_host.t
 import { createSeatedConversation, type JobLinks, type SeatActor } from "../../src/host/seating.ts";
 import { JOB_TOOL_NAMES } from "../../src/jobs/job_model.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
-import { COORDINATION_TOOL_NAMES, resolveSeat, SHIPPED_TOOL_NAMES } from "../../src/roles/role_model.ts";
+import {
+    COORDINATION_TOOL_NAMES,
+    resolveSeat,
+    SHIPPED_TOOL_NAMES,
+    SKILL_TOOL_NAME,
+} from "../../src/roles/role_model.ts";
 import { SHIPPED_TOOLS_EXTENSION_NAME, shippedToolsExtension } from "../../src/tools/shipped_tools_extension.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -154,10 +159,13 @@ describe("the shipped tools extension", () => {
 
         await say(id);
 
-        assert.deepEqual(tools, ["read", ...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES]);
+        assert.deepEqual(tools, ["read", ...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES, SKILL_TOOL_NAME]);
         // The Jobs component registers the job tools it has so far; the lead-only ones follow in a later task.
         assert.ok(jobToolsRegistered.every((name) => (JOB_TOOL_NAMES as readonly string[]).includes(name)));
-        assert.deepEqual([...offered[0]].sort(), ["read", ...COORDINATION_TOOL_NAMES, ...jobToolsRegistered].sort());
+        assert.deepEqual(
+            [...offered[0]].sort(),
+            ["read", ...COORDINATION_TOOL_NAMES, ...jobToolsRegistered, SKILL_TOOL_NAME].sort(),
+        );
         for (const absent of ["write", "edit", "bash"]) assert.equal(offered[0].includes(absent), false, absent);
     });
 
