@@ -122,7 +122,7 @@ describe("converting an older role's skill paths at startup", () => {
         assert.equal(text.includes(join(started.env.root, "skills", "carry-out-a-part")), false);
         const reviewer = started.agents.runtime().catalog.seatFor("reviewer");
         assert.deepEqual(reviewer.skills, ["code-review"]);
-        assert.equal(reviewer.instructions, "Review.");
+        assert.equal(await readFile(roleInstructionPath(started.env.dataDir, "reviewer"), "utf8"), "Review.");
         assert.deepEqual(started.agents.runtime().catalog.seatFor("gp").skills, ["carry-out-a-part", "code-review"]);
     });
 
@@ -211,13 +211,13 @@ describe("converting an older role's skill paths at startup", () => {
 });
 
 describe("converting an older role's instructions at startup", () => {
-    it("writes a team role's instructions to its file, removes the key and seats the role with the text (AC-1)", async () => {
+    it("writes a team role's instructions to its file, removes the key and seats the role (AC-1)", async () => {
         const started = await startWith('[roles.reviewer]\ninstructions = "Review the work."\ntools = ["read"]\n');
 
         const file = await readFile(roleInstructionPath(started.env.dataDir, "reviewer"), "utf8");
         assert.equal(file, "Review the work.");
         assert.equal(/instructions/.test(await started.read()), false);
-        assert.equal(started.agents.runtime().catalog.seatFor("reviewer").instructions, "Review the work.");
+        assert.equal(started.agents.runtime().catalog.seatFor("reviewer").role, "reviewer");
     });
 
     it("writes a shipped role's instructions to its file and marks the file edited (AC-2)", async () => {

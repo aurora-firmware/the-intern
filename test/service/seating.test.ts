@@ -151,7 +151,13 @@ describe("createSeatedConversation", () => {
         assert.deepEqual(agent?.tools, ["read", "bash"]);
         assert.deepEqual(await readConversationMeta(host, conversationId), {
             ...job,
-            seat,
+            seat: {
+                role: seat.role,
+                model: seat.model,
+                thinkingLevel: seat.thinkingLevel,
+                workspace: seat.workspace,
+                tools: seat.tools,
+            },
             awaiting: [],
             parked: null,
             held: [],
@@ -270,7 +276,8 @@ describe("changeSeat", () => {
             contextMode: "clean",
             note: "review",
         });
-        assert.deepEqual((await readConversationMeta(host, conversationId))?.seat, JSON.parse(JSON.stringify(newSeat)));
+        const { skills: _skills, instructions: _instructions, ...stored } = newSeat;
+        assert.deepEqual((await readConversationMeta(host, conversationId))?.seat, JSON.parse(JSON.stringify(stored)));
     });
 
     it("writes a record without context mode or note when none is given", async () => {

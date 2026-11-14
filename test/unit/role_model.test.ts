@@ -8,14 +8,12 @@ import {
     type RoleDefinition,
     RoleInvalidError,
     resolveSeat,
-    type SeatRole,
     SHIPPED_TOOL_NAMES,
     validateRoleDefinition,
 } from "../../src/roles/role_model.ts";
 
-const role = (overrides: Partial<SeatRole> = {}): SeatRole => ({
+const role = (overrides: Partial<RoleDefinition> = {}): RoleDefinition => ({
     name: "writer",
-    instructions: "Write things.",
     tools: ["read", "write"],
     skills: ["style"],
     ...overrides,
@@ -41,7 +39,7 @@ describe("tool name lists", () => {
 });
 
 describe("resolveSeat", () => {
-    it("uses the overrides with the role's instructions, tools and skills", () => {
+    it("uses the overrides with the role's tools and skills, and carries no instructions", () => {
         const seat = resolveSeat(
             role({ model: "role-model", thinkingLevel: "high", workspace: "/role/ws" }),
             defaults,
@@ -51,7 +49,7 @@ describe("resolveSeat", () => {
         assert.equal(seat.model, "o-model");
         assert.equal(seat.thinkingLevel, "medium");
         assert.equal(seat.workspace, "/o/ws");
-        assert.equal(seat.instructions, "Write things.");
+        assert.equal("instructions" in seat, false);
         assert.deepEqual(seat.skills, ["style"]);
         assert.deepEqual(seat.tools, ["read", "write", ...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES]);
     });
