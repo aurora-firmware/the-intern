@@ -408,6 +408,13 @@ const INPUT_BUILDERS: Record<string, InputBuilder> = {
         await writeFile(join(fixture.env.dataDir, "instructions/roles/gp.md"), "Edited for the test.\n");
         return { input: { name: "gp" } };
     },
+    "files.read": async (fixture) => ({ input: { path: join(fixture.env.dataDir, "instructions/common.md") } }),
+    "files.write": async (fixture, _seed, way) => {
+        const path = join(fixture.env.dataDir, `instructions/catalogue-${label(way)}.md`);
+        await writeFile(path, "Before.\n");
+        const { version } = (await fixture.invoke("files.read", { path })) as { version: string };
+        return { input: { path, text: "After.\n", version } };
+    },
     "conversations.submit": async (fixture, _seed, way) => {
         const conversationId = await fixture.settledConversation(`submit-${label(way)}`);
         return { input: { conversationId, content: "more", requestId: "more" } };
