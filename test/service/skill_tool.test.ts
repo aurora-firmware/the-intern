@@ -3,7 +3,7 @@
  * bundles, and a call that leaves the skill's folder or names a skill that isn't enabled is refused.
  */
 import assert from "node:assert/strict";
-import { chmod, mkdir, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -38,6 +38,7 @@ import {
     SKILL_TOOL_NAME,
 } from "../../src/skills/skill_tool_extension.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { type SkillsRig, startSkillsRig } from "../support/skills_rig.ts";
 
 const WAIT_MS = 10_000;
 const MAX_LINES = 2000;
@@ -421,5 +422,26 @@ describe("the skill tool in the front desk", () => {
         assert.equal(seen?.isError, false);
         assert.match(seen?.text ?? "", /^---\nname: about-the-intern\n/);
         assert.match(seen?.text ?? "", /What the intern is\./);
+    });
+});
+
+describe("the files.read operation on an enabled skill's file", () => {
+    let rig: SkillsRig | undefined;
+
+    afterEach(async () => {
+        await rig?.stop();
+        rig = undefined;
+    });
+
+    it("refuses a SKILL.md that is a symbolic link to /etc/passwd", async () => {
+        rig = await startSkillsRig();
+        const file = join(rig.dirs.dataDir, "skills/carry-out-a-part/SKILL.md");
+        await rm(file);
+        await symlink("/etc/passwd", file);
+
+        await assert.rejects(
+            rig.invoke("files.read", { path: file }),
+            (error: unknown) => (error as { code?: string }).code === "invalid_input",
+        );
     });
 });
