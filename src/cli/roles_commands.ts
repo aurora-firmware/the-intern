@@ -1,7 +1,8 @@
 /**
  * The `bob roles`, `bob workspaces` and `bob models` groups (S-005 REQ-012): each command calls the role, workspace or
  * model operation of S-002 with the arguments given and prints the answer. The service validates every name and path,
- * so a refusal is printed as the service gives it; `roles show` is the one refusal `bob` makes itself, since no
+ * so a refusal is printed as the service gives it; an unknown role is the one refusal `bob` makes itself (`roles show`, and
+ * `roles change` with instructions, which reads the role for its version token), since no
  * operation reads one role. Imports no daemon code.
  */
 import type { Client } from "../client/client.ts";
@@ -74,7 +75,11 @@ function roleFieldsOf(input: CommandInput): Record<string, unknown> {
 }
 
 // What roles.list returns: the catalog's role with the text of its instruction file, absent when the file is missing.
-type ListedRole = CatalogRole & { instructions?: string };
+type ListedRole = CatalogRole & {
+    instructions?: string;
+    instructionsVersion?: string;
+    instructionsMissing?: true;
+};
 
 function formatRoleLine(role: ListedRole): string {
     const origin = role.shipped ? (role.changed ? "shipped, changed" : "shipped") : "team";
@@ -96,12 +101,20 @@ function formatRole(role: ListedRole): string[] {
         `  Workspace: ${flat(role.workspace ?? "role default")}`,
         `  Tools: ${flat(role.tools.join(", ")) || NOTHING}`,
         `  Skills: ${flat(role.skills.join(", ")) || NOTHING}`,
+        ...(role.instructionsMissing === true ? ["  Instructions: missing"] : []),
         ...(role.instructions === undefined ? [] : formatInstructions(role.instructions)),
     ];
 }
 
 async function listedRoles(client: Client): Promise<ListedRole[]> {
     return ((await client.invoke("roles.list", {})) as { roles: ListedRole[] }).roles;
+}
+
+// The role of that name; an unknown name is refused here, since no operation reads one role.
+async function requireListedRole(client: Client, input: CommandInput, name: string): Promise<ListedRole | undefined> {
+    const role = (await listedRoles(client)).find((candidate) => candidate.name === name);
+    if (role === undefined) writeError(input.io, `There is no role named "${name}".`);
+    return role;
 }
 
 const rolesList = serviceCommand(
@@ -120,11 +133,8 @@ const rolesShow = serviceCommand(
     { verb: "show", summary: "Show one role.", positionals: [namePositional] },
     async (client, input) => {
         const [name] = input.positionals;
-        const role = (await listedRoles(client)).find((candidate) => candidate.name === name);
-        if (role === undefined) {
-            writeError(input.io, `There is no role named "${name}".`);
-            return EXIT_CODES.refused;
-        }
+        const role = await requireListedRole(client, input, name as string);
+        if (role === undefined) return EXIT_CODES.refused;
         if (input.json) writeJson(input.io, role);
         else for (const line of formatRole(role)) writeLine(input.io, line);
         return EXIT_CODES.ok;
@@ -146,7 +156,14 @@ const rolesChange = serviceCommand(
     { verb: "change", summary: "Change a role.", positionals: [namePositional], options: ROLE_FIELD_OPTIONS },
     async (client, input) => {
         const [name] = input.positionals;
-        const answer = await client.invoke("roles.change", { name, ...roleFieldsOf(input) });
+        const fields = roleFieldsOf(input);
+        if (fields.instructions !== undefined) {
+            // roles.change writes instructions only with the version of the file as it was read.
+            const role = await requireListedRole(client, input, name as string);
+            if (role === undefined) return EXIT_CODES.refused;
+            if (role.instructionsVersion !== undefined) fields.instructionsVersion = role.instructionsVersion;
+        }
+        const answer = await client.invoke("roles.change", { name, ...fields });
         return printAnswer(input, answer, `${name} changed`);
     },
 );

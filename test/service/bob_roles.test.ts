@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer, request } from "node:http";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { localSocketPath } from "../../src/daemon/state_layout.ts";
 import { runBob } from "../support/bob_process.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
@@ -15,8 +17,10 @@ type RoleView = { name: string; instructions: string; tools: string[]; workspace
 
 const envs: HermeticEnv[] = [];
 const daemons: DaemonProcess[] = [];
+const closers: (() => Promise<void>)[] = [];
 
 afterEach(async () => {
+    for (const close of closers.splice(0)) await close();
     for (const daemon of daemons.splice(0)) {
         daemon.kill9();
         await daemon.exited;
@@ -31,6 +35,29 @@ async function readyDaemon(): Promise<Fixture> {
     daemons.push(daemon);
     await daemon.ready;
     return { env, daemon };
+}
+
+const roleFile = (fixture: Fixture, name: string) => join(fixture.env.dataDir, "instructions", "roles", `${name}.md`);
+
+// Answers `bob` from a socket of its own and forwards each call to the daemon; once the daemon has answered the
+// call of `operation`, `afterAnswer` runs before the answer is passed on, so a test can act between two calls of `bob`.
+async function proxyFor(fixture: Fixture, operation: string, afterAnswer: () => Promise<void>): Promise<string> {
+    const runtimeDir = await ownerOnlyFolder(fixture, "proxy-runtime");
+    const upstream = localSocketPath(fixture.env.runtimeDir);
+    const server = createServer((req, res) => {
+        const forwarded = request({ socketPath: upstream, method: req.method, path: req.url, headers: req.headers });
+        forwarded.on("response", async (answer) => {
+            const chunks: Buffer[] = [];
+            for await (const chunk of answer) chunks.push(chunk as Buffer);
+            if (req.url?.endsWith(`/${operation}`)) await afterAnswer();
+            res.writeHead(answer.statusCode ?? 502, answer.headers);
+            res.end(Buffer.concat(chunks));
+        });
+        req.pipe(forwarded);
+    });
+    await new Promise<void>((resolve) => server.listen(localSocketPath(runtimeDir), resolve));
+    closers.push(() => new Promise((resolve) => server.close(() => resolve())));
+    return runtimeDir;
 }
 
 const bob = (fixture: Fixture, args: string[]) =>
@@ -161,5 +188,54 @@ describe("bob roles, workspaces and models", () => {
 
         assert.equal(status, 0);
         assert.equal(stderr, "");
+    });
+
+    it("changes the instructions file and exits 0 when roles change gives instructions", async () => {
+        const fixture = await readyDaemon();
+        await bob(fixture, ["roles", "create", "scout", "--instructions", "Look things up."]);
+
+        const changed = await bob(fixture, ["roles", "change", "scout", "--instructions", "Look harder."]);
+
+        assert.equal(changed.status, 0, changed.stderr);
+        assert.equal(await readFile(roleFile(fixture, "scout"), "utf8"), "Look harder.");
+    });
+
+    it("exits 1 with the conflict refusal and keeps the hand edit when the file changes after the token is read", async () => {
+        const fixture = await readyDaemon();
+        await bob(fixture, ["roles", "create", "scout", "--instructions", "Look things up."]);
+        const runtimeDir = await proxyFor(fixture, "roles.list", () =>
+            writeFile(roleFile(fixture, "scout"), "Edited by hand."),
+        );
+
+        const changed = await runBob(["roles", "change", "scout", "--instructions", "Look harder."], {
+            runtimeDir,
+            env: fixture.env.env,
+        });
+
+        assert.equal(changed.status, 1);
+        assert.equal(changed.stdout, "");
+        assert.match(changed.stderr, /scout\.md/);
+        assert.equal(await readFile(roleFile(fixture, "scout"), "utf8"), "Edited by hand.");
+    });
+
+    it("exits 1 naming the role when roles change with instructions names an unknown role", async () => {
+        const fixture = await readyDaemon();
+
+        const changed = await bob(fixture, ["roles", "change", "nobody", "--instructions", "Work."]);
+
+        assert.equal(changed.status, 1);
+        assert.equal(changed.stdout, "");
+        assert.match(changed.stderr, /nobody/);
+    });
+
+    it("prints that the instructions are missing when roles show names a role whose file is gone", async () => {
+        const fixture = await readyDaemon();
+        await bob(fixture, ["roles", "create", "scout", "--instructions", "Look things up."]);
+        await rm(roleFile(fixture, "scout"));
+
+        const shown = await bob(fixture, ["roles", "show", "scout"]);
+
+        assert.equal(shown.status, 0, shown.stderr);
+        assert.match(shown.stdout, /Instructions: missing/);
     });
 });
