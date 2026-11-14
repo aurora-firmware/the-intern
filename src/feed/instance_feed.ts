@@ -63,7 +63,7 @@ function factsOf(meta: ConversationMeta): ConversationFacts {
         jobId: meta.jobId,
         isLead: meta.isLead,
         seat: { role, model, ...(thinkingLevel !== undefined && { thinkingLevel }), workspace },
-        enabledSkills: [...(meta.enabledSkills ?? meta.seat.skills ?? [])],
+        enabledSkills: [...(meta.enabledSkills ?? [])],
         isParked: meta.parked !== null,
         isClosed: meta.closed === true,
     };

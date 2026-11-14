@@ -22,7 +22,7 @@ export type ConversationListing = {
     isLead: boolean;
     isFrontDesk: boolean;
     seat: SeatSummary | null;
-    /** The skill names enabled for the agent; a document with no set of its own shows its seat's stored defaults. */
+    /** The skill names enabled for the agent; a document with no set of its own shows an empty set (ADR-001 decision 4). */
     enabledSkills: string[];
     origin: Origin | null;
     status: ConversationStatus;
@@ -71,7 +71,7 @@ async function listingOf(
         isLead: meta?.isLead ?? false,
         isFrontDesk: meta?.origin.kind === "front_desk",
         seat: meta === undefined ? null : summarizeSeat(meta.seat),
-        enabledSkills: [...(meta?.enabledSkills ?? meta?.seat.skills ?? [])],
+        enabledSkills: [...(meta?.enabledSkills ?? [])],
         origin: meta?.origin ?? null,
         status,
         lastActivity: await lastActivityOf(host, info.id),

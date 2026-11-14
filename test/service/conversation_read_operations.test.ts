@@ -15,11 +15,13 @@ import {
     submitInput,
     waitForSubmission,
 } from "../../src/host/conversation_control.ts";
+import { toConversationId } from "../../src/host/conversation_id.ts";
 import { type HarnessHost, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import { abortJobConversations, createInvokedConversations, parkConversation } from "../../src/host/invocation.ts";
 import { REPORT_KIND, type ReportRecord } from "../../src/host/reports.ts";
 import {
     changeSeat,
+    conversationMetaDoc,
     createSeatedConversation,
     type JobLinks,
     resetWithSeat,
@@ -412,6 +414,15 @@ describe("conversations.list job fields", () => {
     });
 });
 
+// Leaves the document as one written before S-008: no enabled set, and a stored seat that still lists skills.
+async function leaveWithoutEnabledSet(host: HarnessHost, conversationId: string): Promise<void> {
+    await internalHarness(host).commit(async (tx) => {
+        const meta = await tx.doc(conversationMetaDoc, toConversationId(conversationId));
+        delete meta.enabledSkills;
+        meta.seat.skills = ["older-seat-skill"];
+    }, BACKGROUND_CONTEXT);
+}
+
 describe("conversations.list and conversations.get return the enabled set", () => {
     it("returns each conversation's enabled set from list and get", async () => {
         const fixture = await openFixture();
@@ -425,6 +436,18 @@ describe("conversations.list and conversations.get return the enabled set", () =
         assert.deepEqual(listed.find((listing) => listing.id === plain)?.enabledSkills, ["audit"]);
         assert.deepEqual(listed.find((listing) => listing.id === changed)?.enabledSkills, ["audit", "review"]);
         assert.deepEqual(got.enabledSkills, ["audit", "review"]);
+    });
+
+    it("returns an empty set from list and get for a seated document without an enabled set", async () => {
+        const fixture = await openFixture();
+        const id = await fixture.seated({}, fixture.seatOf("developer", { skills: ["audit"] }));
+        await leaveWithoutEnabledSet(fixture.host, id);
+
+        const listed = (await fixture.call("conversations.list")) as Listing[];
+        const got = (await fixture.call("conversations.get", { conversationId: id })) as Listing;
+
+        assert.deepEqual(listed.find((listing) => listing.id === id)?.enabledSkills, []);
+        assert.deepEqual(got.enabledSkills, []);
     });
 
     it("returns an empty set for a conversation without the intern document", async () => {
