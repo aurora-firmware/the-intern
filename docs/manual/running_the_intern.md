@@ -47,10 +47,22 @@ The Intern uses four directories, each in a folder named `the-intern`:
 | --------- | ---------------------------------------- | ------------------------------------------------------- |
 | config    | `config.toml`                            | `$XDG_CONFIG_HOME/the-intern`, else `~/.config/the-intern` |
 | state     | the database, `the-intern.sqlite`        | `$XDG_STATE_HOME/the-intern`, else `~/.local/state/the-intern` |
-| data      | the default workspaces of your roles     | `$XDG_DATA_HOME/the-intern`, else `~/.local/share/the-intern` |
-| runtime   | the socket's directory                   | `$XDG_RUNTIME_DIR/the-intern`, else the `run` folder inside the state directory |
+| data      | the default workspaces of your roles, the internal folder and `shipped-files.json` | `$XDG_DATA_HOME/the-intern`, else `~/.local/share/the-intern` |
+| runtime   | the socket's directory and the `bob` launcher in `bin` | `$XDG_RUNTIME_DIR/the-intern`, else the `run` folder inside the state directory |
 
 The runtime fallback matters on macOS and under launchd, which don't set `XDG_RUNTIME_DIR`.
+
+The data directory holds more than workspaces:
+
+- **The internal folder.** The text The Intern ships, in `instructions/` and `skills/`: the common prompt, each role's
+  instructions and the shipped skills. You read and edit these files in place. See
+  [Skills and instructions](skills_and_instructions.md#the-internal-folder).
+- **`shipped-files.json`.** The service's record of the shipped files it last copied. It decides which files you edited.
+  Don't edit, move or delete it. See [The record of shipped files](skills_and_instructions.md#the-record-of-shipped-files).
+
+The runtime directory holds `bin/bob`, a launcher that the service writes at every start. An agent's `bash` tool finds
+it first on `PATH`, so the `bob` an agent runs is the version of the running service and reaches this instance. Only
+the service account can use it.
 
 The service creates a missing directory that only its account can use. If a directory exists but isn't a directory,
 belongs to another account, or is open to the group or others, the service refuses to start and names the path and the
@@ -73,7 +85,11 @@ The network listener also serves the same copy as a download: `GET /export` answ
   saves is on the client's machine, and it isn't owner-only there.
 
 - The copy holds the jobs, their worklogs and histories, and the conversations and queued work, as committed when the
-  copy started. It doesn't hold `config.toml`, so back that up on its own.
+  copy started. It doesn't hold `config.toml`, so back that up on its own. That includes the `[skills]` search paths,
+  the roles and the registered workspaces, which live in the file. It doesn't hold the internal folder either: the
+  common prompt, the role instruction files, the shipped skills and `shipped-files.json` stay in the data directory.
+  Back up the data directory's `instructions` and `skills` folders and `shipped-files.json` together, if you want to
+  keep your edits.
 - The copy is readable only by the service account, and it never exists under its final name with wider access, not
   even while it is written.
 - Running agents carry on. A write that arrives during the copy waits for it to finish.
