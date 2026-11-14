@@ -38,9 +38,7 @@ describe("skillRows", () => {
                 }),
             ]),
         );
-        assert.deepEqual(rows.skills[0]?.shadowed, [
-            { sourceText: "internal", path: "/other/code-review/SKILL.md" },
-        ]);
+        assert.deepEqual(rows.skills[0]?.shadowed, [{ sourceText: "internal", path: "/other/code-review/SKILL.md" }]);
     });
 
     it("shows a workspace skill checked and not changeable", () => {
@@ -53,7 +51,10 @@ describe("skillRows", () => {
 
     it("shows other skills with a check box that follows enabled and can change", () => {
         const [on, off] = skillRows(list([skill({ enabled: true }), skill({ name: "x", enabled: false })])).skills;
-        assert.deepEqual([on?.isChecked, on?.isChangeable, off?.isChecked, off?.isChangeable], [true, true, false, true]);
+        assert.deepEqual(
+            [on?.isChecked, on?.isChangeable, off?.isChecked, off?.isChangeable],
+            [true, true, false, true],
+        );
     });
 
     it("carries name, description, source text and path", () => {
@@ -94,7 +95,11 @@ describe("instructionRows", () => {
 });
 
 describe("panelReloadNeeded", () => {
-    const skills = (conversationId: string): PanelDelta => ({ type: "skills_changed", conversationId, enabledSkills: [] });
+    const skills = (conversationId: string): PanelDelta => ({
+        type: "skills_changed",
+        conversationId,
+        enabledSkills: [],
+    });
 
     it("asks for a reload on a skills_changed delta of the panel's conversation", () => {
         assert.equal(panelReloadNeeded(skills("c1"), "c1"), true);
