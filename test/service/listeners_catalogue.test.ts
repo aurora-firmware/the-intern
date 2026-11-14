@@ -373,6 +373,17 @@ const INPUT_BUILDERS: Record<string, InputBuilder> = {
     "roles.list": async () => ({ input: {} }),
     "workspaces.list": async () => ({ input: {} }),
     "skills.list": async () => ({ input: { role: "gp" } }),
+    "skills.enable": async (fixture, _seed, way) => {
+        const name = `enabling-${label(way)}`;
+        await fixture.invoke("roles.create", { name, instructions: "Before.", tools: ["read"], skills: [] });
+        return { input: { name: "carry-out-a-part", role: name }, names: [name] };
+    },
+    "skills.disable": async (fixture, _seed, way) => {
+        const name = `disabling-${label(way)}`;
+        const skills = ["carry-out-a-part"];
+        await fixture.invoke("roles.create", { name, instructions: "Before.", tools: ["read"], skills });
+        return { input: { name: "carry-out-a-part", role: name }, names: [name] };
+    },
     "conversations.submit": async (fixture, _seed, way) => {
         const conversationId = await fixture.settledConversation(`submit-${label(way)}`);
         return { input: { conversationId, content: "more", requestId: "more" } };

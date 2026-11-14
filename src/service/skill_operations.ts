@@ -2,9 +2,15 @@
  * The skills operations (S-008 REQ-009): `skills.list` reads the catalog a role or a seated agent sees, with each
  * skill's source, whether it is enabled, the copies it shadows, and the skills left out. It returns no file text.
  */
+
+import { isDeepStrictEqual } from "node:util";
+import { ConfigChangeRefused } from "../config/config_writer.ts";
 import type { ServiceContext } from "../daemon/daemon.ts";
 import { readConversationMeta } from "../host/seating.ts";
+import { RoleRefusedError } from "../roles/role_catalog.ts";
 import type { Seat } from "../roles/role_model.ts";
+import { type RolesConfig, rolesSection } from "../roles/roles_section.ts";
+import { SHIPPED_ROLE_NAMES } from "../roles/shipped_roles.ts";
 import { readCatalog } from "../skills/skill_discovery.ts";
 import { type CatalogSkill, enabledSkillsOf, type SkillSource } from "../skills/skill_resolution.ts";
 import type { SkillsComponent } from "../skills/skills_component.ts";
@@ -13,6 +19,8 @@ import { roleWorkspacePath } from "../workspaces/workspace_folder.ts";
 import { defineOperation, type Operation, ServiceError } from "./operations.ts";
 
 type ListInput = { role: string } | { conversation: string };
+
+type ChangeInput = { name: string; role: string };
 
 type ListedSkill = {
     name: string;
@@ -48,6 +56,31 @@ function parseList(raw: unknown): ListInput {
     }
     return { conversation };
 }
+
+function parseChange(raw: unknown): ChangeInput {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("input must be an object");
+    const { name, role } = raw as Record<string, unknown>;
+    if (typeof name !== "string" || name === "") throw new Error("name must be a non-empty string");
+    if (typeof role !== "string" || role === "") throw new Error("role must be a non-empty string");
+    return { name, role };
+}
+
+const isShippedRole = (role: string): boolean => (SHIPPED_ROLE_NAMES as readonly string[]).includes(role);
+
+/** The roles section with the role's skills replaced; a shipped role's change keeps its other changed settings. */
+function withRoleSkills(current: RolesConfig, role: string, skills: string[]): RolesConfig {
+    if (isShippedRole(role)) {
+        return {
+            ...current,
+            shippedChanges: { ...current.shippedChanges, [role]: { ...current.shippedChanges[role], skills } },
+        };
+    }
+    const team = current.teamRoles[role];
+    if (team === undefined) throw new ServiceError("not_found", `There is no role ${role}`);
+    return { ...current, teamRoles: { ...current.teamRoles, [role]: { ...team, skills } } };
+}
+
+const refusalCodes = { invalid: "invalid_input", conflict: "conflict", write_failed: "internal" } as const;
 
 function listedSkill(skill: CatalogSkill, enabled: boolean): ListedSkill {
     return {
@@ -124,7 +157,64 @@ export function skillOperations(component: SkillsComponent) {
         },
     });
 
+    /** Writes the role's new list through one `ConfigStore.update`; a list that stays the same writes nothing. */
+    const changeRoleSkills = async (
+        { config }: ServiceContext,
+        role: string,
+        change: (skills: readonly string[]) => string[],
+    ): Promise<{ enabledSkills: string[] }> => {
+        const unchanged = Symbol("unchanged");
+        let enabledSkills: string[] = [];
+        try {
+            await config.update(rolesSection, (current) => {
+                const found = component.agentsRuntime().catalog.get(role);
+                if (found === undefined) throw new ServiceError("not_found", `There is no role ${role}`);
+                const next = change(found.skills);
+                enabledSkills = next;
+                if (isDeepStrictEqual(next, found.skills)) throw unchanged;
+                return withRoleSkills(current, role, next);
+            });
+        } catch (error) {
+            if (error !== unchanged) {
+                if (error instanceof ConfigChangeRefused)
+                    throw new ServiceError(refusalCodes[error.kind], error.message);
+                if (error instanceof RoleRefusedError) throw new ServiceError("invalid_input", error.message);
+                throw error;
+            }
+        }
+        return { enabledSkills };
+    };
+
+    const enableOperation = defineOperation<ServiceContext, ChangeInput, { enabledSkills: string[] }>({
+        name: "skills.enable",
+        kind: "control",
+        parse: parseChange,
+        async run(ctx, { name, role }) {
+            const target = roleTarget(role);
+            const catalog = await readCatalog({
+                dataDir: component.dataDir(),
+                shippedRoot: component.shippedRoot,
+                searchPaths: ctx.config.current(skillsSection).paths,
+                workspace: target.workspace,
+            });
+            if (!catalog.skills.some((skill) => skill.name === name)) {
+                throw new ServiceError("not_found", `The catalog of role ${role} holds no skill ${name}`);
+            }
+            return changeRoleSkills(ctx, role, (skills) => (skills.includes(name) ? [...skills] : [...skills, name]));
+        },
+    });
+
+    const disableOperation = defineOperation<ServiceContext, ChangeInput, { enabledSkills: string[] }>({
+        name: "skills.disable",
+        kind: "control",
+        parse: parseChange,
+        async run(ctx, { name, role }) {
+            roleTarget(role);
+            return changeRoleSkills(ctx, role, (skills) => skills.filter((skill) => skill !== name));
+        },
+    });
+
     // biome-ignore lint/suspicious/noExplicitAny: heterogeneous operations cannot share a narrower type
-    const operations: Operation<ServiceContext, any, any>[] = [listOperation];
+    const operations: Operation<ServiceContext, any, any>[] = [listOperation, enableOperation, disableOperation];
     return operations;
 }
