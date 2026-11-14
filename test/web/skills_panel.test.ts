@@ -1,5 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, describe, it, type TestContext } from "node:test";
 import type { Page } from "playwright-core";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
@@ -48,7 +48,7 @@ const enabledOf = async (rig: Rig, name: string): Promise<boolean | undefined> =
         (skill) => skill.name === name,
     )?.enabled;
 
-async function openPanel(t: Parameters<NonNullable<Parameters<typeof it>[1]>>[0], rig: Rig) {
+async function openPanel(t: TestContext, rig: Rig) {
     const browser = await launchBrowser(t, "chrome");
     if (browser === undefined) return undefined;
     const page = await browser.newPage();
@@ -81,7 +81,9 @@ describe("the Skills panel on the Job page in chrome", () => {
         t.assert.equal(await enabledOf(rig, SKILL), true);
     });
 
-    it("shows a skill enabled elsewhere in the open panel without a reload", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+    it("shows a skill enabled elsewhere in the open panel without a reload", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
         const rig = await startRig();
         const page = await openPanel(t, rig);
         if (page === undefined) return;

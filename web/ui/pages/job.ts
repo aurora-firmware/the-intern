@@ -23,6 +23,7 @@ import {
     type WorklogEntry,
 } from "../components/job_record.ts";
 import { refusalText } from "../components/refusal.ts";
+import { ConversationSkills } from "../components/skills_panel.ts";
 import { type FeedConnection, pageClient } from "../feed_connection.ts";
 
 type JobDeltaLike = { type: string; number?: string; numbers?: string[]; entry?: WorklogEntry };
@@ -200,6 +201,7 @@ export const JobPage = ({ feed, number }: { feed: FeedConnection | null | undefi
                                       conversationId === view.record.leadConversation,
                               }),
                               h(ConversationSettings, { conversationId }),
+                              h(ConversationSkills, { conversationId, feed }),
                           ),
                   }),
                   h(Entries, {
