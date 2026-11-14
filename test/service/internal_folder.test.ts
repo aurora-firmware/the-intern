@@ -7,6 +7,7 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import { DEFAULT_SHIPPED_ROOT } from "../../src/skills/internal_folder.ts";
 import { createSkillsComponent } from "../../src/skills/skills_component.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { startSkillsRig } from "../support/skills_rig.ts";
 
 const WAIT_TIMEOUT_MS = 10_000;
 const POLL_INTERVAL_MS = 10;
@@ -158,5 +159,29 @@ describe("the internal folder at startup", () => {
         });
 
         assert.equal(skills.dataDir(), env.dataDir);
+    });
+});
+
+describe("instructions.list after a restart", () => {
+    it("marks an edited shipped role file as edited and leaves the common prompt unmarked", async () => {
+        const rig = await startSkillsRig();
+        try {
+            await writeFile(join(rig.dirs.dataDir, "instructions/roles/bob.md"), "edited bob\n");
+
+            await rig.restart();
+
+            const { files } = (await rig.invoke("instructions.list", { role: "bob" })) as {
+                files: { kind: string; edited: boolean }[];
+            };
+            assert.deepEqual(
+                files.filter(({ kind }) => kind !== "workspace").map(({ kind, edited }) => ({ kind, edited })),
+                [
+                    { kind: "common", edited: false },
+                    { kind: "role", edited: true },
+                ],
+            );
+        } finally {
+            await rig.stop();
+        }
     });
 });
