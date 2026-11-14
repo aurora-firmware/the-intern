@@ -671,6 +671,36 @@ describe("catalogue through both listeners", () => {
     });
 });
 
+describe("attribution of S-008 control operations through both listeners", () => {
+    it("records skills.enable and skills.disable of a conversation with the team member and the way in of each listener", async () => {
+        const fixture = await startFixture();
+        const wayIns = { "local socket": "command line", "network listener": "web interface" } as const;
+
+        for (const way of LISTENERS) {
+            const conversationId = await fixture.settledConversation(`attribution-${label(way)}`);
+            const change = { name: "carry-out-a-part", conversation: conversationId };
+            for (const name of ["skills.enable", "skills.disable"]) {
+                const outcome = await fixture.call(way, name, change);
+                assert.equal(outcome.status, 200, `${name} over the ${way}: ${JSON.stringify(outcome.body)}`);
+            }
+
+            const { entries } = (await fixture.invoke("conversations.entries", { conversationId, limit: 500 })) as {
+                entries: { kind: string; data: { actor: { kind: string; wayIn: string }; change: string } }[];
+            };
+            const recorded = entries.filter((entry) => entry.kind === "intern.skills");
+            assert.deepEqual(
+                recorded.map((entry) => entry.data.change),
+                ["enabled", "disabled"],
+                `the changes over the ${way}`,
+            );
+            for (const { data } of recorded) {
+                assert.equal(data.actor.kind, "team_member", `the actor over the ${way}`);
+                assert.equal(data.actor.wayIn, wayIns[way], `the way in over the ${way}`);
+            }
+        }
+    });
+});
+
 type HeldStop = { component: DaemonComponent; entered: Promise<void>; release(): void };
 
 /** A component placed after the listeners: components stop in reverse, so the listeners stay open while it is held. */
@@ -726,6 +756,31 @@ describe("error outcomes through both listeners", () => {
         await assertErrorThroughListeners(callEach("conversations.submit", rejectIfBusy), "busy");
         const sameName = () => ({ name: "gp", instructions: "Another gp.", tools: [], skills: [] });
         await assertErrorThroughListeners(callEach("roles.create", sameName), "conflict");
+    });
+
+    it("refuses invalid input to each S-008 operation the same way through both listeners", async () => {
+        const fixture = await startFixture();
+        const invalidInputs: [string, unknown][] = [
+            ["skills.list", {}],
+            ["skills.list", { role: "gp", conversation: "1" }],
+            ["instructions.list", {}],
+            ["skills.enable", {}],
+            ["skills.enable", { name: "carry-out-a-part" }],
+            ["skills.disable", { role: "gp" }],
+            ["skills.disable", { name: "carry-out-a-part", role: "gp", conversation: "1" }],
+            ["skills.paths.add", {}],
+            ["skills.paths.remove", { path: "" }],
+            ["skills.restore", {}],
+            ["instructions.restore", { name: 7 }],
+            ["files.read", {}],
+            ["files.read", { path: "relative/common.md" }],
+            ["files.write", { path: join(fixture.env.dataDir, "instructions/common.md") }],
+            ["files.write", { path: "relative/common.md", text: "x", version: "v" }],
+        ];
+
+        for (const [name, input] of invalidInputs) {
+            await assertErrorThroughListeners((way) => fixture.call(way, name, input), "invalid_input");
+        }
     });
 
     it("answers 503 unavailable while the daemon is stopping", async () => {
