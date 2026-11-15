@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer, request } from "node:http";
+import { createServer, type RequestListener, request } from "node:http";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { localSocketPath } from "../../src/daemon/state_layout.ts";
@@ -41,11 +41,19 @@ const roleFile = (fixture: Fixture, name: string) => join(fixture.env.dataDir, "
 
 // Answers `bob` from a socket of its own and forwards each call to the daemon; once the daemon has answered the
 // call of `operation`, `afterAnswer` runs before the answer is passed on, so a test can act between two calls of `bob`.
-async function proxyFor(fixture: Fixture, operation: string, afterAnswer: () => Promise<void>): Promise<string> {
+async function proxyFor(
+    fixture: Fixture,
+    operation: string,
+    afterAnswer: () => Promise<void>,
+    upstream = localSocketPath(fixture.env.runtimeDir),
+): Promise<string> {
     const runtimeDir = await ownerOnlyFolder(fixture, "proxy-runtime");
-    const upstream = localSocketPath(fixture.env.runtimeDir);
     const server = createServer((req, res) => {
         const forwarded = request({ socketPath: upstream, method: req.method, path: req.url, headers: req.headers });
+        forwarded.on("error", (error) => {
+            res.writeHead(502);
+            res.end(`proxy could not forward ${req.url} to the daemon: ${error.message}`);
+        });
         forwarded.on("response", async (answer) => {
             const chunks: Buffer[] = [];
             for await (const chunk of answer) chunks.push(chunk as Buffer);
@@ -53,11 +61,34 @@ async function proxyFor(fixture: Fixture, operation: string, afterAnswer: () => 
             res.writeHead(answer.statusCode ?? 502, answer.headers);
             res.end(Buffer.concat(chunks));
         });
-        req.pipe(forwarded);
+        // The whole request goes out in one write: piping it in pieces failed with EPIPE on a loaded machine.
+        const body: Buffer[] = [];
+        req.on("data", (chunk) => body.push(chunk));
+        req.on("end", () => forwarded.end(Buffer.concat(body)));
     });
     await new Promise<void>((resolve) => server.listen(localSocketPath(runtimeDir), resolve));
     closers.push(() => new Promise((resolve) => server.close(() => resolve())));
     return runtimeDir;
+}
+
+// A stand-in for the daemon on a socket of its own; `onRequest` answers each call.
+async function stubDaemon(fixture: Fixture, onRequest: RequestListener): Promise<string> {
+    const runtimeDir = await ownerOnlyFolder(fixture, "stub-runtime");
+    const server = createServer(onRequest);
+    await new Promise<void>((resolve) => server.listen(localSocketPath(runtimeDir), resolve));
+    closers.push(() => new Promise((resolve) => server.close(() => resolve())));
+    return localSocketPath(runtimeDir);
+}
+
+function statusThrough(runtimeDir: string, path: string): Promise<number | undefined> {
+    return new Promise((resolve, reject) => {
+        const call = request({ socketPath: localSocketPath(runtimeDir), path, agent: false }, (answer) => {
+            answer.resume();
+            resolve(answer.statusCode);
+        });
+        call.on("error", reject);
+        call.end();
+    });
 }
 
 const bob = (fixture: Fixture, args: string[]) =>
@@ -237,5 +268,17 @@ describe("bob roles, workspaces and models", () => {
 
         assert.equal(shown.status, 0, shown.stderr);
         assert.match(shown.stdout, /Instructions: missing/);
+    });
+});
+
+describe("the proxy of the bob roles tests", () => {
+    it("answers 502 when the daemon drops the connection instead of leaving the call waiting", async () => {
+        const fixture = await readyDaemon();
+        const stub = await stubDaemon(fixture, (req) => req.socket.destroy());
+        const runtimeDir = await proxyFor(fixture, "roles.list", async () => {}, stub);
+
+        const status = await statusThrough(runtimeDir, "/first");
+
+        assert.equal(status, 502);
     });
 });
