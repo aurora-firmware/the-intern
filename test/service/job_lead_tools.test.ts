@@ -557,6 +557,7 @@ describe("block_job", () => {
         const job = await started.createJob("third email", emailCaller);
         assert.equal(job.number, "E-3");
         const other = await started.createJob("other job");
+        await waitFor(async () => (await started.status(job.id)) === "blocked", "the third job to be Blocked");
         await waitFor(() => started.isIdle(other.leadConversation), "the other job's lead to run");
 
         const stored = await started.ctx.jobStore.getJob(job.id);
