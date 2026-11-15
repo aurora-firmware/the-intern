@@ -9,7 +9,6 @@ const ROLE_NAME_PATTERN = /^[a-z][a-z0-9-]{0,39}$/;
 
 export type RoleDefinition = {
     name: string;
-    instructions: string;
     tools: string[];
     skills: string[];
     model?: string;
@@ -24,7 +23,8 @@ export type Seat = {
     model: string;
     thinkingLevel?: string;
     workspace: string;
-    instructions: string;
+    /** Only a document written before S-008 holds it; the prompt reads the role's file by name and no reader uses this. */
+    instructions?: string;
     tools: string[];
     skills: string[];
 };
@@ -52,20 +52,19 @@ const isKnownTool = (tool: string): boolean =>
     (COORDINATION_TOOL_NAMES as readonly string[]).includes(tool) ||
     (JOB_TOOL_NAMES as readonly string[]).includes(tool);
 
+export const isSkillName = (skill: string): boolean => skill !== "" && !skill.includes("/");
+
 export const validateRoleDefinition = (role: RoleDefinition): void => {
     if (!ROLE_NAME_PATTERN.test(role.name)) {
         throw new RoleInvalidError(role.name, "name", `"${role.name}" does not match ${ROLE_NAME_PATTERN}`);
-    }
-    if (role.instructions.trim() === "") {
-        throw new RoleInvalidError(role.name, "instructions", "instructions are empty");
     }
     const unknownTool = role.tools.find((tool) => !isKnownTool(tool));
     if (unknownTool !== undefined) {
         throw new RoleInvalidError(role.name, "tools", `"${unknownTool}" is not a shipped, coordination or job tool`);
     }
-    const relativeSkill = role.skills.find((skill) => !isAbsolute(skill));
-    if (relativeSkill !== undefined) {
-        throw new RoleInvalidError(role.name, "skills", `skill path "${relativeSkill}" is not absolute`);
+    const badSkill = role.skills.find((skill) => !isSkillName(skill));
+    if (badSkill !== undefined) {
+        throw new RoleInvalidError(role.name, "skills", `skill name "${badSkill}" is empty or holds "/"`);
     }
     if (role.workspace !== undefined && !isAbsolute(role.workspace)) {
         throw new RoleInvalidError(role.name, "workspace", `workspace path "${role.workspace}" is not absolute`);
@@ -74,8 +73,13 @@ export const validateRoleDefinition = (role: RoleDefinition): void => {
 
 export const applyRoleChange = (base: RoleDefinition, change: RoleChange): RoleDefinition => ({ ...base, ...change });
 
-const placeTools = (place: SeatPlace): readonly string[] =>
-    place === "front_desk" ? FRONT_DESK_TOOL_NAMES : [...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES];
+// Every seat is offered `skill`, whatever the role's tools are (S-008 REQ-008).
+export const SKILL_TOOL_NAME = "skill";
+
+const placeTools = (place: SeatPlace): readonly string[] => [
+    ...(place === "front_desk" ? FRONT_DESK_TOOL_NAMES : [...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES]),
+    SKILL_TOOL_NAME,
+];
 
 export const resolveSeat = (
     role: RoleDefinition,
@@ -92,7 +96,6 @@ export const resolveSeat = (
         model,
         thinkingLevel: overrides.thinkingLevel ?? role.thinkingLevel ?? defaults.thinkingLevel,
         workspace: overrides.workspace ?? role.workspace ?? defaults.workspace,
-        instructions: role.instructions,
         tools: [...new Set([...role.tools, ...placeTools(place)])],
         skills: [...role.skills],
     };

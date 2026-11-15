@@ -224,8 +224,34 @@ describe("scoped idempotency", () => {
 });
 
 describe("job store schedule runs", () => {
-    it("is at schema version 4", () => {
-        assert.equal(JOB_SCHEMA_VERSION, 4);
+    it("is at schema version 5", () => {
+        assert.equal(JOB_SCHEMA_VERSION, 5);
+    });
+
+    it("orders the local-offset runs and UTC skips of a version 4 file by instant after migrating", async () => {
+        const db = await openDb();
+        for (const migration of JOB_MIGRATIONS.slice(0, 4)) await db.exec(migration);
+        await db.run("INSERT INTO intern_schema (id, version) VALUES (1, 4)");
+        const insert = `INSERT INTO intern_jobs (id, letter, n, title, description, definition_of_done, status,
+            request_text, origin, lead_start, schedule_entry, schedule_fired_at, created_at, updated_at)
+            VALUES (?, 'S', ?, '', '', '', 'cancelled', 'r', '{}', '{}', 'e', ?, 'c', 'u')`;
+        await db.run(insert, "older", 1, "2026-11-08T01:01:00.000+01:00");
+        await db.run(insert, "newer", 2, "2026-11-08T01:04:00.000+01:00");
+        await db.run("INSERT INTO intern_counters (letter, last_value) VALUES ('S', 2)");
+        await db.run(
+            "INSERT INTO intern_schedule_skips (entry, due_at, due_time, reason) VALUES ('e', ?, 'local', 'why')",
+            "2026-11-08T00:02:00.000Z",
+        );
+        await migrateJobStore(db);
+        assert.equal(await readJobSchemaVersion(db), 5);
+        const store = createJobStore(db);
+        const kinds = async (limit: number) =>
+            (await store.listScheduleRuns("e", { limit })).items.map((item) =>
+                item.kind === "run" ? item.job.id : "skip",
+            );
+        assert.deepEqual(await kinds(10), ["newer", "skip", "older"]);
+        assert.deepEqual(await kinds(1), ["newer"]);
+        assert.equal((await store.latestScheduledRun("e"))?.id, "newer");
     });
 
     it("refuses a second run of an entry while its job is To do, naming it, and uses no number", async () => {

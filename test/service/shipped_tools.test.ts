@@ -17,8 +17,13 @@ import { type HarnessHost, openHarnessHost } from "../../src/host/harness_host.t
 import { createSeatedConversation, type JobLinks, type SeatActor } from "../../src/host/seating.ts";
 import { JOB_TOOL_NAMES } from "../../src/jobs/job_model.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
-import { COORDINATION_TOOL_NAMES, resolveSeat, SHIPPED_TOOL_NAMES } from "../../src/roles/role_model.ts";
-import { SHIPPED_TOOLS_EXTENSION_NAME, shippedToolsExtension } from "../../src/tools/shipped_tools_extension.ts";
+import {
+    COORDINATION_TOOL_NAMES,
+    resolveSeat,
+    SHIPPED_TOOL_NAMES,
+    SKILL_TOOL_NAME,
+} from "../../src/roles/role_model.ts";
+import { createShippedToolsExtension, SHIPPED_TOOLS_EXTENSION_NAME } from "../../src/tools/shipped_tools_extension.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const quietLogger = createLogger({ stream: { write: () => true } });
@@ -101,7 +106,14 @@ async function createFixture(steps: Step[]) {
         databaseFile: join(env.root, "state.sqlite"),
         models,
         harnessSettings: {},
-        extensions: [...(agents.component.extensions ?? []), ...(jobs.component.extensions ?? [])],
+        // No daemon runs step 3 here, so the agents component's own shipped tools don't know the runtime directory yet.
+        extensions: [
+            ...(agents.component.extensions ?? []).filter(
+                (extension) => extension.name !== SHIPPED_TOOLS_EXTENSION_NAME,
+            ),
+            createShippedToolsExtension({ runtimeDir: () => env.runtimeDir }),
+            ...(jobs.component.extensions ?? []),
+        ],
         defaultCwd: process.cwd(),
         logger: createLogger({ stream: { write: () => true } }),
     });
@@ -137,6 +149,7 @@ async function createFixture(steps: Step[]) {
 describe("the shipped tools extension", () => {
     it("is named intern.tools and brings exactly the shipped tools", () => {
         assert.equal(SHIPPED_TOOLS_EXTENSION_NAME, "intern.tools");
+        const shippedToolsExtension = createShippedToolsExtension({ runtimeDir: () => "/runtime" });
         assert.equal(shippedToolsExtension.name, SHIPPED_TOOLS_EXTENSION_NAME);
         assert.deepEqual(shippedToolsExtension.tools?.map((tool) => tool.name).sort(), [...SHIPPED_TOOL_NAMES].sort());
     });
@@ -144,7 +157,7 @@ describe("the shipped tools extension", () => {
     it("offers a read-only role read, the coordination tools and the job tools, not write, edit or bash", async () => {
         const { offered, seatConversation, say, jobToolsRegistered } = await createFixture([]);
         const { tools } = resolveSeat(
-            { name: "reader", instructions: "Read.", tools: ["read"], skills: [] },
+            { name: "reader", tools: ["read"], skills: [] },
             {
                 model: "m",
                 workspace: "/w",
@@ -154,10 +167,13 @@ describe("the shipped tools extension", () => {
 
         await say(id);
 
-        assert.deepEqual(tools, ["read", ...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES]);
+        assert.deepEqual(tools, ["read", ...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES, SKILL_TOOL_NAME]);
         // The Jobs component registers the job tools it has so far; the lead-only ones follow in a later task.
         assert.ok(jobToolsRegistered.every((name) => (JOB_TOOL_NAMES as readonly string[]).includes(name)));
-        assert.deepEqual([...offered[0]].sort(), ["read", ...COORDINATION_TOOL_NAMES, ...jobToolsRegistered].sort());
+        assert.deepEqual(
+            [...offered[0]].sort(),
+            ["read", ...COORDINATION_TOOL_NAMES, ...jobToolsRegistered, SKILL_TOOL_NAME].sort(),
+        );
         for (const absent of ["write", "edit", "bash"]) assert.equal(offered[0].includes(absent), false, absent);
     });
 

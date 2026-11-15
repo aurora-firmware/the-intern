@@ -22,6 +22,7 @@ import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts"
 import { createNetworkListenerComponent } from "../../src/listeners/network_listener.ts";
 import { networkSection } from "../../src/listeners/network_section.ts";
 import { localSocketPath } from "../../src/listeners/socket_path.ts";
+import { createSchedulesComponent } from "../../src/schedules/schedules_component.ts";
 import { type Caller, ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
 import { createFakeModel, type FakeTranscript } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
@@ -38,6 +39,9 @@ const HOLD_WORD = "hold";
 const OWNER_ONLY_MODE = 0o700;
 /** `jobs.create` refuses the in-process way in, so in-process calls are made as a team member at the command line. */
 const IN_PROCESS: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
+/** The entry every way reads, and the one a run on demand starts. */
+const SEEDED_SCHEDULE = "nightly";
+const SEEDED_SCHEDULE_TOML = `[[schedule]]\nname = "${SEEDED_SCHEDULE}"\ncron = "0 2 * * *"\nrequest = "Check the backups."\n`;
 const quietLogger = createLogger({ stream: { write: () => true } });
 
 /** The HTTP status S-003's Interfaces table gives each code, written out so a changed mapping is caught. */
@@ -185,9 +189,13 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
         join(env.piAgentDir, "settings.json"),
         JSON.stringify({ defaultProvider: provider, defaultModel: fake.getModel().id }),
     );
-    await writeFile(join(env.configDir, "config.toml"), `[network]\naddress = "${LOOPBACK}"\nport = 8080\n`);
+    await writeFile(
+        join(env.configDir, "config.toml"),
+        `[network]\naddress = "${LOOPBACK}"\nport = 8080\n\n${SEEDED_SCHEDULE_TOML}`,
+    );
     const agents = await createAgentsComponent({ logger: quietLogger });
     const jobs = await createJobsComponent({ agents, logger: quietLogger, turnEndRule: false });
+    const schedules = await createSchedulesComponent({ agents, jobs, logger: quietLogger });
     const storageSwitch: StorageSwitch = { isFailing: false };
     let captured: ServiceContext | undefined;
     const probe: DaemonComponent = {
@@ -202,10 +210,11 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
         env: env.env,
         homeDir: env.root,
         logger: quietLogger,
-        sections: [...agents.sections, networkSection],
+        sections: [...agents.sections, ...schedules.sections, networkSection],
         components: [
             agents.component,
             jobs.component,
+            schedules.component,
             probe,
             createLocalSocketComponent(),
             network,
@@ -214,6 +223,7 @@ async function startFixture(options: FixtureOptions = {}): Promise<Fixture> {
         operations: [
             ...agents.operations,
             ...jobs.operations,
+            ...schedules.operations,
             ...createTestOperations({ storageSwitch, modelFor: () => modelId }),
         ],
         prepareModels: (runtime) => {
@@ -362,6 +372,49 @@ const INPUT_BUILDERS: Record<string, InputBuilder> = {
     "models.list": async () => ({ input: {} }),
     "roles.list": async () => ({ input: {} }),
     "workspaces.list": async () => ({ input: {} }),
+    "skills.list": async () => ({ input: { role: "gp" } }),
+    "instructions.list": async () => ({ input: { role: "gp" } }),
+    "skills.enable": async (fixture, _seed, way) => {
+        const name = `enabling-${label(way)}`;
+        await fixture.invoke("roles.create", { name, instructions: "Before.", tools: ["read"], skills: [] });
+        return { input: { name: "carry-out-a-part", role: name }, names: [name] };
+    },
+    "skills.disable": async (fixture, _seed, way) => {
+        const name = `disabling-${label(way)}`;
+        const skills = ["carry-out-a-part"];
+        await fixture.invoke("roles.create", { name, instructions: "Before.", tools: ["read"], skills });
+        return { input: { name: "carry-out-a-part", role: name }, names: [name] };
+    },
+    "skills.paths.list": async (fixture) => {
+        await clearSearchPaths(fixture);
+        return { input: {} };
+    },
+    "skills.paths.add": async (fixture, _seed, way) => {
+        await clearSearchPaths(fixture);
+        const path = await fixture.folder(`skill-path-add-${label(way)}`);
+        return { input: { path }, names: [path] };
+    },
+    "skills.paths.remove": async (fixture, _seed, way) => {
+        await clearSearchPaths(fixture);
+        const path = await fixture.folder(`skill-path-remove-${label(way)}`);
+        await fixture.invoke("skills.paths.add", { path });
+        return { input: { path } };
+    },
+    "skills.restore": async (fixture) => {
+        await writeFile(join(fixture.env.dataDir, "skills/carry-out-a-part/SKILL.md"), "Edited for the test.\n");
+        return { input: { name: "carry-out-a-part" } };
+    },
+    "instructions.restore": async (fixture) => {
+        await writeFile(join(fixture.env.dataDir, "instructions/roles/gp.md"), "Edited for the test.\n");
+        return { input: { name: "gp" } };
+    },
+    "files.read": async (fixture) => ({ input: { path: join(fixture.env.dataDir, "instructions/common.md") } }),
+    "files.write": async (fixture, _seed, way) => {
+        const path = join(fixture.env.dataDir, `instructions/catalogue-${label(way)}.md`);
+        await writeFile(path, "Before.\n");
+        const { version } = (await fixture.invoke("files.read", { path })) as { version: string };
+        return { input: { path, text: "After.\n", version } };
+    },
     "conversations.submit": async (fixture, _seed, way) => {
         const conversationId = await fixture.settledConversation(`submit-${label(way)}`);
         return { input: { conversationId, content: "more", requestId: "more" } };
@@ -413,6 +466,29 @@ const INPUT_BUILDERS: Record<string, InputBuilder> = {
         const path = join(fixture.env.root, `export-${label(way)}.sqlite`);
         return { input: { path }, names: [path], maskedKeys: ["path", "size"] };
     },
+    "schedules.list": async () => ({ input: {} }),
+    "schedules.get": async () => ({ input: { name: SEEDED_SCHEDULE } }),
+    "schedules.runs": async () => ({ input: { name: SEEDED_SCHEDULE } }),
+    "schedules.create": async (_f, _seed, way) => {
+        const name = `scheduled-${label(way)}`;
+        return { input: { name, cron: "30 3 * * *", request: "Rotate the logs." }, names: [name] };
+    },
+    "schedules.change": async (fixture, _seed, way) => {
+        const name = `changed-schedule-${label(way)}`;
+        await fixture.invoke("schedules.create", { name, cron: "30 3 * * *", request: "Before." });
+        return { input: { name, request: "After." }, names: [name] };
+    },
+    "schedules.remove": async (fixture, _seed, way) => {
+        const name = `removed-schedule-${label(way)}`;
+        await fixture.invoke("schedules.create", { name, cron: "30 3 * * *", request: "Soon gone." });
+        return { input: { name } };
+    },
+    // The fire time is the clock at the call, to the millisecond, so it differs by way.
+    "schedules.run": async (fixture, _seed, way) => {
+        const name = `run-schedule-${label(way)}`;
+        await fixture.invoke("schedules.create", { name, cron: "30 3 * * *", request: "Run on demand." });
+        return { input: { name }, names: [name], maskedKeys: ["fireTime"] };
+    },
     "submissions.withdraw": async (fixture, _seed, way) => {
         const conversationId = await fixture.runningConversation(`withdraw-${label(way)}`);
         const queued = { conversationId, content: "queued", requestId: "queued" };
@@ -426,10 +502,22 @@ const INPUT_BUILDERS: Record<string, InputBuilder> = {
     "roles.change": async (fixture, _seed, way) => {
         const name = `changed-${label(way)}`;
         await fixture.invoke("roles.create", { name, instructions: "Before.", tools: ["read"], skills: [] });
-        return { input: { name, instructions: "After." }, names: [name] };
+        const { roles } = (await fixture.invoke("roles.list", {})) as {
+            roles: { name: string; instructionsVersion?: string }[];
+        };
+        const instructionsVersion = roles.find((role) => role.name === name)?.instructionsVersion;
+        return { input: { name, instructions: "After.", instructionsVersion }, names: [name] };
     },
     "roles.restore": async (fixture) => {
-        await fixture.invoke("roles.change", { name: "gp", instructions: "Changed for the test." });
+        const { roles } = (await fixture.invoke("roles.list", {})) as {
+            roles: { name: string; instructionsVersion?: string }[];
+        };
+        const instructionsVersion = roles.find((role) => role.name === "gp")?.instructionsVersion;
+        await fixture.invoke("roles.change", {
+            name: "gp",
+            instructions: "Changed for the test.",
+            instructionsVersion,
+        });
         return { input: { name: "gp" } };
     },
     "roles.remove": async (fixture, _seed, way) => {
@@ -448,6 +536,13 @@ const INPUT_BUILDERS: Record<string, InputBuilder> = {
     },
 };
 
+/** Leaves no skill search path listed, so each way starts from the same list. */
+async function clearSearchPaths(fixture: Fixture): Promise<void> {
+    for (const { path } of (await fixture.invoke("skills.paths.list", {})) as { path: string }[]) {
+        await fixture.invoke("skills.paths.remove", { path });
+    }
+}
+
 async function seedConversation(fixture: Fixture): Promise<Seed> {
     const job = await fixture.createJob();
     const conversationId = job.leadConversation;
@@ -461,6 +556,17 @@ async function seedConversation(fixture: Fixture): Promise<Seed> {
     );
     return { conversationId, submissionId, jobNumber: job.number };
 }
+
+/** S-007's Interfaces: the kind of each schedule operation. */
+const SCHEDULE_OPERATION_KINDS: Record<string, "read" | "control"> = {
+    "schedules.list": "read",
+    "schedules.get": "read",
+    "schedules.runs": "read",
+    "schedules.create": "control",
+    "schedules.change": "control",
+    "schedules.remove": "control",
+    "schedules.run": "control",
+};
 
 /** S-004's Interfaces: the kind of each job operation. */
 const JOB_OPERATION_KINDS: Record<string, "read" | "control"> = {
@@ -489,6 +595,15 @@ describe("catalogue through both listeners", () => {
         }
     });
 
+    it("lists every schedule operation with its kind", async () => {
+        const fixture = await startFixture();
+        const listed = new Map(fixture.daemon.catalogue.list().map(({ name, kind }) => [name, kind]));
+
+        for (const [name, kind] of Object.entries(SCHEDULE_OPERATION_KINDS)) {
+            assert.equal(listed.get(name), kind, `${name} is listed as ${kind}`);
+        }
+    });
+
     it("lists no lead-start operation and refuses a call to it not_found through every way", async () => {
         const fixture = await startFixture();
         const input = { jobId: "job-1", firstInput: "go", origin: { kind: "request", wayIn: "cli" } };
@@ -505,6 +620,16 @@ describe("catalogue through both listeners", () => {
     }, async () => {
         const fixture = await startFixture();
         const seed = await seedConversation(fixture);
+        const run = (await fixture.invoke("schedules.run", { name: SEEDED_SCHEDULE })) as CreatedJob;
+        await until(
+            async () =>
+                (
+                    (await fixture.invoke("conversations.get", { conversationId: run.leadConversation })) as {
+                        status: string;
+                    }
+                ).status === "idle",
+            "the scheduled run's lead to be idle",
+        );
         const called = fixture.daemon.catalogue
             .list()
             .filter(({ name }) => name !== STREAM_OPERATION && !name.startsWith(TEST_OPERATION_PREFIX));
@@ -543,6 +668,36 @@ describe("catalogue through both listeners", () => {
         assert.deepEqual(outcomes[1], outcomes[0]);
         assert.deepEqual(outcomes[2], outcomes[0]);
         assert.equal((await fixture.ctx.host.listConversations()).length, WAYS.length);
+    });
+});
+
+describe("attribution of S-008 control operations through both listeners", () => {
+    it("records skills.enable and skills.disable of a conversation with the team member and the way in of each listener", async () => {
+        const fixture = await startFixture();
+        const wayIns = { "local socket": "command line", "network listener": "web interface" } as const;
+
+        for (const way of LISTENERS) {
+            const conversationId = await fixture.settledConversation(`attribution-${label(way)}`);
+            const change = { name: "carry-out-a-part", conversation: conversationId };
+            for (const name of ["skills.enable", "skills.disable"]) {
+                const outcome = await fixture.call(way, name, change);
+                assert.equal(outcome.status, 200, `${name} over the ${way}: ${JSON.stringify(outcome.body)}`);
+            }
+
+            const { entries } = (await fixture.invoke("conversations.entries", { conversationId, limit: 500 })) as {
+                entries: { kind: string; data: { actor: { kind: string; wayIn: string }; change: string } }[];
+            };
+            const recorded = entries.filter((entry) => entry.kind === "intern.skills");
+            assert.deepEqual(
+                recorded.map((entry) => entry.data.change),
+                ["enabled", "disabled"],
+                `the changes over the ${way}`,
+            );
+            for (const { data } of recorded) {
+                assert.equal(data.actor.kind, "team_member", `the actor over the ${way}`);
+                assert.equal(data.actor.wayIn, wayIns[way], `the way in over the ${way}`);
+            }
+        }
     });
 });
 
@@ -601,6 +756,31 @@ describe("error outcomes through both listeners", () => {
         await assertErrorThroughListeners(callEach("conversations.submit", rejectIfBusy), "busy");
         const sameName = () => ({ name: "gp", instructions: "Another gp.", tools: [], skills: [] });
         await assertErrorThroughListeners(callEach("roles.create", sameName), "conflict");
+    });
+
+    it("refuses invalid input to each S-008 operation the same way through both listeners", async () => {
+        const fixture = await startFixture();
+        const invalidInputs: [string, unknown][] = [
+            ["skills.list", {}],
+            ["skills.list", { role: "gp", conversation: "1" }],
+            ["instructions.list", {}],
+            ["skills.enable", {}],
+            ["skills.enable", { name: "carry-out-a-part" }],
+            ["skills.disable", { role: "gp" }],
+            ["skills.disable", { name: "carry-out-a-part", role: "gp", conversation: "1" }],
+            ["skills.paths.add", {}],
+            ["skills.paths.remove", { path: "" }],
+            ["skills.restore", {}],
+            ["instructions.restore", { name: 7 }],
+            ["files.read", {}],
+            ["files.read", { path: "relative/common.md" }],
+            ["files.write", { path: join(fixture.env.dataDir, "instructions/common.md") }],
+            ["files.write", { path: "relative/common.md", text: "x", version: "v" }],
+        ];
+
+        for (const [name, input] of invalidInputs) {
+            await assertErrorThroughListeners((way) => fixture.call(way, name, input), "invalid_input");
+        }
     });
 
     it("answers 503 unavailable while the daemon is stopping", async () => {

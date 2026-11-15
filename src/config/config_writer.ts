@@ -46,7 +46,7 @@ async function readFingerprint(file: string): Promise<string> {
     }
 }
 
-function renderToml(sections: readonly ConfigSection<unknown>[], values: ReadonlyMap<string, unknown>): string {
+export function renderToml(sections: readonly ConfigSection<unknown>[], values: ReadonlyMap<string, unknown>): string {
     const document: Record<string, unknown> = {};
     for (const section of sections) {
         const table = section.serialize(values.get(section.name));
@@ -57,7 +57,7 @@ function renderToml(sections: readonly ConfigSection<unknown>[], values: Readonl
 }
 
 // The temporary file sits in the same directory so the rename stays on one file system and is atomic.
-async function replaceFile(file: string, text: string): Promise<void> {
+export async function replaceFile(file: string, text: string): Promise<void> {
     const temporary = join(dirname(file), `.${basename(file)}.${process.pid}.tmp`);
     try {
         const handle = await open(temporary, "w", OWNER_ONLY_MODE);

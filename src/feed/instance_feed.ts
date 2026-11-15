@@ -1,8 +1,8 @@
 /**
  * The instance scope of the observation feed (S-002 REQ-014, REQ-011, REQ-022): every conversation with its status, the
- * worker threads in use, and then conversations being created, runs starting and finishing, admission changes and
- * settings changes. Publishing never waits for a subscriber; one that falls too far behind is closed with reason
- * `lagging`.
+ * worker threads in use, and then conversations being created, runs starting and finishing, admission changes,
+ * settings changes and file changes. Publishing never waits for a subscriber; one that falls too far behind is closed
+ * with reason `lagging`.
  */
 
 import type { Admission, AdmissionSnapshot } from "../admission/admission.ts";
@@ -14,10 +14,11 @@ import { readConversationMeta } from "../host/seating.ts";
 import type { JobStatus } from "../jobs/job_model.ts";
 import type { Job, JobChange, JobStore } from "../jobs/job_store.ts";
 import { type ConversationListing, conversationStatus } from "../service/conversation_read_operations.ts";
+import type { FileChange, FileChangeHub } from "../skills/file_store.ts";
 import { createSubscription, FEED_MAX_PENDING, type Subscription } from "./observation_feed.ts";
 
 export type InstanceSnapshot = {
-    conversations: Pick<ConversationListing, "id" | "jobId" | "isLead" | "seat" | "status">[];
+    conversations: Pick<ConversationListing, "id" | "jobId" | "isLead" | "seat" | "enabledSkills" | "status">[];
     admission: AdmissionSnapshot;
     workerThreads: { count: number; inUse: number };
     jobs: { number: string; title: string; status: JobStatus }[];
@@ -26,9 +27,11 @@ export type InstanceSnapshot = {
 export type InstanceDelta = { seq: number } & (
     | { type: "conversation_created" | "run_started" | "run_finished"; conversationId: string }
     | { type: "seat_changed"; conversationId: string; seat: SeatSummary }
+    | { type: "skills_changed"; conversationId: string; enabledSkills: string[] }
     | { type: "status_changed"; conversationId: string; status: ConversationListing["status"] }
     | { type: "admission_changed"; admission: AdmissionSnapshot }
     | { type: "settings_changed"; section: string }
+    | ({ type: "files_changed" } & FileChange)
     | { type: "job_created"; job: Job }
     | { type: "job_changed"; number: string; fields: Extract<JobChange, { type: "job_changed" }>["fields"] }
     | { type: "job_worklog_added"; number: string; entry: Extract<JobChange, { type: "worklog_added" }>["entry"] }
@@ -48,6 +51,7 @@ type ConversationFacts = {
     jobId: string | null;
     isLead: boolean;
     seat: SeatSummary;
+    enabledSkills: string[];
     isParked: boolean;
     isClosed: boolean;
 };
@@ -59,6 +63,7 @@ function factsOf(meta: ConversationMeta): ConversationFacts {
         jobId: meta.jobId,
         isLead: meta.isLead,
         seat: { role, model, ...(thinkingLevel !== undefined && { thinkingLevel }), workspace },
+        enabledSkills: [...(meta.enabledSkills ?? [])],
         isParked: meta.parked !== null,
         isClosed: meta.closed === true,
     };
@@ -69,9 +74,10 @@ export async function createInstanceFeed(options: {
     admission: Admission;
     config: ConfigStore;
     jobStore: JobStore;
+    fileChanges: FileChangeHub;
     maxPending?: number;
 }): Promise<InstanceFeed> {
-    const { host, admission, config, jobStore, maxPending = FEED_MAX_PENDING } = options;
+    const { host, admission, config, jobStore, fileChanges, maxPending = FEED_MAX_PENDING } = options;
     const sinks = new Set<Sink & { nextSeq(): number }>();
     const busyById = new Map<string, boolean>();
     const factsById = new Map<string, ConversationFacts>();
@@ -107,8 +113,13 @@ export async function createInstanceFeed(options: {
         const after = factsOf(meta);
         factsById.set(conversationId, after);
         if (!before || !isReady) return;
-        if (JSON.stringify(before.seat) !== JSON.stringify(after.seat)) {
+        const isSeatChanged = JSON.stringify(before.seat) !== JSON.stringify(after.seat);
+        if (isSeatChanged) {
             publish({ type: "seat_changed", conversationId, seat: after.seat });
+        }
+        // A seat change resets the set, so its delta follows `seat_changed` even when the set came out the same.
+        if (isSeatChanged || JSON.stringify(before.enabledSkills) !== JSON.stringify(after.enabledSkills)) {
+            publish({ type: "skills_changed", conversationId, enabledSkills: after.enabledSkills });
         }
         if (before.isParked !== after.isParked || before.isClosed !== after.isClosed) {
             publish({ type: "status_changed", conversationId, status: statusOf(conversationId, after) });
@@ -206,6 +217,7 @@ export async function createInstanceFeed(options: {
 
     const stopAdmission = admission.onChange((snapshot) => publish({ type: "admission_changed", admission: snapshot }));
     const stopConfig = config.onChange(({ section }) => publish({ type: "settings_changed", section }));
+    const stopFiles = fileChanges.onChange(({ path, kind }) => publish({ type: "files_changed", path, kind }));
     let isClosed = false;
 
     function snapshot(): InstanceSnapshot {
@@ -218,6 +230,7 @@ export async function createInstanceFeed(options: {
                     jobId: facts?.jobId ?? null,
                     isLead: facts?.isLead ?? false,
                     seat: facts?.seat ?? null,
+                    enabledSkills: facts?.enabledSkills ?? [],
                     status: conversationStatus(
                         { id, busy: busyById.get(id) ?? false, isParked: facts?.isParked, isClosed: facts?.isClosed },
                         state,
@@ -277,6 +290,7 @@ export async function createInstanceFeed(options: {
             metaWatch.stop();
             stopAdmission();
             stopConfig();
+            stopFiles();
             stopJobs();
             for (const sink of [...sinks]) sink.end("stopped");
             sinks.clear();

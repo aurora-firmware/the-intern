@@ -25,6 +25,11 @@ export type FakeModelOptions = {
     delayMs?: (transcript: FakeTranscript) => number;
     /** Called with the transcript of each model request as it starts, before any delay or gate. */
     onRequest?: (transcript: FakeTranscript) => void;
+    /**
+     * Called with the system text of each model request as it starts: the content of its system messages and their
+     * prompt sections, in order. `sessionId` is the pi-durable provider session id of the requesting conversation.
+     */
+    onSystemPrompt?: (text: string, sessionId?: string) => void;
     /** An answer waits until this promise settles (or the run is aborted), for a test that decides when a run ends. */
     gate?: Promise<void>;
     /** With `gate`: only the answers to the transcripts it accepts wait; all of them do when it is absent. */
@@ -46,6 +51,16 @@ function toFakeTranscript(context: TranscriptContext): FakeTranscript {
     return context.messages.flatMap((message) =>
         message.role === "system" ? [] : [{ role: message.role, text: textOf(message.content) }],
     );
+}
+
+function systemTextOf(context: TranscriptContext): string {
+    return context.messages
+        .flatMap((message) =>
+            message.role === "system"
+                ? [textOf(message.content), ...Object.values(message.sections ?? {}).filter((text) => text != null)]
+                : [],
+        )
+        .join("\n\n");
 }
 
 function waitUnlessAborted(delayMs: number, signal: AbortSignal | undefined): Promise<void> {
@@ -157,6 +172,7 @@ export function createFakeModel(
         registration.appendResponses([answerFromTranscript]);
         const transcript = toFakeTranscript(context);
         options.onRequest?.(transcript);
+        options.onSystemPrompt?.(systemTextOf(context), streamOptions?.sessionId);
         await waitUnlessAborted(options.delayMs?.(transcript) ?? 0, streamOptions?.signal);
         if (options.gate && (options.isGated?.(transcript) ?? true))
             await untilOrAborted(options.gate, streamOptions?.signal);

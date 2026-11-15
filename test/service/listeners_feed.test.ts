@@ -22,14 +22,19 @@ import {
     type Listener,
     LOOP_INPUT,
     loopingReply,
+    loopUntilClosed,
     nextEvent,
+    openStalledFeeds,
     readToEnd,
     recordSubscriptionReads,
+    runLoops,
     startFixture,
     type View,
 } from "../support/listeners_feed_fixture.ts";
 
 const TEST_TIMEOUT_MS = 90_000;
+/** The stalled client's test runs the loop until the stream ends, then as often again in the control conversation. */
+const STALL_TEST_TIMEOUT_MS = 180_000;
 /**
  * The bound a run with a stalled subscriber must finish in, relative to the same run with none: generous enough for a
  * loaded machine, far below a run that waits on its subscriber.
@@ -218,29 +223,24 @@ function loopShape(entries: readonly Entry[]): unknown[] {
         .map((entry) => [entry.kind, JSON.stringify(entry.data).match(/"(text|arguments)":("[^"]*"|\{[^}]*\})/g)]);
 }
 
-describe("a feed client that stops reading", { timeout: TEST_TIMEOUT_MS }, () => {
+describe("a feed client that stops reading", { timeout: STALL_TEST_TIMEOUT_MS }, () => {
     it("ends the stalled stream over each listener with lagging and leaves the run's time and entries alone", async () => {
         const fixture = await startFixture(loopingReply);
         const control = await fixture.idleConversation("control");
         const observed = await fixture.idleConversation("observed");
-        const controlTime = await timed(() => fixture.submitAndSettle(control, LOOP_INPUT));
+        const stalled = await openStalledFeeds(fixture, `?scope=conversation&id=${observed}`, 1);
 
-        const query = `?scope=conversation&id=${observed}`;
-        const stalled = await Promise.all(LISTENERS.map((listener) => fixture.openFeed(listener, query)));
-        for (const stream of stalled) {
-            assert.equal((await nextEvent(stream)).name, "snapshot");
-            stream.pause();
-        }
-        const observedTime = await timed(() => fixture.submitAndSettle(observed, LOOP_INPUT));
-        for (const stream of stalled) stream.resume();
-        const endings = await Promise.all(stalled.map(readToEnd));
+        const observedLoops = await loopUntilClosed(fixture, observed, stalled.reads, LISTENERS.length);
+        const endings = await Promise.all(stalled.streams.map(readToEnd));
+        const controlLoops = await runLoops(fixture, control, observedLoops.count);
 
         assert.deepEqual(endings, [
             { last: LAGGING_END, how: "ended" },
             { last: LAGGING_END, how: "ended" },
         ]);
-        const bound = controlTime * RUN_TIME_FACTOR + RUN_TIME_MARGIN_MS;
-        assert.ok(observedTime <= bound, `the run took ${observedTime} ms, the bound is ${bound} ms`);
+        const bound = controlLoops.runTimeMs * RUN_TIME_FACTOR + RUN_TIME_MARGIN_MS;
+        const observedTime = observedLoops.runTimeMs;
+        assert.ok(observedTime <= bound, `the runs took ${observedTime} ms, the bound is ${bound} ms`);
         assert.deepEqual(loopShape(await fixture.entries(observed)), loopShape(await fixture.entries(control)));
     });
 });

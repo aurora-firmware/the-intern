@@ -5,7 +5,7 @@
  */
 import { parseArgs } from "node:util";
 
-export const RESERVED_GROUPS: readonly string[] = ["schedules", "skills", "instructions", "knowledge", "mail"];
+export const RESERVED_GROUPS: readonly string[] = ["knowledge", "mail"];
 
 export const EXIT_CODES = { ok: 0, refused: 1, usage: 2, unreachable: 3 } as const;
 
@@ -81,7 +81,7 @@ function pad(label: string): string {
     return `  ${label.padEnd(22)}`;
 }
 
-function commandUsage(command: CommandSpec): string {
+export function commandUsage(command: CommandSpec): string {
     const lines = [`Usage: bob ${commandName(command)}${positionalUsage(command)} [options]`, "", command.summary, ""];
     lines.push("Options:");
     for (const [name, spec] of Object.entries(optionsOf(command))) {

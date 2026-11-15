@@ -618,11 +618,16 @@ describe("rule 1: a job past To do with no lead conversation", () => {
 
         const [leadId] = await leadsOf(second.ctx, job.id);
         assert.ok(leadId);
-        assert.equal((await readConversationMeta(second.ctx.host, leadId))?.parked?.waitingFor, "answer");
         assert.equal(await hasSubmissionWithRequestId(second.ctx.host, leadId, `lead:${job.id}`), true);
         await waitFor(() => rig.modelInputs.length === 1, "the lead's first run");
         await waitFor(() => isIdle(second.ctx, leadId), "the lead to be idle");
-        assert.equal((await second.ctx.jobStore.getJob(job.id)).status, "blocked");
+        // The first input resumes the job and unparks the lead; the lead's turn ends without a definition of done, so
+        // the turn-end rule blocks the job again and parks the lead for an answer.
+        await waitFor(
+            async () => (await second.ctx.jobStore.getJob(job.id)).status === "blocked",
+            "the turn-end rule to block the job",
+        );
+        assert.equal((await readConversationMeta(second.ctx.host, leadId))?.parked?.waitingFor, "answer");
         assert.deepEqual(rulesOf(await repairsOf(second.ctx, job.id)), [1, 2]);
     });
 });

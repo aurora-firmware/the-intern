@@ -3,6 +3,7 @@ import type { Page } from "playwright-core";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, type FakeScript, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { waitForJobStatus } from "../support/job_status.ts";
 import { startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
 const WAIT_MS = 20_000;
@@ -71,6 +72,11 @@ describe("the Job page's record in chrome", () => {
         });
         await daemon.invoke("jobs.worklog.add", { job: job.id, text: "bought the paint" });
         await daemon.invoke("jobs.worklog.add", { job: job.id, text: "first coat done" });
+        // The job starts on its lead's admission grant, after the lead's prompt is read.
+        await waitForJobStatus(
+            async () => ((await daemon.invoke("jobs.get", { job: job.id })) as { status: string }).status,
+            "in_progress",
+        );
         await daemon.invoke("jobs.complete", { job: job.id, justification: "both coats dry" });
         const browser = await launchBrowser(t, "chrome");
         if (browser === undefined) return;

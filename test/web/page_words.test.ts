@@ -54,11 +54,29 @@ async function startBlockedJob(): Promise<{ port: number; job: Job }> {
     daemons.push(daemon);
     await daemon.ready;
     const job = (await daemon.invoke("jobs.create", { text: "which colour" })) as Job;
+    await daemon.invoke("schedules.create", { name: "weekly", cron: "0 3 * * *", request: "Run the weekly review." });
     return { port: await daemon.networkPort(), job };
 }
 
 /** A page of the web interface: where it is, and the element that shows it has drawn. */
-type PageToOpen = { name: string; path: string; ready: string };
+type PageToOpen = { name: string; path: string; ready: string; open?: (page: Page) => Promise<void> };
+
+/** Opens the Skills panel inside `scope`, then the editor of its first instruction file. */
+async function openPanelAndEditor(page: Page, scope: string, panel: string): Promise<void> {
+    await page.locator(`${scope} ${panel} > summary`).first().click({ timeout: WAIT_MS });
+    await page.locator(`${scope} ${panel} .skill-row`).first().waitFor({ timeout: WAIT_MS });
+    await page.locator(`${scope} ${panel} .instruction-row .file-open`).first().click({ timeout: WAIT_MS });
+    await page.locator(`${scope} ${panel} .file-editor textarea`).waitFor({ timeout: WAIT_MS });
+}
+
+/** Opens the Skills panel of the first role and its editor, then the editor of the common prompt. */
+async function openRolesEditors(page: Page): Promise<void> {
+    await openPanelAndEditor(page, "main .role", ".role-skills");
+    await page.locator("main .skills-instructions .common-prompt .file-open").click({ timeout: WAIT_MS });
+    await page.locator("main .skills-instructions .file-editor textarea").waitFor({ timeout: WAIT_MS });
+}
+
+const openJobEditors = (page: Page) => openPanelAndEditor(page, "main details.activity", ".conversation-skills");
 
 const pagesToOpen = (job: Job): PageToOpen[] => [
     { name: "Board", path: "/ui/#/", ready: "main .board-column .card" },
@@ -67,6 +85,19 @@ const pagesToOpen = (job: Job): PageToOpen[] => [
     { name: "Roles", path: "/ui/#/roles", ready: "main .role" },
     { name: "Workspaces", path: "/ui/#/workspaces", ready: "main .workspace-register" },
     { name: "Status", path: "/ui/#/status", ready: "main .status" },
+    { name: "Schedules", path: "/ui/#/schedules", ready: "main .schedule" },
+    {
+        name: "Roles with the Skills panel and the editors open",
+        path: "/ui/#/roles",
+        ready: "main .role",
+        open: openRolesEditors,
+    },
+    {
+        name: "Job with the Skills panel and the editor open",
+        path: `/ui/#/jobs/${job.number}`,
+        ready: "main details.activity",
+        open: openJobEditors,
+    },
 ];
 
 /** The visible text of the page with every collapsed area open, leaving out code and verbatim text. */
@@ -116,6 +147,7 @@ describe("the page text in chrome", () => {
         for (const target of pagesToOpen(job)) {
             await page.goto(pageUrl(port, target.path));
             await page.waitForSelector(target.ready, { timeout: WAIT_MS });
+            await target.open?.(page);
             await page.evaluate(() => document.fonts.ready);
             for (const line of await pageWording(page)) {
                 for (const word of wordsRuledOut(line)) found.push(`${target.name}: "${word}" in "${line}"`);

@@ -7,7 +7,7 @@ import { afterEach, describe, it } from "node:test";
 import {
     assertBlockedAsStopped,
     conversationsOf,
-    createJob,
+    createStartedJob,
     disposeCrashTest,
     hermetic,
     jobOf,
@@ -27,7 +27,7 @@ describe("kill -9 between a lead's stop mark and its abort", () => {
         const env = await hermetic();
         const first = start(env, "gated", "lead-stop-marked", true);
         await first.ready;
-        const job = await createJob(first, "stop the running lead");
+        const job = await createStartedJob(first, "stop the running lead");
         const leadId = job.leadConversation as string;
         await untilStatus(first, leadId, "running");
         await first.invoke("jobs.update", { job: job.id, definitionOfDone: "the report is filed" });
@@ -49,7 +49,7 @@ describe("kill -9 between a lead's stop mark and its abort", () => {
         const env = await hermetic();
         const first = start(env, "invoke-parked", "lead-stop-marked");
         await first.ready;
-        const job = await createJob(first, "stop the parked lead");
+        const job = await createStartedJob(first, "stop the parked lead");
         const leadId = job.leadConversation as string;
         await untilTrue(async () => (await conversationsOf(first, job.id)).length === 3, "both invoked conversations");
         await first.invoke("jobs.update", { job: job.id, definitionOfDone: "the report is filed" });

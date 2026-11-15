@@ -3,62 +3,65 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import type { LogFields, Logger } from "../../src/daemon/logger.ts";
-import { createWorkspaceContextLoader } from "../../src/prompt/workspace_context.ts";
+import type { ConversationMeta } from "../../src/host/seating.ts";
+import { readPromptParts } from "../../src/prompt/prompt_sources.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
-
-type LogEntry = { message: string; fields: LogFields };
-
-function recordingLogger(entries: LogEntry[]): Logger {
-    const record = (message: string, fields: LogFields = {}) => entries.push({ message, fields });
-    return { error: record, info: record, debug: record };
-}
+import { commonPromptPath, roleInstructionPath } from "../../src/skills/internal_folder.ts";
+import type { DiagnosticLog } from "../../src/skills/skill_discovery.ts";
 
 async function writeSkill(dir: string, name: string): Promise<void> {
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${name} does things\n---\nBody\n`);
 }
 
-describe("createWorkspaceContextLoader", () => {
+describe("readPromptParts", () => {
     let root: string;
     let workspace: string;
-    let entries: LogEntry[];
+    let dataDir: string;
+    let reported: (readonly string[])[];
 
-    const makeSeat = (skills: string[] = []): Seat => ({
+    const diagnostics: DiagnosticLog = { report: (list) => reported.push(list) };
+    const seat = (): Seat => ({
         role: "writer",
         model: "fake/model",
         workspace,
         instructions: "",
         tools: [],
-        skills,
+        skills: [],
     });
+    const metaOf = (overrides: Partial<ConversationMeta> = {}): ConversationMeta =>
+        ({ jobId: "job-1", isLead: false, seat: seat(), ...overrides }) as ConversationMeta;
+    const read = (meta: ConversationMeta, defaultsOf: (role: string) => ReadonlySet<string> = () => new Set()) =>
+        readPromptParts({ meta, dataDir, searchPaths: [], defaultsOf, diagnostics });
 
     beforeEach(async () => {
-        root = await mkdtemp(join(tmpdir(), "workspace-context-"));
+        root = await mkdtemp(join(tmpdir(), "prompt-sources-"));
         workspace = join(root, "parent", "workspace");
+        dataDir = join(root, "data");
         await mkdir(workspace, { recursive: true });
-        entries = [];
+        await mkdir(join(dataDir, "instructions", "roles"), { recursive: true });
+        reported = [];
     });
 
     afterEach(async () => {
         await rm(root, { recursive: true, force: true });
     });
 
-    it("loads workspace and parent context files and workspace skills", async () => {
+    it("reads the workspace and parent context files and the workspace skills", async () => {
         await writeFile(join(workspace, "AGENTS.md"), "workspace rules");
         await writeFile(join(root, "parent", "AGENTS.md"), "parent rules");
         await writeSkill(join(workspace, ".pi", "skills", "local-skill"), "local-skill");
 
-        const context = createWorkspaceContextLoader({ logger: recordingLogger(entries) }).load(makeSeat());
+        const parts = await read(metaOf());
 
-        const contents = context.contextFiles.map((file) => file.content);
+        const contents = parts.contextFiles.map((file) => file.content);
         assert.ok(contents.includes("workspace rules"));
         assert.ok(contents.includes("parent rules"));
         assert.deepEqual(
-            context.workspaceSkills.map((skill) => skill.name),
+            parts.skills.map((skill) => skill.name),
             ["local-skill"],
         );
-        assert.deepEqual(context.roleSkills, []);
+        assert.equal(parts.workspace, workspace);
     });
 
     it("returns no context file or skill from the pi agent folder", async () => {
@@ -70,71 +73,90 @@ describe("createWorkspaceContextLoader", () => {
         const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
         process.env.PI_CODING_AGENT_DIR = agentDir;
         try {
-            const context = createWorkspaceContextLoader({ logger: recordingLogger(entries) }).load(makeSeat());
+            const parts = await read(metaOf({ enabledSkills: ["account-skill"] }));
 
-            const contents = context.contextFiles.map((file) => file.content);
+            const contents = parts.contextFiles.map((file) => file.content);
             assert.ok(contents.includes("workspace rules"));
             assert.ok(!contents.includes("account rules"));
-            assert.deepEqual(context.roleSkills, []);
-            assert.deepEqual(context.workspaceSkills, []);
+            assert.deepEqual(parts.skills, []);
         } finally {
             if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
             else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
         }
     });
 
-    it("loads the role skills named by the seat", async () => {
-        const skillDir = join(root, "role-skills", "role-skill");
-        await writeSkill(skillDir, "role-skill");
+    it("reads the common prompt, the role's file and the lead mark", async () => {
+        await writeFile(commonPromptPath(dataDir), "common text");
+        await writeFile(roleInstructionPath(dataDir, "writer"), "writer text");
 
-        const context = createWorkspaceContextLoader({ logger: recordingLogger(entries) }).load(makeSeat([skillDir]));
+        const parts = await read(metaOf({ isLead: true }));
+
+        assert.equal(parts.common, "common text");
+        assert.equal(parts.role, "writer text");
+        assert.equal(parts.isLead, true);
+        assert.deepEqual(reported, [[]]);
+    });
+
+    it("reads an edited file again on the next call", async () => {
+        await writeFile(commonPromptPath(dataDir), "first");
+        await read(metaOf());
+
+        await writeFile(commonPromptPath(dataDir), "second");
+
+        assert.equal((await read(metaOf())).common, "second");
+    });
+
+    it("leaves out a missing common prompt and role file and reports each path", async () => {
+        const parts = await read(metaOf());
+
+        assert.equal(parts.common, undefined);
+        assert.equal(parts.role, undefined);
+        assert.equal(reported.length, 1);
+        assert.equal(reported[0]?.length, 2);
+        assert.ok(reported[0]?.some((problem) => problem.includes(commonPromptPath(dataDir))));
+        assert.ok(reported[0]?.some((problem) => problem.includes(roleInstructionPath(dataDir, "writer"))));
+    });
+
+    it("lists the skills of the enabled set from the internal folder", async () => {
+        await writeSkill(join(dataDir, "skills", "alpha"), "alpha");
+        await writeSkill(join(dataDir, "skills", "beta"), "beta");
+
+        const parts = await read(metaOf({ enabledSkills: ["beta"] }));
 
         assert.deepEqual(
-            context.roleSkills.map((skill) => skill.name),
-            ["role-skill"],
+            parts.skills.map((skill) => skill.name),
+            ["beta"],
         );
     });
 
-    it("leaves out a missing skill folder and logs its path", () => {
-        const missing = join(root, "no-such-skill");
+    it("uses the role's default skills when the document holds no enabled set", async () => {
+        await writeSkill(join(dataDir, "skills", "alpha"), "alpha");
+        await writeSkill(join(dataDir, "skills", "beta"), "beta");
 
-        const context = createWorkspaceContextLoader({ logger: recordingLogger(entries) }).load(makeSeat([missing]));
+        const parts = await read(metaOf(), (role) => new Set(role === "writer" ? ["alpha"] : []));
 
-        assert.deepEqual(context.roleSkills, []);
-        assert.ok(entries.some((entry) => String(entry.fields.path).includes(missing)));
+        assert.deepEqual(
+            parts.skills.map((skill) => skill.name),
+            ["alpha"],
+        );
     });
 
-    it("leaves out a skill with an invalid SKILL.md and logs its path", async () => {
-        const skillDir = join(root, "broken-skill");
-        await mkdir(skillDir, { recursive: true });
-        await writeFile(join(skillDir, "SKILL.md"), "no frontmatter at all");
+    it("reads skills from the search paths and reports a catalog diagnostic", async () => {
+        const missing = join(root, "no-such-folder");
+        await writeSkill(join(root, "extra", "gamma"), "gamma");
 
-        const context = createWorkspaceContextLoader({ logger: recordingLogger(entries) }).load(makeSeat([skillDir]));
+        const parts = await readPromptParts({
+            meta: metaOf({ enabledSkills: ["gamma"] }),
+            dataDir,
+            searchPaths: [join(root, "extra"), missing],
+            defaultsOf: () => new Set(),
+            diagnostics,
+        });
 
-        assert.deepEqual(context.roleSkills, []);
-        assert.ok(entries.some((entry) => String(entry.fields.path).includes(skillDir)));
-    });
-
-    it("returns equal results for the same workspace and skills without reading the files again", async () => {
-        await writeFile(join(workspace, "AGENTS.md"), "workspace rules");
-        const loader = createWorkspaceContextLoader({ logger: recordingLogger(entries) });
-        const first = loader.load(makeSeat());
-
-        await rm(join(workspace, "AGENTS.md"));
-        const second = loader.load(makeSeat());
-
-        assert.deepEqual(second, first);
-    });
-
-    it("loads again for a different skill list", async () => {
-        const skillDir = join(root, "role-skills", "role-skill");
-        await writeSkill(skillDir, "role-skill");
-        const loader = createWorkspaceContextLoader({ logger: recordingLogger(entries) });
-
-        const without = loader.load(makeSeat());
-        const withSkill = loader.load(makeSeat([skillDir]));
-
-        assert.equal(without.roleSkills.length, 0);
-        assert.equal(withSkill.roleSkills.length, 1);
+        assert.deepEqual(
+            parts.skills.map((skill) => skill.name),
+            ["gamma"],
+        );
+        assert.ok(reported[0]?.some((problem) => problem.includes(missing)));
     });
 });

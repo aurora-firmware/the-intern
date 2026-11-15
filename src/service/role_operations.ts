@@ -9,10 +9,18 @@ import type { ServiceContext } from "../daemon/daemon.ts";
 import { HostInvalidKeyError, settingsResultOnce } from "../host/idempotency.ts";
 import { type CatalogRole, RoleRefusedError } from "../roles/role_catalog.ts";
 import type { RoleChange, RoleDefinition } from "../roles/role_model.ts";
-import { defineOperation, type Operation, ServiceError } from "./operations.ts";
+import { FileRefusedError } from "../skills/file_store.ts";
+import { roleInstructionPath } from "../skills/internal_folder.ts";
+import type { ConversationListing } from "./conversation_read_operations.ts";
+import { type Caller, defineOperation, type Operation, ServiceError } from "./operations.ts";
 
-type CreateInput = { role: RoleDefinition; idempotencyKey?: string };
-type ChangeInput = { name: string; change: RoleChange };
+type CreateInput = { role: RoleDefinition; instructions: string; idempotencyKey?: string };
+type ChangeInput = { name: string; change: RoleChange; instructions?: string; instructionsVersion?: string };
+type ListedRole = CatalogRole & {
+    instructions?: string;
+    instructionsVersion?: string;
+    instructionsMissing?: true;
+};
 type NameInput = { name: string };
 
 const CREATE_SCOPE = "roles.create";
@@ -38,10 +46,9 @@ function stringList(record: Record<string, unknown>, field: string): string[] | 
     return value;
 }
 
-// The fields of a role other than its name, each present only when the input names it.
+// The fields of a role other than its name and instructions, each present only when the input names it.
 function parseRoleFields(record: Record<string, unknown>): RoleChange {
     const fields: RoleChange = {};
-    if (record.instructions !== undefined) fields.instructions = requireString(record, "instructions");
     const tools = stringList(record, "tools");
     if (tools !== undefined) fields.tools = tools;
     const skills = stringList(record, "skills");
@@ -55,11 +62,10 @@ function parseRoleFields(record: Record<string, unknown>): RoleChange {
 function parseCreate(raw: unknown): CreateInput {
     const record = asRecord(raw);
     const fields = parseRoleFields(record);
-    if (fields.instructions === undefined) throw new Error("instructions must be a non-empty string");
+    const instructions = requireString(record, "instructions");
     const role: RoleDefinition = {
         ...fields,
         name: requireString(record, "name"),
-        instructions: fields.instructions,
         tools: fields.tools ?? [],
         skills: fields.skills ?? [],
     };
@@ -67,13 +73,18 @@ function parseCreate(raw: unknown): CreateInput {
     if (idempotencyKey !== undefined && typeof idempotencyKey !== "string") {
         throw new Error("idempotencyKey must be a string");
     }
-    return idempotencyKey === undefined ? { role } : { role, idempotencyKey };
+    return idempotencyKey === undefined ? { role, instructions } : { role, instructions, idempotencyKey };
 }
 
-const parseChange = (raw: unknown): ChangeInput => ({
-    name: requireString(asRecord(raw), "name"),
-    change: parseRoleFields(asRecord(raw)),
-});
+function parseChange(raw: unknown): ChangeInput {
+    const record = asRecord(raw);
+    const input: ChangeInput = { name: requireString(record, "name"), change: parseRoleFields(record) };
+    if (record.instructions !== undefined) input.instructions = requireString(record, "instructions");
+    if (record.instructionsVersion !== undefined) {
+        input.instructionsVersion = requireString(record, "instructionsVersion");
+    }
+    return input;
+}
 
 const parseName = (raw: unknown): NameInput => ({ name: requireString(asRecord(raw), "name") });
 
@@ -89,68 +100,124 @@ async function mappingRefusals<T>(action: () => Promise<T>): Promise<T> {
             const codes = { invalid: "invalid_input", conflict: "conflict", write_failed: "internal" } as const;
             throw new ServiceError(codes[error.kind], error.message);
         }
+        if (error instanceof FileRefusedError) {
+            const codes = { not_found: "not_found", invalid: "invalid_input", conflict: "conflict" } as const;
+            throw new ServiceError(codes[error.kind], error.message);
+        }
         if (error instanceof HostInvalidKeyError) throw new ServiceError("invalid_input", error.message);
         throw error;
     }
 }
 
 // Compared through JSON, as the catalog's role and the parsed input may differ in absent versus undefined fields.
-const sameDefinition = (existing: CatalogRole, role: RoleDefinition): boolean => {
-    const { shipped, changed, ...definition } = existing;
-    return !shipped && isDeepStrictEqual(JSON.parse(JSON.stringify(definition)), JSON.parse(JSON.stringify(role)));
+const sameDefinition = (existing: ListedRole, role: RoleDefinition, instructions: string): boolean => {
+    const { shipped, changed, instructions: existingText, instructionsVersion, ...definition } = existing;
+    return (
+        !shipped &&
+        existingText === instructions &&
+        isDeepStrictEqual(JSON.parse(JSON.stringify(definition)), JSON.parse(JSON.stringify(role)))
+    );
 };
+
+// An open conversation holds the role its agent is seated with; a closed one doesn't.
+async function refuseWhileSeated(ctx: ServiceContext, role: string, caller: Caller): Promise<void> {
+    const listings = (await ctx.catalogue.invoke("conversations.list", {}, caller)) as ConversationListing[];
+    const holding = listings.filter((listing) => listing.status !== "closed" && listing.seat?.role === role);
+    if (holding.length === 0) return;
+    const ids = holding.map((listing) => listing.id).join(", ");
+    throw new ServiceError(
+        "conflict",
+        `Role "${role}" can't be removed: an open conversation is seated with it (${ids}); close or reseat it first`,
+    );
+}
 
 export function roleOperations(component: AgentsComponent) {
     const catalog = () => component.runtime().catalog;
 
-    const listOperation = defineOperation<ServiceContext, Record<string, never>, { roles: CatalogRole[] }>({
+    // A role without a readable file is listed with no text; the file store refuses any other failure on it.
+    const withInstructions = async (role: CatalogRole): Promise<ListedRole> => {
+        try {
+            const { text, version } = await component.skills.fileStore.read(
+                roleInstructionPath(component.skills.dataDir(), role.name),
+            );
+            return { ...role, instructions: text, instructionsVersion: version };
+        } catch (error) {
+            if (error instanceof FileRefusedError && error.kind === "not_found") {
+                return { ...role, instructionsMissing: true };
+            }
+            throw error;
+        }
+    };
+
+    const listOperation = defineOperation<ServiceContext, Record<string, never>, { roles: ListedRole[] }>({
         name: "roles.list",
         kind: "read",
         parse: () => ({}),
-        run: async () => ({ roles: catalog().list() }),
+        run: async () => ({ roles: await Promise.all(catalog().list().map(withInstructions)) }),
     });
 
     // A crash between the file write and the recorded key leaves the role in place; the repeat then returns it.
-    const createRole = async (role: RoleDefinition): Promise<{ role: CatalogRole }> => {
+    const createRole = async (input: CreateInput): Promise<{ role: ListedRole }> => {
+        const { role, instructions } = input;
         const existing = catalog().get(role.name);
-        if (existing !== undefined && sameDefinition(existing, role)) return { role: existing };
-        return { role: await catalog().create(role) };
+        if (existing !== undefined) {
+            const listed = await withInstructions(existing);
+            if (sameDefinition(listed, role, instructions)) return { role: listed };
+        }
+        return createNew(input);
     };
 
-    const createOperation = defineOperation<ServiceContext, CreateInput, { role: CatalogRole }>({
+    const createNew = async ({ role, instructions }: CreateInput): Promise<{ role: ListedRole }> => ({
+        role: await withInstructions(await catalog().create(role, { instructions })),
+    });
+
+    const createOperation = defineOperation<ServiceContext, CreateInput, { role: ListedRole }>({
         name: "roles.create",
         kind: "control",
         parse: parseCreate,
-        run: ({ host }, { role, idempotencyKey }) =>
+        run: ({ host }, input) =>
             mappingRefusals(() =>
-                idempotencyKey === undefined
-                    ? catalog()
-                          .create(role)
-                          .then((created) => ({ role: created }))
-                    : settingsResultOnce(host, { scope: CREATE_SCOPE, key: idempotencyKey }, () => createRole(role)),
+                input.idempotencyKey === undefined
+                    ? createNew(input)
+                    : settingsResultOnce(host, { scope: CREATE_SCOPE, key: input.idempotencyKey }, () =>
+                          createRole(input),
+                      ),
             ),
     });
 
-    const changeOperation = defineOperation<ServiceContext, ChangeInput, { role: CatalogRole }>({
+    const changeOperation = defineOperation<ServiceContext, ChangeInput, { role: ListedRole }>({
         name: "roles.change",
         kind: "control",
         parse: parseChange,
-        run: (_ctx, { name, change }) => mappingRefusals(async () => ({ role: await catalog().change(name, change) })),
+        run: (_ctx, { name, change, instructions, instructionsVersion }) =>
+            mappingRefusals(async () => {
+                // An unknown role is left to the catalog, which refuses it not_found.
+                if (instructions !== undefined && instructionsVersion === undefined && catalog().get(name)) {
+                    throw new ServiceError(
+                        "invalid_input",
+                        `Role "${name}" instructions need instructionsVersion, the token roles.list returned with them`,
+                    );
+                }
+                const changed = await catalog().change(name, change, { instructions, instructionsVersion });
+                return { role: await withInstructions(changed) };
+            }),
     });
 
-    const restoreOperation = defineOperation<ServiceContext, NameInput, { role: CatalogRole }>({
+    const restoreOperation = defineOperation<ServiceContext, NameInput, { role: ListedRole }>({
         name: "roles.restore",
         kind: "control",
         parse: parseName,
-        run: (_ctx, { name }) => mappingRefusals(async () => ({ role: await catalog().restore(name) })),
+        run: (_ctx, { name }) =>
+            mappingRefusals(async () => ({ role: await withInstructions(await catalog().restore(name)) })),
     });
 
     const removeOperation = defineOperation<ServiceContext, NameInput, Record<string, never>>({
         name: "roles.remove",
         kind: "control",
         parse: parseName,
-        run: (_ctx, { name }) =>
+        run: (ctx, { name }, caller) =>
             mappingRefusals(async () => {
+                await refuseWhileSeated(ctx, name, caller);
                 await catalog().remove(name);
                 return {};
             }),

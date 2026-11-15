@@ -6,7 +6,7 @@
  */
 import { type Admission, createAdmission } from "../admission/admission.ts";
 import { createAdmissionGate } from "../admission/admission_extension.ts";
-import { type ConfigSection, loadConfig } from "../config/config_file.ts";
+import { type ConfigSection, type LoadedConfig, loadConfig } from "../config/config_file.ts";
 import { type ConfigStore, createConfigStore } from "../config/config_writer.ts";
 import { createInstanceFeed, type InstanceFeed } from "../feed/instance_feed.ts";
 import { createObservationFeed, type ObservationFeed } from "../feed/observation_feed.ts";
@@ -30,9 +30,10 @@ import { feedOperations } from "../service/feed_operations.ts";
 import { type Catalogue, createCatalogue, type DaemonPhase, type Operation } from "../service/operations.ts";
 import { runtimeReadOperations } from "../service/runtime_read_operations.ts";
 import { type StatusSources, statusOperation } from "../service/status_operation.ts";
+import { createFileChangeHub, type FileChangeHub } from "../skills/file_store.ts";
 import { STOP_BOUND_MS, WORKER_THREAD_COUNT } from "./constants.ts";
 import type { Logger } from "./logger.ts";
-import { acquireOwnership, type OwnershipHandle } from "./ownership.ts";
+import { acquireOwnership } from "./ownership.ts";
 import {
     ensureInstanceDirs,
     InstanceDirError,
@@ -53,6 +54,7 @@ export type ServiceContext = {
     logger: Logger;
     catalogue: Catalogue;
     jobStore: JobStore;
+    fileChanges: FileChangeHub;
 };
 
 export type DaemonComponent = {
@@ -60,6 +62,15 @@ export type DaemonComponent = {
     extensions?: readonly Extension[];
     /** Installed like `extensions` but left out of the default selection: a conversation selects them by name. */
     optInExtensions?: readonly Extension[];
+    /**
+     * Step 3, right after the ownership is taken: seeds or converts the component's files. A returned configuration
+     * replaces the one step 4 builds the configuration store from.
+     */
+    prepareFiles?(input: {
+        dirs: InstanceDirs;
+        config: LoadedConfig;
+        logger: Logger;
+    }): Promise<LoadedConfig | undefined>;
     checkModels?(ctx: ServiceContext): Promise<void>;
     ensureWorkspaces?(ctx: ServiceContext): Promise<void>;
     /** Step 7, after admission is restored and before work resumes: brings the component's saved state in step. */
@@ -244,24 +255,35 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         });
     }
 
+    async function prepareComponentFiles(loaded: LoadedConfig): Promise<LoadedConfig> {
+        let current = loaded;
+        for (const component of components) {
+            current = (await component.prepareFiles?.({ dirs, config: current, logger })) ?? current;
+        }
+        return current;
+    }
+
     async function startUp(): Promise<void> {
         if (pathFailure) throw pathFailure;
-        const config = await step(1, STEP_NAMES.loadConfiguration, () => loadConfig(dirs.configFile, sections));
+        let config = await step(1, STEP_NAMES.loadConfiguration, () => loadConfig(dirs.configFile, sections));
         await step(2, STEP_NAMES.ensureDirectories, () => ensureInstanceDirs(dirs));
-        const ownership: OwnershipHandle = await step(3, STEP_NAMES.takeOwnership, () =>
-            acquireOwnership(dirs.stateDir),
-        );
-        undoStack.push(() => ownership.release());
+        await step(3, STEP_NAMES.takeOwnership, async () => {
+            const ownership = await acquireOwnership(dirs.stateDir);
+            undoStack.push(() => ownership.release());
+            config = await prepareComponentFiles(config);
+        });
         const opened = await step(4, STEP_NAMES.createModelRuntime, async () => {
             const runtime = await openModelRuntime();
             const store = createConfigStore(dirs.configFile, sections, config);
             const feed = createObservationFeed({ host: runtime.host });
             undoStack.push(async () => feed.close());
+            const fileChanges = createFileChangeHub();
             const instanceFeed = await createInstanceFeed({
                 host: runtime.host,
                 admission: runtime.gateAdmission,
                 config: store,
                 jobStore: runtime.jobStore,
+                fileChanges,
             });
             undoStack.push(async () => instanceFeed.close());
             Object.assign(context, {
@@ -272,6 +294,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
                 config: store,
                 feed,
                 instanceFeed,
+                fileChanges,
             });
             return runtime;
         });

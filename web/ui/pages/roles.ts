@@ -1,8 +1,10 @@
 /**
  * The Roles page (S-006 REQ-009): every role with its settings, a form that creates a role, and for each role Save,
  * Restore and Remove. The service decides what is allowed (S-001 REQ-003) and a refusal shows next to the role it
- * concerns. The list is read again after a `settings_changed` delta and on each new instance snapshot. Models and
- * workspaces are native choices from `models.list` and `workspaces.list`.
+ * concerns. Each role opens its Skills panel. The "Skills and instructions" section edits the common prompt, lists the
+ * skill search paths with add and remove, and restores each shipped file. The list is read again after a
+ * `settings_changed` or `files_changed` delta and on each new instance snapshot. Models and workspaces are native
+ * choices from `models.list` and `workspaces.list`.
  */
 import { h } from "preact";
 import { useContext, useEffect, useRef, useState } from "preact/hooks";
@@ -10,10 +12,13 @@ import { listen } from "../components/activity.ts";
 import { isConnected } from "../components/connection_banner.ts";
 import { RefusalMessage } from "../components/refusal.ts";
 import { type FeedConnection, pageClient } from "../feed_connection.ts";
+import { RoleSkills, readSkillsData, SkillsAndInstructions, type SkillsData } from "./roles_skills.ts";
 
 type Role = {
     name: string;
-    instructions: string;
+    instructions?: string;
+    instructionsVersion?: string;
+    instructionsMissing?: true;
     tools: string[];
     skills: string[];
     model?: string;
@@ -24,7 +29,12 @@ type Role = {
 };
 type Model = { model: string; thinkingLevels: string[] };
 type Workspace = { path: string };
-type Data = { roles: Role[]; models: Model[]; workspaces: Workspace[] };
+type Data = {
+    roles: Role[];
+    models: Model[];
+    workspaces: Workspace[];
+    skills: SkillsData;
+};
 type Fields = {
     instructions: string;
     tools: string;
@@ -46,9 +56,8 @@ const attachFeed = (feed: FeedConnection) => {
     attachedFeeds.add(feed);
     feed.onInstanceSnapshot(() => void mountedReload?.());
     listen(feed, (event) => {
-        if (event.type === "instance-delta" && (event.delta as { type?: string }).type === "settings_changed") {
-            void mountedReload?.();
-        }
+        const deltaType = event.type === "instance-delta" ? (event.delta as { type?: string }).type : undefined;
+        if (deltaType === "settings_changed" || deltaType === "files_changed") void mountedReload?.();
     });
 };
 
@@ -57,7 +66,8 @@ const readData = async (): Promise<Data> => {
     const { roles } = (await client.invoke("roles.list")) as { roles: Role[] };
     const models = (await client.invoke("models.list")) as Model[];
     const { workspaces } = (await client.invoke("workspaces.list")) as { workspaces: Workspace[] };
-    return { roles, models, workspaces };
+    const reader = roles.find((role) => role.shipped)?.name ?? roles[0]?.name;
+    return { roles, models, workspaces, skills: await readSkillsData(reader) };
 };
 
 const linesOf = (text: string): string[] =>
@@ -78,6 +88,21 @@ const fieldsOf = (role: Role | undefined): Fields => ({
 /** The role fields the form names; a choice left unset is left out, so the service keeps its value. */
 const inputOf = (fields: Fields): Record<string, unknown> => ({
     instructions: fields.instructions,
+    ...settingsOf(fields),
+});
+
+/** A change sends the instructions only when they differ, with the token of the file as the page read it. */
+const changeOf = (fields: Fields, role: Role): Record<string, unknown> => {
+    const { instructions, ...rest } = inputOf(fields);
+    if (instructions === (role.instructions ?? "")) return rest;
+    return {
+        instructions,
+        ...(role.instructionsVersion === undefined ? {} : { instructionsVersion: role.instructionsVersion }),
+        ...rest,
+    };
+};
+
+const settingsOf = (fields: Fields): Record<string, unknown> => ({
     tools: linesOf(fields.tools),
     skills: linesOf(fields.skills),
     ...(fields.model === NOT_SET ? {} : { model: fields.model }),
@@ -135,7 +160,7 @@ const levelsFor = (data: Data, model: string): string[] => {
 const settingsFields = (data: Data, fields: Fields, set: (name: keyof Fields) => (value: string) => void) => [
     text("Instructions", "instructions", fields.instructions, set("instructions")),
     text("Tools (one per line)", "tools", fields.tools, set("tools")),
-    text("Skills (absolute paths, one per line)", "skills", fields.skills, set("skills")),
+    text("Skills (names, one per line)", "skills", fields.skills, set("skills")),
     choice(
         "Default model",
         "model",
@@ -161,7 +186,17 @@ const settingsFields = (data: Data, fields: Fields, set: (name: keyof Fields) =>
 
 type Calling = (action: () => Promise<void>) => Promise<void>;
 
-const RoleCard = ({ role, data, reload }: { role: Role; data: Data; reload: Reload }) => {
+const RoleCard = ({
+    role,
+    data,
+    reload,
+    feed,
+}: {
+    role: Role;
+    data: Data;
+    reload: Reload;
+    feed: FeedConnection | null | undefined;
+}) => {
     const connected = useContext(isConnected);
     const { fields, setFields, set } = useFields(fieldsOf(role));
     const [isCalling, setCalling] = useState(false);
@@ -201,11 +236,19 @@ const RoleCard = ({ role, data, reload }: { role: Role; data: Data; reload: Relo
         "section",
         { class: "role", "data-role": role.name, "data-changed": String(role.changed) },
         h("h3", null, h("span", { "data-verbatim": "" }, role.name), origin),
+        role.instructionsMissing === true
+            ? h(
+                  "p",
+                  { class: "instructions-missing" },
+                  "This role's instruction file is missing. Saving instructions writes it again.",
+              )
+            : null,
         ...settingsFields(data, fields, set),
         failure !== undefined ? h(RefusalMessage, { error: failure.error }) : null,
-        button("Save", "role-save", invoke("roles.change", inputOf(fields))),
+        button("Save", "role-save", invoke("roles.change", changeOf(fields, role))),
         button("Restore", "role-restore", invoke("roles.restore", {})),
         button("Remove", "button-destructive role-remove", invoke("roles.remove", {})),
+        h(RoleSkills, { role: role.name, feed }),
     );
 };
 
@@ -286,14 +329,15 @@ export const RolesPage = ({ feed }: { feed: FeedConnection | null | undefined })
         h(
             "p",
             { class: "roles-note" },
-            "A change affects only agents seated afterwards; agents already seated keep theirs.",
+            "A change to a role's tools, default skills, default model, thinking level or workspace affects only agents seated afterwards. A change to its instructions reaches running agents from their next model request.",
         ),
         failure !== undefined ? h(RefusalMessage, { error: failure.error }) : null,
         data === undefined
             ? null
             : [
-                  ...data.roles.map((role) => h(RoleCard, { role, data, reload, key: role.name })),
+                  ...data.roles.map((role) => h(RoleCard, { role, data, reload, feed, key: role.name })),
                   h(CreateRole, { data, reload }),
+                  h(SkillsAndInstructions, { roles: data.roles, data: data.skills, reload }),
               ],
     );
 };

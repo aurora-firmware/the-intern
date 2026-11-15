@@ -3,6 +3,7 @@ import { afterEach, describe, it } from "node:test";
 import { runBob } from "../support/bob_process.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { waitForJobStatus } from "../support/job_status.ts";
 
 const WAIT_MS = 20_000;
 const POLL_MS = 10;
@@ -35,6 +36,10 @@ function countInvoked(tree: Tree): number {
     return tree.invoked.reduce((sum, child) => sum + 1 + countInvoked(child), 0);
 }
 
+function isSettled(tree: Tree): boolean {
+    return tree.status === "idle" && tree.invoked.every(isSettled);
+}
+
 const invocationsOf = (daemon: DaemonProcess, conversationId: string) =>
     daemon.invoke("conversations.invocations", { conversationId }) as Promise<Tree>;
 
@@ -46,11 +51,17 @@ async function nestedFixture(): Promise<Fixture> {
     await daemon.ready;
     const created = (await daemon.invoke("jobs.create", { text: "Pick the database" })) as JobView;
     let leadId = "";
+    await waitForJobStatus(
+        async () => ((await daemon.invoke("jobs.get", { job: created.id })) as JobView).status,
+        "in_progress",
+    );
     await until(async () => {
         const job = (await daemon.invoke("jobs.get", { job: created.id })) as JobView;
         leadId = job.leadConversation ?? "";
-        return leadId !== "" && countInvoked(await invocationsOf(daemon, leadId)) === INVOKED_COUNT;
-    }, "the lead and its three invoked conversations");
+        if (leadId === "") return false;
+        const tree = await invocationsOf(daemon, leadId);
+        return countInvoked(tree) === INVOKED_COUNT && isSettled(tree);
+    }, "the lead and its three invoked conversations to be idle");
     return { env, daemon, leadId };
 }
 

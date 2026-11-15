@@ -20,7 +20,11 @@ afterEach(disposeAll);
 
 type Started = Awaited<ReturnType<typeof start>>;
 
-/** Starts a job whose lead invokes an agent that holds its run, and returns once that agent runs. */
+/**
+ * Starts a job whose lead invokes an agent that holds its run, and returns once that agent runs and the lead's first
+ * turn has ended. Each model request reads the prompt first, so the agent can run before the lead's turn ends, and an
+ * abort that comes before the end would fall within the lead's first run.
+ */
 async function startWithRunningInvoked(mode: "parked" | "steerable") {
     const gate = deferred();
     let isRunning = false;
@@ -37,6 +41,7 @@ async function startWithRunningInvoked(mode: "parked" | "steerable") {
     });
     const job = await started.createJob("invoking lead");
     await waitFor(() => isRunning, "the invoked agent to run");
+    await waitFor(() => started.turnEndsOf(job.id) === 1, "the lead's first turn to end");
     return { started, job };
 }
 

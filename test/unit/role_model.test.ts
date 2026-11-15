@@ -9,14 +9,14 @@ import {
     RoleInvalidError,
     resolveSeat,
     SHIPPED_TOOL_NAMES,
+    SKILL_TOOL_NAME,
     validateRoleDefinition,
 } from "../../src/roles/role_model.ts";
 
 const role = (overrides: Partial<RoleDefinition> = {}): RoleDefinition => ({
     name: "writer",
-    instructions: "Write things.",
     tools: ["read", "write"],
-    skills: ["/skills/style"],
+    skills: ["style"],
     ...overrides,
 });
 
@@ -40,7 +40,7 @@ describe("tool name lists", () => {
 });
 
 describe("resolveSeat", () => {
-    it("uses the overrides with the role's instructions, tools and skills", () => {
+    it("uses the overrides with the role's tools and skills, and carries no instructions", () => {
         const seat = resolveSeat(
             role({ model: "role-model", thinkingLevel: "high", workspace: "/role/ws" }),
             defaults,
@@ -50,9 +50,9 @@ describe("resolveSeat", () => {
         assert.equal(seat.model, "o-model");
         assert.equal(seat.thinkingLevel, "medium");
         assert.equal(seat.workspace, "/o/ws");
-        assert.equal(seat.instructions, "Write things.");
-        assert.deepEqual(seat.skills, ["/skills/style"]);
-        assert.deepEqual(seat.tools, ["read", "write", ...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES]);
+        assert.equal("instructions" in seat, false);
+        assert.deepEqual(seat.skills, ["style"]);
+        assert.deepEqual(seat.tools, ["read", "write", ...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES, SKILL_TOOL_NAME]);
     });
 
     it("prefers the role's defaults over the defaults argument", () => {
@@ -83,7 +83,7 @@ describe("resolveSeat", () => {
 
     it("includes every coordination and job tool for a role with an empty tool set", () => {
         const seat = resolveSeat(role({ tools: [] }), defaults);
-        assert.deepEqual(seat.tools, [...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES]);
+        assert.deepEqual(seat.tools, [...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES, SKILL_TOOL_NAME]);
     });
 
     it("does not duplicate coordination or job tools the role already names", () => {
@@ -95,6 +95,7 @@ describe("resolveSeat", () => {
             "handoff",
             "steer",
             ...JOB_TOOL_NAMES.filter((name) => name !== "read_job"),
+            SKILL_TOOL_NAME,
         ]);
     });
 });
@@ -102,7 +103,7 @@ describe("resolveSeat", () => {
 describe("resolveSeat in the front desk", () => {
     it("gives the role's tools and the front-desk tools, with no coordination or own-job tool", () => {
         const seat = resolveSeat(role({ tools: ["read", "write"] }), defaults, {}, "front_desk");
-        assert.deepEqual(seat.tools, ["read", "write", ...FRONT_DESK_TOOL_NAMES]);
+        assert.deepEqual(seat.tools, ["read", "write", ...FRONT_DESK_TOOL_NAMES, SKILL_TOOL_NAME]);
         for (const name of ["handoff", "invoke", "steer", "block_job", "complete_job"]) {
             assert.ok(!seat.tools.includes(name), `${name} must not be offered`);
         }
@@ -110,12 +111,12 @@ describe("resolveSeat in the front desk", () => {
 
     it("gives the desk role exactly the front-desk tools", () => {
         const seat = resolveSeat(role({ name: "desk", tools: [] }), defaults, {}, "front_desk");
-        assert.deepEqual(seat.tools, [...FRONT_DESK_TOOL_NAMES]);
+        assert.deepEqual(seat.tools, [...FRONT_DESK_TOOL_NAMES, SKILL_TOOL_NAME]);
     });
 
     it("keeps the job tools for a seat resolved with the job place", () => {
         const seat = resolveSeat(role({ tools: [] }), defaults, {}, "job");
-        assert.deepEqual(seat.tools, [...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES]);
+        assert.deepEqual(seat.tools, [...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES, SKILL_TOOL_NAME]);
     });
 });
 
@@ -141,13 +142,13 @@ describe("validateRoleDefinition", () => {
         validateRoleDefinition(role({ name: "a".repeat(40) }));
     });
 
-    it("refuses empty instructions", () => {
-        assert.equal(invalidField(role({ instructions: "" })).field, "instructions");
-    });
-
-    it("refuses a relative skill path", () => {
-        assert.equal(invalidField(role({ skills: ["skills/style"] })).field, "skills");
-    });
+    for (const skill of ["", "skills/style", "/skills/style"]) {
+        it(`refuses the skill name "${skill}"`, () => {
+            const error = invalidField(role({ skills: ["style", skill] }));
+            assert.equal(error.field, "skills");
+            assert.match(error.reason, new RegExp(`"${skill}"`));
+        });
+    }
 
     it("refuses a relative workspace path", () => {
         assert.equal(invalidField(role({ workspace: "ws" })).field, "workspace");
@@ -157,8 +158,8 @@ describe("validateRoleDefinition", () => {
 describe("applyRoleChange", () => {
     it("replaces only the changed fields", () => {
         const base = role({ model: "m" });
-        const changed = applyRoleChange(base, { instructions: "New.", tools: ["edit"] });
-        assert.deepEqual(changed, { ...base, instructions: "New.", tools: ["edit"] });
+        const changed = applyRoleChange(base, { model: "n", tools: ["edit"] });
+        assert.deepEqual(changed, { ...base, model: "n", tools: ["edit"] });
     });
 
     it("leaves the base unchanged", () => {

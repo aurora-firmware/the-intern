@@ -57,6 +57,7 @@ export type SeatRecord = {
 };
 export type JobLinks = { jobId: string | null; isLead: boolean; origin: Origin; depth: number; invokedBy?: string };
 export type ConversationMeta = JobLinks & {
+    /** A seat written since S-008 holds no `skills` or `instructions`; older documents keep both, and no reader uses them. */
     seat: Seat;
     awaiting: string[];
     parked: ParkedState | null;
@@ -66,6 +67,8 @@ export type ConversationMeta = JobLinks & {
     closed?: boolean;
     /** The entry ID a team member's abort of the job's lead marked; a document without it reads as not marked. */
     stopped?: string;
+    /** The skill names enabled for the agent; every seat write resets it to the role's defaults. A document written before S-008 has none. */
+    enabledSkills?: string[];
 };
 export type SeatChange = { seat: Seat; actor: SeatActor; contextMode?: ContextMode; note?: string };
 
@@ -77,7 +80,7 @@ const unsetMeta = (): ConversationMeta => ({
     isLead: false,
     origin: { kind: "request", wayIn: "" },
     depth: 0,
-    seat: { role: "", model: "", workspace: "", instructions: "", tools: [], skills: [] },
+    seat: { role: "", model: "", workspace: "", tools: [], skills: [] },
     awaiting: [],
     parked: null,
     held: [],
@@ -148,7 +151,9 @@ async function writeSeat(
         tools: toToolSelection(seat.tools),
         extensions: extensionSelectionFor(meta.origin) ?? null,
     });
-    meta.seat = toStoredJson(seat);
+    const { skills: _skills, instructions: _instructions, ...stored } = seat;
+    meta.seat = toStoredJson(stored) as Seat;
+    meta.enabledSkills = [...seat.skills];
     const record: SeatRecord = {
         previous: previous === null ? null : summarize(previous),
         next: summarize(seat),

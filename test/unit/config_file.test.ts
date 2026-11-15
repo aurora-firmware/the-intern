@@ -115,4 +115,33 @@ describe("loadConfig", () => {
             return true;
         });
     });
+
+    it("throws ConfigError with the dotted key when a section's check rejects the parsed value", async () => {
+        const checked = defineConfigSection<Limits>({
+            ...limitsSection,
+            async check(value) {
+                if (value.max > 5) throw new ConfigValueError("max", "must be at most 5");
+            },
+        });
+        await writeFile(file, "[limits]\nmax = 7\n");
+        await assert.rejects(loadConfig(file, [checked]), (error: unknown) => {
+            assert.ok(error instanceof ConfigError);
+            assert.equal(error.key, "limits.max");
+            assert.equal(error.reason, "must be at most 5");
+            assert.ok(error.message.includes(file));
+            return true;
+        });
+    });
+
+    it("runs a section's check on its default value when the file is missing", async () => {
+        const seen: Limits[] = [];
+        const checked = defineConfigSection<Limits>({
+            ...limitsSection,
+            async check(value) {
+                seen.push(value);
+            },
+        });
+        await loadConfig(file, [checked]);
+        assert.deepEqual(seen, [{ max: 1 }]);
+    });
 });

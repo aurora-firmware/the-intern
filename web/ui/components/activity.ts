@@ -18,6 +18,7 @@ import {
     heldNotice,
     mergeEntries,
     seatRole,
+    skillChangeWords,
 } from "../model/activity.ts";
 
 /** What a conversation's feed state says: whether a run is going on, and the answer being written. */
@@ -122,6 +123,19 @@ const seatBoxes = (entry: ActivityEntry): Box[] => {
     ];
 };
 
+/** A skill change names its actor, the skill and whether it was enabled or disabled. */
+const skillsBoxes = (entry: ActivityEntry): Box[] => {
+    const words = skillChangeWords(entry);
+    if (words === undefined) return [];
+    return [
+        {
+            kind: "skills",
+            label: "Skill changed",
+            body: [h(Output, { text: `${words.skill} ${words.change} by ${words.actor}` })],
+        },
+    ];
+};
+
 /** What an entry draws: one box per message of a tool result, one for the other kinds, none for the rest. */
 const boxesOf = (entry: ActivityEntry): Box[] => {
     const messages = messagesOf(entry.data);
@@ -160,6 +174,8 @@ const boxesOf = (entry: ActivityEntry): Box[] => {
         }
         case "intern.seat":
             return seatBoxes(entry);
+        case "intern.skills":
+            return skillsBoxes(entry);
         case "pi.compaction":
             return [{ kind: "compaction", label: "Compacted", body: [] }];
         case "pi.reset":

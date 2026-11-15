@@ -26,6 +26,7 @@ import { readConversationMeta } from "../../src/host/seating.ts";
 import { STEER_RECORD_KIND } from "../../src/host/steering.ts";
 import { blockJob, startJob } from "../../src/jobs/job_actions.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
+import { SKILL_TOOL_NAME } from "../../src/roles/role_model.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -203,12 +204,12 @@ const jsonOf = (result: Seen | undefined) => JSON.parse(result?.text ?? "null");
 const asStored = (value: unknown) => JSON.parse(JSON.stringify(value));
 
 describe("the front-desk state and steering tools", { timeout: TEST_TIMEOUT_MS }, () => {
-    it("offers exactly the front desk's tools and none of the job conversation or file tools", async () => {
+    it("offers exactly the front desk's tools and skill, and none of the job conversation or file tools", async () => {
         const fixture = await start();
 
         await fixture.run([]);
 
-        assert.deepEqual([...fixture.offered()].sort(), [...FRONT_DESK_TOOL_NAMES].sort());
+        assert.deepEqual([...fixture.offered()].sort(), [...FRONT_DESK_TOOL_NAMES, SKILL_TOOL_NAME].sort());
         for (const name of [
             "handoff",
             "invoke",
@@ -263,7 +264,7 @@ describe("the front-desk state and steering tools", { timeout: TEST_TIMEOUT_MS }
         const [child] = await createInvokedConversations(fixture.ctx.host, {
             invokingId: job.leadConversation,
             callId: "invoke-1",
-            agents: [{ seat: lead, contextMode: "clean", jobPrompt: HANG_PROMPT }],
+            agents: [{ seat: { ...lead, skills: [] }, contextMode: "clean", jobPrompt: HANG_PROMPT }],
             actor: { kind: "agent", conversationId: job.leadConversation, role: lead.role },
         });
         assert.ok(child);

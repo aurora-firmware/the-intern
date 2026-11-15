@@ -19,6 +19,7 @@ import {
     type Resolution,
 } from "./job_model.ts";
 import {
+    FIRED_INSTANT_SQL,
     insertSkip,
     newestJobId,
     readScheduleRuns,
@@ -28,7 +29,7 @@ import {
 
 export type { ScheduleRunItem, ScheduleSkip };
 
-export const JOB_SCHEMA_VERSION = 4;
+export const JOB_SCHEMA_VERSION = 5;
 
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 500;
@@ -262,6 +263,10 @@ export const JOB_MIGRATIONS: readonly string[] = [
     INSERT INTO intern_job_keys SELECT 'schedules.run', idempotency_key, id FROM intern_jobs
         WHERE idempotency_key IS NOT NULL AND json_extract(origin, '$.kind') = 'schedule'
         AND json_type(origin, '$.onDemand') IS NOT NULL;
+    `,
+    `
+    CREATE INDEX intern_jobs_by_schedule_instant ON intern_jobs
+        (schedule_entry, ${FIRED_INSTANT_SQL});
     `,
 ];
 

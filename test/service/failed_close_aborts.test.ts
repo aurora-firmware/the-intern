@@ -38,6 +38,10 @@ async function blockedJobWithChild() {
         actor: author,
     });
     await waitFor(() => rig.isIdle(child as string), "the invoked conversation to be idle");
+    // The lead answers the invoked conversation's report in a third model turn. A complete made before that turn would
+    // be no lead's own complete, which ends the lead's run at the call, and the turn would start a second compaction.
+    const answers = async () => (await rig.kinds(job.leadConversation)).filter((kind) => kind === "pi.assistant");
+    await waitFor(async () => (await answers()).length === 3, "the lead's answer to the report");
     return { rig, job, lead: job.leadConversation, child: child as string };
 }
 

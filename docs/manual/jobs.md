@@ -211,7 +211,8 @@ Intern records it from the way in you used.
 ### Follow jobs
 
 List jobs, newest first. `jobs.list` takes the optional `status` (`to_do`, `in_progress`, `blocked` or `done`),
-`letter` (`C`, `W`, `E`, `S` or `A`), `relatedTo` (a job), `limit` (1 to 500, 50 when you give none) and `cursor`.
+`letter` (`C`, `W`, `E`, `S` or `A`), `relatedTo` (a job), `schedule` (a schedule entry's name, for the jobs it ran),
+`limit` (1 to 500, 50 when you give none) and `cursor`.
 It answers a page of jobs without worklog and history, and a `cursor` for the next page when there is one:
 
 ```

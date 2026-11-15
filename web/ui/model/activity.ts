@@ -123,3 +123,30 @@ export const seatRole = (entries: readonly ActivityEntry[]): string | undefined 
     }
     return (newest?.data as { next?: { role?: string } } | null | undefined)?.next?.role;
 };
+
+/** Who made a change, as the activity says it: the way in of a team member, the role of an agent, a source or the daemon. */
+type ChangeActor =
+    | { kind: "team_member"; wayIn: string }
+    | { kind: "agent"; role: string }
+    | { kind: "job_source"; source: string }
+    | { kind: "daemon" };
+
+/** The words of an `intern.skills` record: its actor, the skill and "enabled" or "disabled". Nothing for malformed data. */
+export const skillChangeWords = (
+    entry: ActivityEntry,
+): { actor: string; skill: string; change: string } | undefined => {
+    const data = entry.data as { actor?: ChangeActor; skill?: unknown; change?: unknown } | null;
+    if (typeof data?.skill !== "string" || (data.change !== "enabled" && data.change !== "disabled")) {
+        return undefined;
+    }
+    const actor = data.actor;
+    const actorWords =
+        actor?.kind === "team_member"
+            ? `team member by ${actor.wayIn}`
+            : actor?.kind === "agent"
+              ? `agent ${actor.role}`
+              : actor?.kind === "job_source"
+                ? `job source ${actor.source}`
+                : "daemon";
+    return { actor: actorWords, skill: data.skill, change: data.change };
+};

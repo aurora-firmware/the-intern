@@ -19,9 +19,11 @@ import { localTimeText } from "../../src/schedules/schedule_time.ts";
 import { createSchedulesComponent } from "../../src/schedules/schedules_component.ts";
 import { leadStartFor } from "../../src/service/job_operations.ts";
 import { ServiceError } from "../../src/service/operations.ts";
+import { roleInstructionPath } from "../../src/skills/internal_folder.ts";
 import { startDaemon } from "../support/daemon_process.ts";
 import { createFakeModel, type FakeModelOptions, type FakeTranscript } from "../support/fake_model.ts";
 import { createHermeticEnv } from "../support/hermetic_env.ts";
+import { waitForJobStatus } from "../support/job_status.ts";
 import { createTestClock, type ScheduleRig, startScheduleRig } from "../support/schedule_rig.ts";
 
 type ReplyFn = Parameters<typeof createFakeModel>[0];
@@ -118,6 +120,10 @@ async function fireRig(t: TestContext, extra = "", model: FakeModelOptions & { r
         history: () => ctx.jobStore.listScheduleRuns("nightly", {}),
     };
 }
+
+/** A job starts on the admission grant, after its prompt is read, so a test that completes a new job waits for it. */
+const untilInProgress = (rig: { ctx: ServiceContext }, job: string): Promise<void> =>
+    waitForJobStatus(async () => (await rig.ctx.jobStore.getJob(job)).status, "in_progress");
 
 async function waitFor(check: () => Promise<boolean>, description: string): Promise<void> {
     const deadline = Date.now() + WAIT_TIMEOUT_MS;
@@ -237,6 +243,24 @@ describe("a skipped schedule fire", { timeout: TEST_TIMEOUT_MS }, () => {
         assert.equal(item.skip.openRun, null);
         assert.deepEqual((await rig.ctx.jobStore.listJobs({})).jobs, []);
         await rig.invoke("schedules.change", { name: "nightly", model: null });
+        rig.clock.set(at(1, 2));
+        await waitFor(async () => (await rig.history()).items.length === 2, "the next run");
+        assert.equal((await rig.ctx.jobStore.latestScheduledRun("nightly"))?.number, "S-1");
+    });
+
+    it("records a team role's missing instruction file without using a job number (S-007 AC-006.5)", async (t) => {
+        const rig = await fireRig(t);
+        await rig.invoke("roles.create", { name: "reviewer", instructions: "Review.", tools: ["read"], skills: [] });
+        await rig.invoke("schedules.change", { name: "nightly", role: "reviewer" });
+        const file = roleInstructionPath(rig.env.dataDir, "reviewer");
+        await rm(file);
+        rig.clock.set(at(1, 1));
+        await waitFor(async () => (await rig.history()).items.length === 1, "the skipped fire");
+        const item = (await rig.history()).items[0];
+        assert.ok(item?.kind === "skip");
+        assert.ok(item.skip.reason.includes("instructions/roles/reviewer.md"), item.skip.reason);
+        assert.deepEqual((await rig.ctx.jobStore.listJobs({})).jobs, []);
+        await writeFile(file, "Review.");
         rig.clock.set(at(1, 2));
         await waitFor(async () => (await rig.history()).items.length === 2, "the next run");
         assert.equal((await rig.ctx.jobStore.latestScheduledRun("nightly"))?.number, "S-1");
@@ -550,6 +574,21 @@ describe("a schedule run on demand", { timeout: TEST_TIMEOUT_MS }, () => {
     });
 });
 
+describe("a schedule run on demand for a team role with no instruction file", { timeout: TEST_TIMEOUT_MS }, () => {
+    it("refuses naming the file, creates no job and records no skipped fire (S-007 AC-008.4)", async (t) => {
+        const rig = await fireRig(t);
+        await rig.invoke("roles.create", { name: "reviewer", instructions: "Review.", tools: ["read"], skills: [] });
+        await rig.invoke("schedules.change", { name: "nightly", role: "reviewer" });
+        await rm(roleInstructionPath(rig.env.dataDir, "reviewer"));
+        await assert.rejects(rig.invoke("schedules.run", { name: "nightly" }), {
+            code: "invalid_input",
+            message: /instructions\/roles\/reviewer\.md/,
+        });
+        assert.deepEqual((await rig.history()).items, []);
+        assert.deepEqual((await rig.ctx.jobStore.listJobs({})).jobs, []);
+    });
+});
+
 describe("on-demand callers", { timeout: TEST_TIMEOUT_MS }, () => {
     it("accepts the front desk and refuses other agents", async (t) => {
         const rig = await fireRig(t);
@@ -668,6 +707,7 @@ describe("missed due times and job endings", { timeout: TEST_TIMEOUT_MS }, () =>
         const rig = await fireRig(t);
         rig.clock.set(at(1, 1));
         await waitFor(async () => (await rig.history()).items.length === 1, "the first run");
+        await untilInProgress(rig, "S-1");
         await rig.invoke("jobs.update", { job: "S-1", definitionOfDone: "The work is done." });
         await rig.invoke("jobs.complete", { job: "S-1", justification: "Finished." });
         rig.clock.set(at(1, 2));
@@ -705,6 +745,7 @@ describe("missed due times and job endings", { timeout: TEST_TIMEOUT_MS }, () =>
         const rig = await fireRig(t);
         rig.clock.set(at(1, 1));
         await waitFor(async () => (await rig.history()).items.length === 1, "the first run");
+        await untilInProgress(rig, "S-1");
         await rig.invoke("jobs.update", { job: "S-1", definitionOfDone: "The work is done." });
         await rig.invoke("jobs.complete", { job: "S-1", justification: "Finished." });
         await sleep(100);

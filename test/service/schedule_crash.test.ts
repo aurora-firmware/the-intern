@@ -20,6 +20,7 @@ import {
     type JobView,
     listingOf,
     TEST_TIMEOUT_MS,
+    untilInProgress,
     untilKilled,
     untilStatus,
     untilTrue,
@@ -104,7 +105,8 @@ describe("kill -9 just after the job of a scheduled fire is created", () => {
         const jobs = await runsOf(second, ENTRY);
         assert.equal(jobs.length, 1);
         const [job] = jobs as [JobView];
-        assert.equal(job.status, "in_progress");
+        // Rule 1 seats the lead at startup; the job starts on the lead's admission grant, which may come after ready.
+        await untilInProgress(second, job.id);
         assert.deepEqual(await repairRulesOf(second, job.id), [1]);
         const leads = (await conversationsOf(second, job.id)).filter((conversation) => conversation.isLead);
         assert.equal(leads.length, 1);
@@ -132,7 +134,7 @@ describe("kill -9 just after the job of a scheduled fire is created", () => {
         const jobs = await runsOf(second, ENTRY);
         assert.equal(jobs.length, 1);
         const [job] = jobs as [JobView];
-        assert.equal(job.status, "in_progress");
+        await untilInProgress(second, job.id);
         assert.equal((await conversationsOf(second, job.id)).filter((conversation) => conversation.isLead).length, 1);
         assert.deepEqual(await repairRulesOf(second, job.id), [1]);
         assert.deepEqual(await skipsOf(second, ENTRY), []);

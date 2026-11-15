@@ -10,9 +10,10 @@ export type Author =
     | { kind: "agent"; conversationId: string; role: string }
     | { kind: "team_member"; wayIn: string; observed?: Observed }
     | { kind: "daemon" };
+export type OnDemand = { wayIn: string; observed?: Observed; frontDesk?: string };
 export type Origin =
     | { kind: "request"; wayIn: string; observed?: Observed; frontDesk?: string }
-    | { kind: "schedule"; entry: string }
+    | { kind: "schedule"; entry: string; fireTime: string; onDemand?: OnDemand }
     | { kind: "follow_up"; jobId: string };
 export type JobRecord = {
     id: string;
@@ -63,6 +64,11 @@ const useJobNumber = (jobId: string | undefined): string | undefined => {
     return read?.jobId === jobId ? read?.number : undefined;
 };
 
+const onDemandText = ({ wayIn, observed, frontDesk }: OnDemand): string =>
+    frontDesk === undefined
+        ? `, on demand by ${wayIn}${addressOf(observed)}`
+        : `, on demand by ${wayIn} through the front desk`;
+
 const originText = (origin: Origin, sourceNumber: string | undefined): string => {
     switch (origin.kind) {
         case "request":
@@ -70,7 +76,7 @@ const originText = (origin: Origin, sourceNumber: string | undefined): string =>
                 ? `Request by ${origin.wayIn}${addressOf(origin.observed)}`
                 : `Request by ${origin.wayIn} through the front desk`;
         case "schedule":
-            return `Schedule ${origin.entry}`;
+            return `Schedule ${origin.entry}, fire time ${origin.fireTime}${origin.onDemand === undefined ? "" : onDemandText(origin.onDemand)}`;
         case "follow_up":
             return sourceNumber === undefined ? "Follow-up of another job" : `Follow-up of job ${sourceNumber}`;
     }

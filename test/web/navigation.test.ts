@@ -11,6 +11,7 @@ const PAGES = [
     { name: "Front desk", hash: "#/desk" },
     { name: "Roles", hash: "#/roles" },
     { name: "Workspaces", hash: "#/workspaces" },
+    { name: "Schedules", hash: "#/schedules" },
     { name: "Status", hash: "#/status" },
     { name: "Board", hash: "#/" },
 ];
@@ -40,7 +41,6 @@ async function startRig(): Promise<{ port: number; job: Job }> {
 }
 
 const hashOf = (page: Page) => new URL(page.url()).hash;
-const heading = (page: Page) => page.locator("main h2.page-heading").textContent();
 const jobTitle = (page: Page) => page.locator("main .job-field[data-field='title'] .job-value");
 
 const waitForHeading = (page: Page, text: string) =>

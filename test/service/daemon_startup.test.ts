@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { access, chmod, readdir, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import type { Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import { createAgentsComponent } from "../../src/agents/agents_component.ts";
+import { defineConfigSection } from "../../src/config/config_file.ts";
 import { WORKER_THREAD_COUNT } from "../../src/daemon/constants.ts";
 import {
     type DaemonComponent,
@@ -20,6 +22,7 @@ import { recordOpenedVersions, runningVersions } from "../../src/host/versions.t
 import { JOB_SCHEMA_VERSION } from "../../src/jobs/job_store.ts";
 import { ServiceError } from "../../src/service/operations.ts";
 import type { DaemonStatus } from "../../src/service/status_operation.ts";
+import { createSkillsComponent } from "../../src/skills/skills_component.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
@@ -250,6 +253,132 @@ describe("runDaemon startup", () => {
     });
 });
 
+describe("runDaemon prepareFiles", () => {
+    const flagSection = defineConfigSection<{ value: string }>({
+        name: "flag",
+        defaults: () => ({ value: "default" }),
+        parse: () => ({ value: "parsed" }),
+        serialize: (value) => ({ value: value.value }),
+    });
+
+    it("builds the configuration store from the configuration a component's prepareFiles returns", async () => {
+        const fixture = await createFixture();
+        let seen: string | undefined;
+        const component: DaemonComponent = {
+            name: "preparer",
+            async prepareFiles({ config }) {
+                return { values: new Map([["flag", { value: "prepared" }]]), fingerprint: config.fingerprint };
+            },
+            async start(ctx) {
+                seen = ctx.config.current(flagSection).value;
+            },
+        };
+        const daemon = fixture.start({ sections: [flagSection], components: [component] });
+        await until(() => daemon.phase() === "ready", "the daemon to be ready");
+
+        assert.equal(seen, "prepared");
+    });
+
+    it("hands each prepareFiles the directories and the loaded configuration, and keeps it when it returns nothing", async () => {
+        const fixture = await createFixture();
+        const received: string[] = [];
+        let seen: string | undefined;
+        const component: DaemonComponent = {
+            name: "preparer",
+            async prepareFiles({ dirs, config }) {
+                received.push(dirs.stateDir, String((config.values.get("flag") as { value: string }).value));
+                return undefined;
+            },
+            async start(ctx) {
+                seen = ctx.config.current(flagSection).value;
+            },
+        };
+        const daemon = fixture.start({ sections: [flagSection], components: [component] });
+        await until(() => daemon.phase() === "ready", "the daemon to be ready");
+
+        assert.deepEqual(received, [fixture.env.stateDir, "default"]);
+        assert.equal(seen, "default");
+    });
+
+    it("runs no prepareFiles while another daemon owns the state directory", async () => {
+        const fixture = await createFixture();
+        const first = fixture.start();
+        await until(() => first.phase() === "ready", "the first daemon to be ready");
+        fixture.lines.length = 0;
+        let isPrepared = false;
+        const component: DaemonComponent = {
+            name: "preparer",
+            async prepareFiles() {
+                isPrepared = true;
+                return undefined;
+            },
+        };
+
+        const second = fixture.start({ components: [component] });
+
+        assert.equal(await second.exited, 1);
+        assert.match(linesMatching(fixture.lines, "ERROR")[0], /step=3/);
+        assert.equal(isPrepared, false);
+    });
+
+    it("names step 3, releases ownership and settles with 1 when prepareFiles throws", async () => {
+        const fixture = await createFixture();
+        const component: DaemonComponent = {
+            name: "preparer",
+            async prepareFiles() {
+                throw new Error("could not seed the files");
+            },
+        };
+        const daemon = fixture.start({ components: [component] });
+
+        assert.equal(await daemon.exited, 1);
+
+        const failure = linesMatching(fixture.lines, "ERROR");
+        assert.equal(failure.length, 1);
+        assert.match(failure[0], /step=3/);
+        assert.match(failure[0], /could not seed the files/);
+        assert.equal(await exists(join(fixture.env.stateDir, "owner.lock")), false);
+    });
+
+    it("names step 3 and the path when the internal folder cannot be written", async () => {
+        const fixture = await createFixture();
+        const blocker = join(fixture.env.dataDir, "skills");
+        await writeFile(blocker, "a file where the skills folder belongs\n");
+        const skills = createSkillsComponent({
+            logger: createLogger({ verbose: false, stream: { write: () => true } }),
+        });
+        const daemon = fixture.start({ sections: skills.sections, components: [skills.component] });
+
+        assert.equal(await daemon.exited, 1);
+
+        const failure = linesMatching(fixture.lines, "ERROR");
+        assert.equal(failure.length, 1);
+        assert.match(failure[0], /step=3/);
+        assert.ok(failure[0].includes(blocker), failure[0]);
+        assert.equal(await exists(join(fixture.env.stateDir, "owner.lock")), false);
+    });
+
+    it("names step 1 and the path when a skills search path is readable by other accounts", async () => {
+        const fixture = await createFixture();
+        const searchPath = join(fixture.env.root, "shared-skills");
+        await mkdir(searchPath);
+        await chmod(searchPath, 0o755);
+        await writeFile(join(fixture.env.configDir, "config.toml"), `[skills]\npaths = ["${searchPath}"]\n`);
+        const skills = createSkillsComponent({
+            logger: createLogger({ verbose: false, stream: { write: () => true } }),
+        });
+        const daemon = fixture.start({ sections: skills.sections, components: [skills.component] });
+
+        assert.equal(await daemon.exited, 1);
+
+        const failure = linesMatching(fixture.lines, "ERROR");
+        assert.equal(failure.length, 1);
+        assert.match(failure[0], /step=1/);
+        assert.ok(failure[0].includes(searchPath), failure[0]);
+        assert.match(failure[0], /accessible only to the service account/);
+    });
+});
+
 describe("runDaemon startup failures", () => {
     it("names step 1 and creates no database file when the configuration is invalid", async () => {
         const fixture = await createFixture();
@@ -305,6 +434,32 @@ describe("runDaemon startup failures", () => {
         assert.equal(failure.length, 1);
         assert.match(failure[0], /step=3/);
         assert.match(failure[0], new RegExp(`pid ${process.pid}`));
+    });
+
+    it("names step 3, the role and the path when an older role skill path can't be converted, leaving the file unchanged", async () => {
+        const fixture = await createFixture();
+        const path = join(fixture.env.root, "not-a-skill");
+        await mkdir(path, { mode: 0o700 });
+        const configFile = join(fixture.env.configDir, "config.toml");
+        const original = `[roles.reviewer]\ntools = ["read"]\nskills = ["${path}"]\n`;
+        await writeFile(configFile, original);
+        const agents = await createAgentsComponent({
+            logger: createLogger({ verbose: false, stream: { write: () => true } }),
+        });
+        const daemon = fixture.start({
+            sections: agents.sections,
+            components: [agents.component],
+            operations: agents.operations,
+        });
+
+        assert.equal(await daemon.exited, 1);
+
+        const failure = linesMatching(fixture.lines, "ERROR");
+        assert.equal(failure.length, 1);
+        assert.match(failure[0], /step=3/);
+        assert.match(failure[0], /reviewer/);
+        assert.ok(failure[0].includes(path), failure[0]);
+        assert.equal(await readFile(configFile, "utf8"), original);
     });
 
     it("names step 5, releases ownership and settles with 1 when a model check fails", async () => {

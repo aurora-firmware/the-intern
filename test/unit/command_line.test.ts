@@ -163,7 +163,7 @@ describe("usage errors", () => {
 });
 
 describe("reserved groups", () => {
-    for (const argv of [["skills", "list"], ["skills"], ["mail", "--help"], ["knowledge", "x", "--bogus"]]) {
+    for (const argv of [["knowledge", "list"], ["knowledge"], ["mail", "--help"], ["knowledge", "x", "--bogus"]]) {
         it(`returns a reserved-group result naming the group for ${argv.join(" ")}`, () => {
             const result = parse(...argv);
             assert.equal(result.kind, "reserved-group");

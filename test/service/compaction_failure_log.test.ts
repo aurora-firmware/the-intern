@@ -60,6 +60,12 @@ describe("a compaction that fails", () => {
             return entries.map((entry) => entry.kind);
         };
         await untilTrue(async () => (await entryKinds()).includes("pi.tool-result"), "the 1 MiB tool result");
+        // The first run ends at its failed compaction and the turn-end rule blocks the job, which parks the lead. The
+        // second input goes to the parked lead, so it is not queued behind the first run.
+        await untilTrue(async () => {
+            const { status } = (await daemon.invoke("conversations.get", { conversationId })) as { status: string };
+            return status === "parked";
+        }, "the lead to be parked");
 
         await daemon.invoke("conversations.submit", { conversationId, content: "second", requestId: "r2" });
 
