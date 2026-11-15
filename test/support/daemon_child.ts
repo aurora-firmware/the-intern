@@ -114,6 +114,9 @@ const LONG_OUTPUT_CALL = { name: "bash", arguments: { command: "print the long o
 const LONG_OUTPUT_TEXT = "0123456789abcdef".repeat(LONG_OUTPUT_LENGTH / 16);
 // pi-durable's compaction summary request wraps the conversation in this tag (pi-durable 1.4.0).
 const SUMMARY_REQUEST_TAG = "<conversation>";
+// How long `long-output-failing-summary` holds back the summary answer, so a test can send an input during the
+// compaction.
+const FAILING_SUMMARY_DELAY_MS = 3000;
 /** An input starting with this text is answered with text and no tool call by the lead of `long-output`. */
 const TEXT_ONLY_INPUT_PREFIX = "text only: ";
 const DESK_CREATE_JOB_PREFIX = "create job ";
@@ -224,12 +227,15 @@ function replyFor(script: Script, transcript: FakeTranscript): FakeReply {
 
 /**
  * Holds back the answers a kill is meant to interrupt: all of `slow`, the answer after the tool of `desk-steer`, the
- * lead's answers to reports for `invoke-parked-slow-lead`, and the answers after the call of the others.
+ * summary answer of `long-output-failing-summary`, the lead's answers to reports for `invoke-parked-slow-lead`, and the
+ * answers after the call of the others.
  */
 function delayFor(switches: Switches, transcript: FakeTranscript): number {
     const delayMs = switches.delayMs ?? DEFAULT_SLOW_DELAY_MS;
     const lastText = lastUserText(transcript);
     if (switches.script === "slow") return delayMs;
+    if (switches.script === "long-output-failing-summary")
+        return lastText.includes(SUMMARY_REQUEST_TAG) ? FAILING_SUMMARY_DELAY_MS : 0;
     if (switches.script === "desk-steer") return hasToolResult(transcript) ? delayMs : 0;
     if (switches.script === "handoff-clean") return lastText === HANDOFF_NOTE ? delayMs : 0;
     if (switches.script === "invoke-parked") return lastText.startsWith(INVOKED_JOB_PROMPT_PREFIX) ? delayMs : 0;
