@@ -128,6 +128,10 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   reads whether that lead holds a submission with that request id (`hasSubmissionWithRequestId`), and owes the
   input when it doesn't. That read is made only for To do jobs with a known lead, so it adds nothing for a job in any
   other status. Rules 2 and 3 and the turn-end check read the lead of each Blocked or In progress job in their own way.
+  Rule 3 reads the lead's transcript newest first, back to the entry the block recorded in the job's internal
+  `blockedAfterEntry`, as `readLastAnswer` in `src/host/reports.ts` does. An input entry is a `pi.user` entry, the
+  steer record or an ADR-004 kind. The read decides whether the rule applies and rebuilds no job field;
+  `blockedAfterEntry` isn't returned by `jobs.get` or recorded in the history.
   Rule 4 applies to a Done job with a conversation that isn't closed, or that is closed but still runs, has a running
   compaction or has queued input: it closes the job's conversations and marks them for abort
   (`markJobConversationsForAbort`). Submitting input turns scheduling on (`Conversation.submit`), which the repair
@@ -306,6 +310,9 @@ small.
   except for an abort. An abort's facts are written in one commit just before pi-durable's abort, not in pi-durable's
   abort commit. The second: job writes are committed before their pi-durable change, and four startup repair rules are
   the only job recovery (S-004 REQ-018).
+- **Report delivery.** Report delivery hears the commits that set an abort mark through `watchConversationMeta` in
+  `src/host/host_observation.ts` and handles them in its one serial queue, like the end of a run; the abort itself never
+  calls delivery.
 
 ## Web interface
 
@@ -437,8 +444,26 @@ worker aren't available over plain HTTP.
 
 ### The export route
 
-ADR-001 decision 2 fixes its order and its folder. This adds the following.
+ADR-001 decision 2 fixes that the route calls `jobs.export` through the catalogue into a folder of its own and adds no
+operation. This adds the following.
 
+- **The steps.** The route makes a folder with `mkdtemp` under the `exports` folder of the state directory, which it
+  reads from `daemon.status`, calls `jobs.export` with the listener's caller to a new path in it, sends the file with
+  the size `jobs.export` returns as its length, and removes the folder when the download ends. Refusals before the
+  first byte come from the catalogue with their usual codes, `unavailable` outside the ready phase included.
+- **One download at a time.** The route holds one slot in memory, taken before anything else and freed when the
+  download ends, and a request that finds it taken gets `busy`. A kill loses the slot with the process, so it isn't a
+  fact of ADR-001 decision 4.
+- **Free space.** With the slot taken and the phase ready, the route compares the free space of the `exports` folder's
+  file system (`statfs`) with the sizes of the database file and its `-wal` file (`stat`, at the paths
+  `src/daemon/state_layout.ts` gives) plus the margin below, and too little gets `conflict` with no copy made. These
+  reads take metadata only, so the listener still reaches the daemon's state only through the catalogue, the feed and
+  the hooks. `busy` means try again soon; `conflict` means a team member has to act first.
+- **Stop and leftovers.** The listener's stop hook waits for each running export to settle and its folder to go,
+  within the stop bound. The network listener component removes what the `exports` folder still holds first thing in
+  its start hook, which runs at S-002 REQ-002 step 8 whether or not `[network]` is set, so leftovers of a killed daemon
+  go before the daemon reports ready. A failed removal is logged and stops nothing. It touches no state the daemon
+  resumes from, so it isn't a recovery under ADR-001 decision 4.
 - **The margin** is `EXPORT_FREE_SPACE_MARGIN_BYTES`, 256 MiB, in `src/listeners/export_route.ts`. The route refuses
   when the free space is under the database's size, plus its `-wal` file's, plus the margin. The copy itself fits in the
   first two, because `jobs.export` copies all pages in one step. The margin keeps room for what running jobs write while
@@ -881,7 +906,28 @@ pi-durable, and `skill_resolution.ts`, `role_prompt.ts` and the internal folder'
      the same instruction text again and then rewrites the file.
 - **Step 7.** The skills component's `repair` hook makes ADR-001's upgrade write before the jobs component's repair
   rules run. The flag sits in the daemon document `intern.upgrades`, `{ done: string[] }`, with the entry
-  `enabled-skills`.
+  `enabled-skills`. Documents written before S-008 have no `enabledSkills`, and their stored tool selection lacks
+  `skill` (S-008 REQ-008). After admission is restored and before the repair rules and `host.resume()`, each such
+  conversation gets, in one commit of its own, the running version's default skill names of its seat's role (none when
+  the role is gone), and `skill` added to its seat's tools and its pi-durable tool selection. A crash before the flag is
+  written repeats the write only for the documents still without the field. Until then the enable and disable write, the
+  system prompt, the `skill` tool and `skills.list` take a missing field as the role's current defaults. No team
+  member's read runs before step 7 ends, so none meets a document without the field. The instance feed's facts and
+  `conversations.get` and `conversations.list` take a missing field as an empty set and never read the older
+  `seat.skills`. The write delivers no input and adds no redelivery path or repair rule.
+
+### The internal folder
+
+ADR-009 states the rules; `src/skills/internal_folder.ts` builds them.
+
+- **The manifest format.** `<data dir>/shipped-files.json` is
+  `{ "version": 1, "files": { "<relative path>": "<hash>" } }`, written with mode `0600` through a temporary file in
+  the same folder and a rename.
+- **The start rule's removals.** Removing a recorded file the version no longer ships also removes any skill folder it
+  leaves empty.
+- **Restore.** A skill's restore copies the shipped folder to a temporary sibling, removes the old folder and renames
+  the copy in, so files a team member added to it go too; a file's restore replaces it atomically. The manifest write
+  comes last, so a crash in between leaves restored text that the next start or restore records.
 
 ### The skill catalog
 
@@ -1059,14 +1105,16 @@ it records.
 
 - **pi agent's skill loader for the catalog, or its `formatSkillsForPrompt` for the listing.** See
   [tech_stack.md](tech_stack.md), Skills and instructions.
-- **A skill cache cleared by file watches, or a per-seat cache as before S-008.** See ADR-009, Alternative D.
+- **A skill cache cleared by file watches, or a per-seat cache as before S-008.** See ADR-009, Alternatives Considered,
+  "A cache cleared by file watches".
 - **The `read` tool for the front desk, or skill text inlined in the prompt.** S-008, Alternatives Considered.
 - **The enabled set inside the seat.** S-008 REQ-006 makes it no part of the seat, and a change records no seat change;
   it sits beside the seat in the same document, so a seat write still resets it in the same commit.
 - **A scheduling library, or one timer per entry.** See [tech_stack.md](tech_stack.md), Schedules. One tick reads the
   entries as they are, so a change needs no timers rebuilt, and a clock jump needs no special case.
-- **Skipped fires as pi-durable documents or a file.** S-004 chose tables for saved job data (ADR-001, Alternative G),
-  and skips must travel with the database and be read in order with jobs.
+- **Skipped fires as pi-durable documents or a file.** S-004 chose tables for saved job data (ADR-001, Alternatives
+  Considered, "The job record in pi-durable documents"), and skips must travel with the database and be read
+  in order with jobs.
 - **The open run check in the scheduler, before `createJob`.** Two starts could both pass it. REQ-006 asks for one step,
   and only the store's transaction gives it.
 - **A notice stored in the job, or a new input kind for it.** Storing it risks the Request's exactness, and ADR-004
