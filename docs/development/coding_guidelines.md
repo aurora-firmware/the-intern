@@ -55,8 +55,10 @@ accepted ADRs win over this document; when they disagree, fix this document. The
 - **The job model and the job store stay free of pi packages.** `src/jobs/job_model.ts` imports nothing, and
   `src/jobs/job_store.ts` reaches the database only through the host's `HostDatabase`. A job store write never runs
   inside a pi-durable `commit()`, and a pi-durable commit never runs inside a job store transaction.
-- **Release-owned content loads by path from inside the package** (shipped skills, prompt text). No copy or install
-  step. Team customisation goes in an overlay loaded after the shipped content.
+- **Shipped text is copied into the internal folder and read from there.** The package carries shipped skills and
+  prompt text in `src/shipped/`, laid out as the internal folder is. At startup the daemon copies it into the internal
+  folder, and every model request reads only the internal folder. There is no overlay: team members edit the files in
+  place, and only the file store writes them (ADR-009 decisions 1 and 5).
 
 ## Command line
 
@@ -105,8 +107,8 @@ client" changes by amending [ADR-005](../ai-team/decisions/ADR-005-commands-load
   features. If you find yourself writing a retry loop or an intake table, check the library first. Decision 4 allows
   two bounded exceptions, and nothing else:
   - The-intern's own facts about a conversation (held messages, awaiting links, parked state, the abort mark, the
-    closed mark, creation keys) are pi-durable documents committed with the change they describe, and the only
-    recovery is redelivering the input they show as undelivered, made safe to repeat by request ids.
+    closed mark, the enabled set, creation keys) are pi-durable documents committed with the change they describe,
+    and the only recovery is redelivering the input they show as undelivered, made safe to repeat by request ids.
   - A job write is committed before the pi-durable change it goes with, and the four startup repair rules of S-004
     REQ-018 (`src/jobs/job_repair.ts`) are the only job recovery. Rule 4 closes and aborts the conversations of a Done
     job that a crash left open. Rule 3 also covers input the lead took since the job
