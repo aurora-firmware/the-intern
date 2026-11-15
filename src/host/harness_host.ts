@@ -201,13 +201,15 @@ export async function openHostDatabase(
 
 /**
  * The settings handed to pi-durable. `restartLimit` is set after the mapping, so no pi agent setting can lower it
- * (ADR-001 decision 4). pi-durable's own resolver is not a public export, so this is the setting as the host sets it.
+ * (ADR-001 decision 4). `afterFailedRun` is `"continue"`, so an input queued during a run that fails (a failed
+ * automatic compaction) is taken by the next run instead of staying queued under pi-durable's default `"keep"`.
+ * pi-durable's own resolver is not a public export, so this is the setting as the host sets it.
  */
 export function resolveHarnessSettings(
     mapping: HarnessSettingsMapping,
     extensions: readonly Extension[],
 ): HarnessSettings {
-    return { ...mapping, extensions, restartLimit: Number.POSITIVE_INFINITY };
+    return { ...mapping, extensions, restartLimit: Number.POSITIVE_INFINITY, afterFailedRun: "continue" };
 }
 
 function logReport(logger: Logger, error: unknown, info: ReportInfo): void {
