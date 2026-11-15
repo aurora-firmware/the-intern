@@ -1,11 +1,14 @@
 /**
  * The files operations (S-008 REQ-010): `files.read` and `files.write` reach the instruction files, the skill folders the
- * catalog found and a workspace's `AGENTS.md` and `CLAUDE.md`, and nothing else. A path is resolved first, so a missing
- * file and a symbolic link both resolve before the check. Neither operation creates or deletes a file.
+ * catalog found and the context files of a workspace and its parent folders, and nothing else. The path is normalised
+ * with `path.resolve`, which follows no link, and checked by the file it names, as written or by its real path. The
+ * operations then follow the links wherever they lead: the service account's permissions decide, and a refusal of the
+ * system is reported with its reason (ADR-002 decision 4). Neither operation creates or deletes a file.
  */
 
 import { realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { getSystemErrorMessage } from "node:util";
 import type { ServiceContext } from "../daemon/daemon.ts";
 import { type FileChangeKind, FileRefusedError } from "../skills/file_store.ts";
 import { instructionsFolderPath } from "../skills/internal_folder.ts";
@@ -14,7 +17,10 @@ import type { SkillsComponent } from "../skills/skills_component.ts";
 import { skillsSection } from "../skills/skills_section.ts";
 import { defineOperation, type Operation, ServiceError } from "./operations.ts";
 
-const WORKSPACE_FILES = ["AGENTS.md", "CLAUDE.md"] as const;
+// Every name pi agent's `loadProjectContextFiles` tries in a folder, whether or not it reads that file in place of another.
+const CONTEXT_FILES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"] as const;
+
+const REFUSED_BY_SYSTEM = new Set(["EACCES", "EPERM", "EROFS", "ELOOP"]);
 
 type ReadInput = { path: string };
 type WriteInput = { path: string; text: string; version: string };
@@ -68,9 +74,12 @@ const isBelow = (path: string, folder: string): boolean => {
     return inside !== "" && inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside);
 };
 
-type AllowedFiles = { skillFolders: string[]; instructions: string; workspaceFiles: string[] };
+type AllowedSet = { skillFolders: string[]; instructions: string; workspaceFiles: string[] };
 
-const kindOf = (path: string, allowed: AllowedFiles): FileChangeKind | undefined => {
+/** The allowed files as written (each workspace and skill folder by the path it is registered or found at) and as real paths. */
+type AllowedFiles = { written: AllowedSet; real: AllowedSet };
+
+const kindOf = (path: string, allowed: AllowedSet): FileChangeKind | undefined => {
     if (allowed.workspaceFiles.includes(path)) return "workspace";
     if (isBelow(path, allowed.instructions)) {
         const inside = relative(allowed.instructions, path);
@@ -80,8 +89,15 @@ const kindOf = (path: string, allowed: AllowedFiles): FileChangeKind | undefined
     return allowed.skillFolders.some((folder) => isBelow(path, folder)) ? "skill" : undefined;
 };
 
+/** The folder and each parent folder up to the root. */
+function folderAndParents(folder: string): string[] {
+    const folders = [folder];
+    for (let parent = dirname(folder); parent !== folders.at(-1); parent = dirname(parent)) folders.push(parent);
+    return folders;
+}
+
 export function fileOperations(component: SkillsComponent) {
-    /** Every file the operations may reach, as real paths, read fresh at each call. */
+    /** Every file the operations may reach, as written and as real paths, read fresh at each call. */
     const allowedFiles = async (ctx: ServiceContext): Promise<AllowedFiles> => {
         const workspaces = component.agentsRuntime().workspaces.list();
         const dataDir = component.dataDir();
@@ -95,41 +111,62 @@ export function fileOperations(component: SkillsComponent) {
                 }),
             ),
         );
-        const found = catalogs.flatMap((catalog) => [
-            ...catalog.skills.flatMap((skill) => [skill.folder, ...skill.shadowed.map(({ path }) => path)]),
-            ...catalog.leftOut.map(({ path }) => dirname(path)),
-        ]);
-        const folders = await Promise.all([...new Set(found)].map(realFolder));
-        const names = await Promise.all(
-            workspaces.flatMap(({ path }) =>
-                WORKSPACE_FILES.map(async (name) => realFolder(join(await resolvePath(path), name))),
+        const found = [
+            ...new Set(
+                catalogs.flatMap((catalog) => [
+                    ...catalog.skills.flatMap((skill) => [skill.folder, ...skill.shadowed.map(({ path }) => path)]),
+                    ...catalog.leftOut.map(({ path }) => dirname(path)),
+                ]),
             ),
-        );
+        ].map((folder) => resolve(folder));
+        const contextFiles = [
+            ...new Set(
+                workspaces.flatMap(({ path }) =>
+                    folderAndParents(resolve(path)).flatMap((folder) =>
+                        CONTEXT_FILES.map((name) => join(folder, name)),
+                    ),
+                ),
+            ),
+        ];
+        const instructions = instructionsFolderPath(dataDir);
+        const realOf = async (paths: string[]) =>
+            (await Promise.all(paths.map(realFolder))).filter((path) => path !== undefined);
         return {
-            skillFolders: folders.filter((folder) => folder !== undefined),
-            instructions: (await realFolder(instructionsFolderPath(dataDir))) ?? instructionsFolderPath(dataDir),
-            workspaceFiles: names.filter((name) => name !== undefined),
+            written: { skillFolders: found, instructions, workspaceFiles: contextFiles },
+            real: {
+                skillFolders: await realOf(found),
+                instructions: (await realFolder(instructions)) ?? instructions,
+                workspaceFiles: await realOf(contextFiles),
+            },
         };
     };
 
-    /** The real path of the file and its kind; a path outside the allowed files is refused. */
+    /** The normalised path and its kind; a path outside the allowed files, as written or by its real path, is refused. */
     const locate = async (ctx: ServiceContext, path: string): Promise<{ file: string; kind: FileChangeKind }> => {
         if (!isAbsolute(path)) throw new ServiceError("invalid_input", `${path} is not an absolute path`);
-        const file = await resolvePath(path);
-        const kind = kindOf(file, await allowedFiles(ctx));
+        const file = resolve(path);
+        const allowed = await allowedFiles(ctx);
+        const kind = kindOf(file, allowed.written) ?? kindOf((await realFolder(file)) ?? file, allowed.real);
         if (kind === undefined) {
             throw new ServiceError(
                 "invalid_input",
-                `${path} is not an instruction file, a skill file or a workspace file`,
+                `${path} is not an instruction file, a skill file or a context file of a workspace`,
             );
         }
         return { file, kind };
     };
 
-    const refusalOf = (error: unknown): unknown => {
-        if (!(error instanceof FileRefusedError)) return error;
-        const code = { not_found: "not_found", invalid: "invalid_input", conflict: "conflict" } as const;
-        return new ServiceError(code[error.kind], error.message);
+    const refusalOf = (error: unknown, path: string): unknown => {
+        if (error instanceof FileRefusedError) {
+            const code = { not_found: "not_found", invalid: "invalid_input", conflict: "conflict" } as const;
+            return new ServiceError(code[error.kind], error.message);
+        }
+        const { code, errno } = error as NodeJS.ErrnoException;
+        if (isMissing(error)) return new ServiceError("not_found", `${path}: the file doesn't exist`);
+        if (code !== undefined && REFUSED_BY_SYSTEM.has(code) && errno !== undefined) {
+            return new ServiceError("invalid_input", `${path}: ${getSystemErrorMessage(errno)}`);
+        }
+        return error;
     };
 
     const readOperation = defineOperation<ServiceContext, ReadInput, { text: string; version: string }>({
@@ -141,7 +178,7 @@ export function fileOperations(component: SkillsComponent) {
             try {
                 return await component.fileStore.read(file);
             } catch (error) {
-                throw refusalOf(error);
+                throw refusalOf(error, file);
             }
         },
     });
@@ -155,7 +192,7 @@ export function fileOperations(component: SkillsComponent) {
             try {
                 return { version: await component.fileStore.write(file, text, { version, announce: kind }) };
             } catch (error) {
-                throw refusalOf(error);
+                throw refusalOf(error, file);
             }
         },
     });

@@ -1,4 +1,4 @@
-import { lstat, open, readFile, realpath, rename, rm, stat } from "node:fs/promises";
+import { type FileHandle, lstat, open, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { fingerprintOf } from "../config/config_file.ts";
 
@@ -106,28 +106,41 @@ async function resolveTarget(path: string): Promise<string> {
     }
 }
 
-async function existingMode(path: string): Promise<number> {
+async function existingFile(path: string): Promise<{ mode: number; gid: number | undefined }> {
     try {
-        return (await lstat(path)).mode & PERMISSION_BITS;
+        const info = await lstat(path);
+        return { mode: info.mode & PERMISSION_BITS, gid: info.gid };
     } catch (error) {
-        if (errorCode(error) === "ENOENT") return NEW_FILE_MODE;
+        if (errorCode(error) === "ENOENT") return { mode: NEW_FILE_MODE, gid: undefined };
         throw error;
+    }
+}
+
+// Only a group the service account belongs to can be set; EPERM means the file keeps the service account's own group.
+async function keepGroup(handle: FileHandle, gid: number | undefined): Promise<void> {
+    if (gid === undefined) return;
+    try {
+        await handle.chown(-1, gid);
+    } catch (error) {
+        if (errorCode(error) !== "EPERM") throw error;
     }
 }
 
 let temporaryCounter = 0;
 
 // The unqueued write, for use inside an `enqueue` job. The temporary file sits in the same folder so the rename stays
-// on one file system and is atomic.
+// on one file system and is atomic. It takes the target's mode bits and, where the service account may set it, the
+// target's group; its owner becomes the service account (ADR-002 decision 6).
 export async function writeFileAtomic(path: string, bytes: Buffer | string): Promise<void> {
     const target = await resolveTarget(path);
-    const mode = await existingMode(target);
+    const { mode, gid } = await existingFile(target);
     temporaryCounter += 1;
     const temporary = join(dirname(target), `.${basename(target)}.${process.pid}.${temporaryCounter}.tmp`);
     try {
         const handle = await open(temporary, "w", mode);
         try {
             await handle.chmod(mode);
+            await keepGroup(handle, gid);
             await handle.writeFile(bytes);
             await handle.sync();
         } finally {
