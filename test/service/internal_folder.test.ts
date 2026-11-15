@@ -269,6 +269,7 @@ describe("skills.restore", () => {
 
     it("announces files_changed with kind skill for each restored skill file", async () => {
         const fixture = await createFixture();
+        await rm(join(fixture.shippedRoot, "skills/about-the-intern"), { recursive: true, force: true });
         await mkdir(join(fixture.shippedRoot, "skills/about-the-intern/notes"), { recursive: true });
         await writeFile(
             join(fixture.shippedRoot, ABOUT_SKILL),
