@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -19,6 +20,7 @@ type Role = {
     name: string;
     instructions: string;
     instructionsVersion?: string;
+    tools: string[];
     skills: string[];
     shipped: boolean;
     changed: boolean;
@@ -262,6 +264,84 @@ describe("the Roles page in chrome", () => {
 
         await page.waitForSelector(`${roleCard("ghost")} .instructions-missing`, { timeout: WAIT_MS });
         t.assert.equal(await page.locator(`${roleCard("gp")} .instructions-missing`).count(), 0);
+        t.assert.equal(await page.locator(`${roleCard("gp")} textarea[name="instructions"]`).isDisabled(), false);
+    });
+
+    it("tells a team role's missing file to be created again by hand", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { daemon, port, env } = await startServer();
+        await daemon.invoke("roles.create", { name: "ghost", instructions: "Haunt.", tools: [] });
+        await rm(join(env.dataDir, "instructions", "roles", "ghost.md"));
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openRoles(page, port);
+
+        const notice = await page.locator(`${roleCard("ghost")} .instructions-missing`).textContent({
+            timeout: WAIT_MS,
+        });
+
+        t.assert.match(notice ?? "", /instructions\/roles\/ghost\.md/);
+        t.assert.match(notice ?? "", /create the file again by hand, or remove the role and create it again/);
+        t.assert.doesNotMatch(notice ?? "", /writes it again/);
+    });
+
+    it("tells a shipped role's missing file to be restored from the command line", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { port, env } = await startServer();
+        await rm(join(env.dataDir, "instructions", "roles", "gp.md"));
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openRoles(page, port);
+
+        const notice = await page.locator(`${roleCard("gp")} .instructions-missing`).textContent({
+            timeout: WAIT_MS,
+        });
+
+        t.assert.match(notice ?? "", /instructions\/roles\/gp\.md/);
+        t.assert.match(notice ?? "", /bob instructions restore gp/);
+    });
+
+    it("disables the Instructions box of a role whose file is missing", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { daemon, port, env } = await startServer();
+        await daemon.invoke("roles.create", { name: "ghost", instructions: "Haunt.", tools: [] });
+        await rm(join(env.dataDir, "instructions", "roles", "ghost.md"));
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openRoles(page, port);
+
+        await page.waitForSelector(`${roleCard("ghost")} .instructions-missing`, { timeout: WAIT_MS });
+
+        t.assert.equal(await page.locator(`${roleCard("ghost")} textarea[name="instructions"]`).isDisabled(), true);
+    });
+
+    it("saves the tools of a role whose file is missing and leaves the file missing", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { daemon, port, env } = await startServer();
+        await daemon.invoke("roles.create", { name: "ghost", instructions: "Haunt.", tools: [] });
+        const file = join(env.dataDir, "instructions", "roles", "ghost.md");
+        await rm(file);
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openRoles(page, port);
+        await page.waitForSelector(`${roleCard("ghost")} .instructions-missing`, { timeout: WAIT_MS });
+        const bodies: Record<string, unknown>[] = [];
+        page.on("request", (request) => {
+            if (new URL(request.url()).pathname === CHANGE_PATH) bodies.push(request.postDataJSON());
+        });
+
+        await page.fill(`${roleCard("ghost")} textarea[name="tools"]`, "read");
+        await page.click(`${roleCard("ghost")} .role-save`);
+        await waitFor(page, `document.querySelector('${roleCard("ghost")}')?.dataset.changed === "true"`);
+
+        t.assert.deepEqual((await roleOf(daemon, "ghost"))?.tools, ["read"]);
+        t.assert.equal("instructions" in (bodies[0] ?? {}), false);
+        t.assert.equal("instructionsVersion" in (bodies[0] ?? {}), false);
+        t.assert.equal(existsSync(file), false);
     });
 
     it("takes skills as names", { timeout: TEST_TIMEOUT_MS }, async (t) => {
