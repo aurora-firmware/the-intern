@@ -397,8 +397,12 @@ tools, skills and instructions; with `--json` it prints that role. When no role 
 A role's instructions are the text of its instruction file, `instructions/roles/<name>.md` in the data directory, and
 its skills are names. `--instructions` writes that file. `bob roles change` reads the role's file first, so a file you
 edited by hand since is refused as a `conflict` instead of overwritten; run the command again to write over what it
-now reads. `bob roles show` prints `Instructions: missing` when the file is gone. To list the files that build a
-prompt, or to enable a skill for a role, use [`bob instructions`](#instructions) and [`bob skills`](#skills).
+now reads. `bob roles show` prints `Instructions: missing` when the file is gone.
+
+`bob roles change --instructions` is refused for a role whose file is gone, and the message names the file's full path
+and the remedy. For a shipped role, run `bob instructions restore <name>`. For a team role, create the file again by
+hand, or remove the role and create it again. The other options still apply. To list the files that build a prompt, or
+to enable a skill for a role, use [`bob instructions`](#instructions) and [`bob skills`](#skills).
 
 ## Workspaces
 
