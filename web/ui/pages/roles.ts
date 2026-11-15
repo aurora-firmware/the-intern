@@ -94,7 +94,7 @@ const inputOf = (fields: Fields): Record<string, unknown> => ({
 /** A change sends the instructions only when they differ, with the token of the file as the page read it. */
 const changeOf = (fields: Fields, role: Role): Record<string, unknown> => {
     const { instructions, ...rest } = inputOf(fields);
-    if (instructions === (role.instructions ?? "")) return rest;
+    if (role.instructionsMissing === true || instructions === (role.instructions ?? "")) return rest;
     return {
         instructions,
         ...(role.instructionsVersion === undefined ? {} : { instructionsVersion: role.instructionsVersion }),
@@ -131,7 +131,14 @@ const choice = (
         ),
     );
 
-const text = (label: string, name: string, value: string, onChange: (value: string) => void, isInput = false) =>
+const text = (
+    label: string,
+    name: string,
+    value: string,
+    onChange: (value: string) => void,
+    isInput = false,
+    isDisabled = false,
+) =>
     h(
         "label",
         null,
@@ -139,6 +146,7 @@ const text = (label: string, name: string, value: string, onChange: (value: stri
         h(isInput ? "input" : "textarea", {
             name,
             value,
+            disabled: isDisabled,
             ...(isInput ? { type: "text" } : { rows: 3 }),
             onInput: (event: Event) => onChange((event.target as HTMLInputElement).value),
         }),
@@ -157,8 +165,13 @@ const levelsFor = (data: Data, model: string): string[] => {
         : [...new Set(data.models.flatMap((each) => each.thinkingLevels))];
 };
 
-const settingsFields = (data: Data, fields: Fields, set: (name: keyof Fields) => (value: string) => void) => [
-    text("Instructions", "instructions", fields.instructions, set("instructions")),
+const settingsFields = (
+    data: Data,
+    fields: Fields,
+    set: (name: keyof Fields) => (value: string) => void,
+    isInstructionsDisabled = false,
+) => [
+    text("Instructions", "instructions", fields.instructions, set("instructions"), false, isInstructionsDisabled),
     text("Tools (one per line)", "tools", fields.tools, set("tools")),
     text("Skills (names, one per line)", "skills", fields.skills, set("skills")),
     choice(
@@ -183,6 +196,15 @@ const settingsFields = (data: Data, fields: Fields, set: (name: keyof Fields) =>
         set("workspace"),
     ),
 ];
+
+/** Names the missing file and the way to get it back; a hand change is respected, so nothing here writes it. */
+const missingNotice = (role: Role): string => {
+    const file = `instructions/roles/${role.name}.md`;
+    const remedy = role.shipped
+        ? `Restore it with Restore under "Shipped role instructions" in the Skills and instructions section, or with bob instructions restore ${role.name}.`
+        : "To fix this, create the file again by hand, or remove the role and create it again.";
+    return `This role's instruction file ${file} is missing. ${remedy}`;
+};
 
 type Calling = (action: () => Promise<void>) => Promise<void>;
 
@@ -236,14 +258,8 @@ const RoleCard = ({
         "section",
         { class: "role", "data-role": role.name, "data-changed": String(role.changed) },
         h("h3", null, h("span", { "data-verbatim": "" }, role.name), origin),
-        role.instructionsMissing === true
-            ? h(
-                  "p",
-                  { class: "instructions-missing" },
-                  "This role's instruction file is missing. Saving instructions writes it again.",
-              )
-            : null,
-        ...settingsFields(data, fields, set),
+        role.instructionsMissing === true ? h("p", { class: "instructions-missing" }, missingNotice(role)) : null,
+        ...settingsFields(data, fields, set, role.instructionsMissing === true),
         failure !== undefined ? h(RefusalMessage, { error: failure.error }) : null,
         button("Save", "role-save", invoke("roles.change", changeOf(fields, role))),
         button("Restore", "role-restore", invoke("roles.restore", {})),
