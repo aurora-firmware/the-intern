@@ -57,7 +57,10 @@ exceptions in decision 4.
 4. **Durability belongs to the runtime.** Resume, exactly-once admission, queued input and checkpoints come from
    pi-durable. The daemon writes no retry loop, intake table or recovery of its own, except the two bounded exceptions
    below. The host sets `settings.restartLimit` to `Infinity`, so every start resumes every unfinished task (S-002
-   REQ-008); a finite limit needs S-002 amended first.
+   REQ-008); a finite limit needs S-002 amended first. It also sets `settings.afterFailedRun` to `"continue"`: input
+   queued during a run that fails, such as one that ends at a failed automatic compaction, is taken by the next run, as
+   a follow-up is (S-001 Definitions, REQ-020), instead of waiting for another input under pi-durable's default
+   `"keep"`. `"withdraw"` would drop that input unanswered.
 
    **First bounded exception: the-intern's own facts about a conversation, and redelivery from them.**
    - The facts are held messages (`held`), awaiting links (`awaiting`), the parked state (`parked`), the abort mark
