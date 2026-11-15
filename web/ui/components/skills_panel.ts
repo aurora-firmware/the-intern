@@ -4,7 +4,7 @@
  * again when the model's `panelReloadNeeded` says a feed delta concerns it. It never creates or deletes a skill folder.
  */
 import { h } from "preact";
-import { useContext, useEffect, useState } from "preact/hooks";
+import { useContext, useEffect, useRef, useState } from "preact/hooks";
 import type { FeedConnection } from "../feed_connection.ts";
 import { pageClient } from "../feed_connection.ts";
 import {
@@ -25,6 +25,9 @@ import { RefusalMessage } from "./refusal.ts";
 export type SkillsTarget = { role: string } | { conversation: string };
 
 type Rows = { skills: ReturnType<typeof skillRows>; instructions: InstructionRow[] };
+
+/** A check box change the panel shows until a listing read after the service answered has landed. */
+type PendingChange = { isChecked: boolean; isSettled: boolean };
 
 const SKILL_FILE = "SKILL.md";
 
@@ -88,14 +91,23 @@ export const SkillsPanel = ({ target, feed }: { target: SkillsTarget; feed?: Fee
     const [skillFailure, setSkillFailure] = useState<{ name: string; error: unknown } | undefined>(undefined);
     const [openPath, setOpenPath] = useState<string | undefined>(undefined);
     const [reloads, setReloads] = useState(0);
+    const [pending, setPending] = useState<ReadonlyMap<string, PendingChange>>(new Map());
+    const pendingRef = useRef(pending);
+    pendingRef.current = pending;
     const key = JSON.stringify(target);
 
     useEffect(() => {
         let isCurrent = true;
+        const settledBefore = [...pendingRef.current].filter(([, change]) => change.isSettled).map(([name]) => name);
         readRows(JSON.parse(key) as SkillsTarget).then(
             (read) => {
                 if (!isCurrent) return;
                 setRows(read);
+                setPending((current) => {
+                    const next = new Map(current);
+                    for (const name of settledBefore) next.delete(name);
+                    return next;
+                });
                 setFailure(undefined);
             },
             (error) => isCurrent && setFailure({ error }),
@@ -118,11 +130,13 @@ export const SkillsPanel = ({ target, feed }: { target: SkillsTarget; feed?: Fee
 
     const change = async (name: string, isChecked: boolean) => {
         setSkillFailure(undefined);
+        setPending((current) => new Map(current).set(name, { isChecked, isSettled: false }));
         try {
             await pageClient().invoke(isChecked ? "skills.enable" : "skills.disable", { ...target, name });
         } catch (error) {
             setSkillFailure({ name, error });
         }
+        setPending((current) => new Map(current).set(name, { isChecked, isSettled: true }));
         setReloads((count) => count + 1);
     };
 
@@ -137,7 +151,7 @@ export const SkillsPanel = ({ target, feed }: { target: SkillsTarget; feed?: Fee
                   ...rows.skills.skills.map((row) =>
                       h(SkillItem, {
                           key: row.name,
-                          row,
+                          row: { ...row, isChecked: pending.get(row.name)?.isChecked ?? row.isChecked },
                           failure: skillFailure?.name === row.name ? skillFailure : undefined,
                           onChange: (isChecked) => void change(row.name, isChecked),
                           onOpen: () => setOpenPath(`${row.path}/${SKILL_FILE}`),
