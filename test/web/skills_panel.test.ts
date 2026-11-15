@@ -85,6 +85,37 @@ describe("the Skills panel on the Job page in chrome", () => {
         t.assert.equal(await enabledOf(rig, SKILL), true);
     });
 
+    it("keeps a check box checked while the panel reads again after the change", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const rig = await startRig();
+        const page = await openPanel(t, rig);
+        if (page === undefined) return;
+        const css = `main details.activity[data-conversation="${rig.lead}"] .skill-row[data-skill="${SKILL}"] input[type=checkbox]`;
+        await page.evaluate((selector) => {
+            const box = document.querySelector(selector) as HTMLInputElement;
+            const seen: boolean[] = [];
+            Object.assign(globalThis, { seenChecked: seen });
+            box.addEventListener("click", () => {
+                const start = performance.now();
+                const sample = () => {
+                    seen.push((document.querySelector(selector) as HTMLInputElement).checked);
+                    if (performance.now() - start < 300) requestAnimationFrame(sample);
+                };
+                requestAnimationFrame(sample);
+            });
+        }, css);
+
+        await panelOf(page, rig).locator(`.skill-row[data-skill="${SKILL}"] input[type=checkbox]`).check({
+            timeout: WAIT_MS,
+        });
+        await page.waitForTimeout(400);
+
+        const seen = await page.evaluate(() => (globalThis as unknown as { seenChecked: boolean[] }).seenChecked);
+        t.assert.equal(seen.length > 0, true);
+        t.assert.equal(seen.includes(false), false);
+    });
+
     it("shows a skill enabled elsewhere in the open panel without a reload", {
         timeout: TEST_TIMEOUT_MS,
     }, async (t) => {
