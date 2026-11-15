@@ -4,8 +4,10 @@
  */
 import assert from "node:assert/strict";
 import { chmod, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
+import { constants } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { getSystemErrorMessage } from "node:util";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
     type FauxProviderRegistration,
@@ -40,6 +42,8 @@ import {
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { type SkillsRig, startSkillsRig } from "../support/skills_rig.ts";
 
+const EACCES = constants.errno.EACCES;
+const ELOOP = constants.errno.ELOOP;
 const WAIT_MS = 10_000;
 const MAX_LINES = 2000;
 const MAX_BYTES = 50 * 1024;
@@ -279,20 +283,21 @@ describe("the skill tool extension", () => {
         assert.match(directory.text, /not a file/);
     });
 
-    it("refuses a bundled file that is a symbolic link out of the skill's folder", async () => {
-        const { skills, seatWith, callSkill } = await createFixture();
+    it("reads a bundled file that is a symbolic link to a readable file outside the skill's folder", async () => {
+        const { env, skills, seatWith, callSkill } = await createFixture();
         const folder = await writeSkill(skills, "linked");
-        await symlink("/etc/passwd", join(folder, "passwd"));
+        const outside = join(env.root, "outside.md");
+        await writeFile(outside, "OUTSIDE-TEXT\n");
+        await symlink(outside, join(folder, "notes.md"));
         const id = await seatWith(["linked"]);
 
-        const result = await callSkill(id, { name: "linked", file: "passwd" });
+        const result = await callSkill(id, { name: "linked", file: "notes.md" });
 
-        assert.equal(result.isError, true);
-        assert.match(result.text, /inside the skill's folder/);
-        assert.doesNotMatch(result.text, /root:/);
+        assert.equal(result.isError, false);
+        assert.equal(result.text, "OUTSIDE-TEXT\n");
     });
 
-    it("refuses a SKILL.md that is a symbolic link out of the skill's folder", async () => {
+    it("reads a SKILL.md that is a symbolic link to a readable file outside the skill's folder", async () => {
         const { env, skills, seatWith, callSkill } = await createFixture();
         const outside = join(env.root, "outside.md");
         await writeFile(outside, "---\nname: hijacked\ndescription: Linked.\n---\n\nOUTSIDE-SKILL-TEXT\n");
@@ -303,9 +308,48 @@ describe("the skill tool extension", () => {
 
         const result = await callSkill(id, { name: "hijacked" });
 
+        assert.equal(result.isError, false);
+        assert.match(result.text, /OUTSIDE-SKILL-TEXT/);
+    });
+
+    it("refuses a link to a missing target as missing", async () => {
+        const { env, skills, seatWith, callSkill } = await createFixture();
+        const folder = await writeSkill(skills, "dangling");
+        await symlink(join(env.root, "nowhere.md"), join(folder, "gone.md"));
+        const id = await seatWith(["dangling"]);
+
+        const result = await callSkill(id, { name: "dangling", file: "gone.md" });
+
         assert.equal(result.isError, true);
-        assert.match(result.text, /inside the skill's folder/);
-        assert.doesNotMatch(result.text, /OUTSIDE-SKILL-TEXT/);
+        assert.match(result.text, /gone\.md/);
+        assert.match(result.text, /no such file/);
+    });
+
+    it("refuses a link to a folder as not a file", async () => {
+        const { env, skills, seatWith, callSkill } = await createFixture();
+        const folder = await writeSkill(skills, "dirlink");
+        await symlink(env.root, join(folder, "root"));
+        const id = await seatWith(["dirlink"]);
+
+        const result = await callSkill(id, { name: "dirlink", file: "root" });
+
+        assert.equal(result.isError, true);
+        assert.match(result.text, /not a file/);
+    });
+
+    it("returns an error result naming the file and the reason for a cycle of links", async () => {
+        const { skills, seatWith, callSkill } = await createFixture();
+        const folder = await writeSkill(skills, "cycle");
+        await symlink("b.md", join(folder, "a.md"));
+        await symlink("a.md", join(folder, "b.md"));
+        const id = await seatWith(["cycle"]);
+
+        const result = await callSkill(id, { name: "cycle", file: "a.md" });
+
+        assert.equal(result.isError, true);
+        assert.match(result.text, /^skill was refused: /);
+        assert.match(result.text, /a\.md/);
+        assert.match(result.text, new RegExp(getSystemErrorMessage(-ELOOP)));
     });
 
     it("cuts a file longer than 2000 lines and says so", async () => {
@@ -444,5 +488,49 @@ describe("the files.read operation on an enabled skill's file", () => {
 
         assert.equal(read.text, await readFile(target, "utf8"));
         assert.match(read.version, /^[0-9a-f]{64}$/);
+    });
+
+    it("gives skill and files.read the text of a linked notes.md", async () => {
+        const { env, skills, seatWith, callSkill } = await createFixture();
+        rig = await startSkillsRig();
+        const outside = join(env.root, "notes-target.md");
+        await writeFile(outside, "LINKED-NOTES\n");
+        const folder = await writeSkill(skills, "notes-skill");
+        await symlink(outside, join(folder, "notes.md"));
+        const rigFolder = join(rig.dirs.dataDir, "skills/carry-out-a-part");
+        await symlink(outside, join(rigFolder, "notes.md"));
+        const id = await seatWith(["notes-skill"]);
+
+        const viaSkill = await callSkill(id, { name: "notes-skill", file: "notes.md" });
+        const viaFiles = (await rig.invoke("files.read", { path: join(rigFolder, "notes.md") })) as { text: string };
+
+        assert.equal(viaSkill.text, "LINKED-NOTES\n");
+        assert.equal(viaFiles.text, "LINKED-NOTES\n");
+    });
+
+    it("gives skill an error naming the reason and files.read invalid_input for a linked secret.md of mode 0000", {
+        skip: process.getuid?.() === 0 ? "root reads any file" : false,
+    }, async () => {
+        const { env, skills, seatWith, callSkill } = await createFixture();
+        rig = await startSkillsRig();
+        const outside = join(env.root, "secret-target.md");
+        await writeFile(outside, "SECRET\n");
+        await chmod(outside, 0o000);
+        const folder = await writeSkill(skills, "secret-skill");
+        await symlink(outside, join(folder, "secret.md"));
+        const rigFolder = join(rig.dirs.dataDir, "skills/carry-out-a-part");
+        await symlink(outside, join(rigFolder, "secret.md"));
+        const id = await seatWith(["secret-skill"]);
+
+        const viaSkill = await callSkill(id, { name: "secret-skill", file: "secret.md" });
+
+        assert.equal(viaSkill.isError, true);
+        assert.match(viaSkill.text, /^skill was refused: /);
+        assert.match(viaSkill.text, /secret\.md/);
+        assert.match(viaSkill.text, new RegExp(getSystemErrorMessage(-EACCES)));
+        assert.doesNotMatch(viaSkill.text, /SECRET\n/);
+        await assert.rejects(rig.invoke("files.read", { path: join(rigFolder, "secret.md") }), {
+            code: "invalid_input",
+        });
     });
 });
