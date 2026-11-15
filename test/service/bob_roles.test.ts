@@ -50,6 +50,10 @@ async function proxyFor(
     const runtimeDir = await ownerOnlyFolder(fixture, "proxy-runtime");
     const server = createServer((req, res) => {
         const forwarded = request({ socketPath: upstream, method: req.method, path: req.url, headers: req.headers });
+        forwarded.on("error", (error) => {
+            res.writeHead(502);
+            res.end(`proxy could not forward ${req.url} to the daemon: ${error.message}`);
+        });
         forwarded.on("response", async (answer) => {
             const chunks: Buffer[] = [];
             for await (const chunk of answer) chunks.push(chunk as Buffer);
@@ -57,7 +61,10 @@ async function proxyFor(
             res.writeHead(answer.statusCode ?? 502, answer.headers);
             res.end(Buffer.concat(chunks));
         });
-        req.pipe(forwarded);
+        // The whole request goes out in one write: piping it in pieces failed with EPIPE on a loaded machine.
+        const body: Buffer[] = [];
+        req.on("data", (chunk) => body.push(chunk));
+        req.on("end", () => forwarded.end(Buffer.concat(body)));
     });
     await new Promise<void>((resolve) => server.listen(localSocketPath(runtimeDir), resolve));
     closers.push(() => new Promise((resolve) => server.close(() => resolve())));
