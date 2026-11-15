@@ -506,7 +506,7 @@ describe("the role operations", () => {
         await assert.rejects(readFile(file, "utf8"), { code: "ENOENT" });
     });
 
-    it("refuses as for a missing file, and creates no file, when the token came before the file was deleted", async () => {
+    it("refuses conflict naming the file and the by-hand remedy, and creates no file, when the token came before a team role's file was deleted", async () => {
         const env = await hermetic();
         const { invoke, roles } = await start(env);
         await invoke("roles.create", reviewer);
@@ -517,10 +517,27 @@ describe("the role operations", () => {
             invoke("roles.change", { name: "reviewer", instructions: "Review hard.", instructionsVersion: token }),
         );
 
-        assert.equal(error.code, "invalid_input");
+        assert.equal(error.code, "conflict");
         assert.ok(error.message.includes(instructionFile(env)));
-        assert.match(error.message, /create the file again by hand/);
+        assert.match(error.message, /create the file again by hand, or remove the role and create it again/);
         await assert.rejects(readFile(instructionFile(env), "utf8"), { code: "ENOENT" });
+    });
+
+    it("refuses conflict naming the file and bob instructions restore, and creates no file, when the token came before a shipped role's file was deleted", async () => {
+        const env = await hermetic();
+        const { invoke, roles } = await start(env);
+        const file = roleInstructionPath(env.dataDir, "gp");
+        const token = await tokenOf(roles, "gp");
+        await rm(file);
+
+        const error = await refusal(
+            invoke("roles.change", { name: "gp", instructions: "Something else.", instructionsVersion: token }),
+        );
+
+        assert.equal(error.code, "conflict");
+        assert.ok(error.message.includes(file));
+        assert.match(error.message, /bob instructions restore gp/);
+        await assert.rejects(readFile(file, "utf8"), { code: "ENOENT" });
     });
 
     it("applies a change without instructions and leaves the file missing when the file is missing", async () => {

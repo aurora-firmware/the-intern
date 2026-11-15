@@ -1015,7 +1015,10 @@ equal bytes, and a change touches only its section (REQ-015).
   two leaves a file with no table, which isn't a role.
 - `roles.change` with instructions needs the token (`instructionsVersion`), and refuses `invalid_input` without it. It
   checks the role change first, then checks the token and writes the file in the file store's queue, then writes the
-  table.
+  table. When the role's instruction file is missing, it writes none and refuses, naming the file and the remedy (a
+  shipped role: `bob instructions restore <role>`; a team role: create the file by hand, or remove the role and create
+  it again): `conflict` when the call carries a token, which predates the deletion, and `invalid_input` when it carries
+  none. A change without instructions still applies and leaves the file missing.
 - `roles.restore` removes the table's changes, then restores the shipped file (ADR-009 decision 4).
 - `roles.remove` lists the open conversations whose seat has the role, refuses `conflict` naming them, then removes the
   table, then deletes the file. A crash between the last two leaves a file with no table.
