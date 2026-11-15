@@ -39,6 +39,7 @@
         "test:live:jobs": "node test/live/live_jobs.ts",
         "test:live:schedules": "node test/live/live_schedules.ts",
         "test:live:desk": "node test/live/live_desk.ts",
+        "test:live:skills": "node test/live/live_skills.ts",
         "docs:build": "vitepress build docs/manual",
         "check": "npm run typecheck && npm run lint && npm run test"
     }
