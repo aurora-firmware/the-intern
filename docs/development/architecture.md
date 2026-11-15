@@ -1030,8 +1030,9 @@ decide, as ADR-002 decision 4 states. The allowed files, read fresh at each call
 - a file below any skill folder the catalog found, used, shadowed or left out, in the internal folder, a search path
   or the `.pi/skills` of a workspace `workspaces.list()` returns, per-role defaults included;
 - a file below `<data dir>/instructions`;
-- `AGENTS.md` and `CLAUDE.md` directly inside such a workspace or any of its parent folders, up to `/`, the folders
-  `loadProjectContextFiles` walks for the prompt and for `instructions.list`.
+- a context file directly inside such a workspace or any of its parent folders, up to `/`, the folders
+  `loadProjectContextFiles` walks for the prompt and for `instructions.list`: any of the names it tries in each folder,
+  `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md` and `CLAUDE.MD`.
 
 The path must be absolute. It is normalised with `path.resolve`, which settles `.` and `..` and follows no link, and is
 accepted when it lies in the allowed files above as they are written, each workspace and skill folder by the path it
