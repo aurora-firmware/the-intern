@@ -28,7 +28,7 @@ service operation, page, way in) and the shared vocabulary of `docs/system_overv
 | Term | Meaning in this spec |
 |---|---|
 | Skill | A folder holding a `SKILL.md` file whose frontmatter gives a `name` and a `description`, plus any bundled files, in the shared Agent Skills format (REQ-004). |
-| Instruction file | A markdown file whose text goes into an agent's system prompt: the common prompt, a role's instructions, or a workspace's `AGENTS.md`/`CLAUDE.md` (REQ-007). |
+| Instruction file | A markdown file whose text goes into an agent's system prompt: the common prompt, a role's instructions, or a workspace's context file: the `AGENTS.md` or `CLAUDE.md` file, or the other name pi agent reads in its place, of the workspace or one of its parent folders (REQ-007). |
 | Common prompt | The instruction file every agent gets first, whatever its role (REQ-001). It replaces the fixed preamble. |
 | Shipped content | The common prompt, the shipped roles' instructions and the shipped skills, as the installed package carries them (REQ-001). |
 | Internal folder | The folder under the instance's data directory that holds the live copy of the shipped content and the team roles' instruction files (REQ-002). |
@@ -116,8 +116,8 @@ Journeys, in priority order:
 - **`show`, `add`, `edit` and `remove` commands for skill and instruction files.** Rejected by the product owner: files
   are read and changed with the team's own tools, and the commands change only configuration.
 - **A skill set per schedule entry.** Rejected: from the Schedules page the panel opens the role the entry names.
-- **Refusing symbolic links that lead out of a skill folder or a workspace, and parent folders' `AGENTS.md` and
-  `CLAUDE.md` files.** Rejected by the product owner on 2026-11-15: The Intern doesn't stop file operations, and the
+- **Refusing symbolic links that lead out of a skill folder or a workspace, and parent folders' context files.**
+  Rejected by the product owner on 2026-11-15: The Intern doesn't stop file operations, and the
   operating system's permissions decide.
 
 ## Interfaces
@@ -637,8 +637,8 @@ changed since the token was read SHALL be refused `conflict`. Both SHALL accept 
 
 - a file inside a skill folder found in the internal folder, a search path, or a registered workspace's `.pi/skills`
 - a file in the internal folder's `instructions` folder
-- the `AGENTS.md` or `CLAUDE.md` file directly inside a registered workspace or one of its parent folders, the files
-  `instructions.list` lists for the workspace
+- the context files `instructions.list` lists for a registered workspace: the `AGENTS.md` or `CLAUDE.md` file, or the
+  other name pi agent reads in its place, directly inside the workspace or one of its parent folders
 
 A path that names one of these files SHALL be accepted wherever its symbolic links lead, inside or outside the
 workspace, skill folder or internal folder; the file is read and written at the link's target. The operating system's
@@ -919,5 +919,5 @@ manual, and a check in `npm run check` SHALL fail when the skill and the manual 
 
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
-| 2026-11-15 | spec-truth reconciliation — FAIL | v0.1 confirmed against T-327 to T-387 and B-036 to B-039, except: REQ-013 panel and editor layout (B-040, open); REQ-010 and REQ-016, files.read and files.write follow a workspace AGENTS.md or CLAUDE.md link out of the workspace (resolved by this amendment, product owner decision); REQ-007, the Roles page and manual say a save rewrites a missing role file that roles.change refuses (follow-up task) | v0.2 (T-392 to T-394); follow-ups T-389 to T-391 |
-| 2026-11-15 | v0.2. REQ-010: `files.read` and `files.write` still accept only skill files, instruction files and workspace `AGENTS.md`/`CLAUDE.md` files, now including those of a registered workspace's parent folders, and follow symbolic links wherever they lead, with no check on the target; a file the operating system refuses is refused `invalid_input` naming the system's reason; new AC-010.4. REQ-016 and AC-016.1: the link checks are dropped; `files.read`, `files.write` and `skill` follow links, and the operating system's permissions decide. REQ-008 and Workflow: `skill` refuses a path that leaves the skill folder as written, and follows a link inside it. Exclusions: "Confining file operations". Alternatives Considered: refusing links out of a folder and parent folders' files. REQ-004's owner-only check of search paths is unchanged. No identifier changed or retired. S-006 v0.8 widens its exclusion's exception to parent folders' files. | Product owner decision of 2026-11-15, after the S-008 spec-truth reconciliation: "We don't stop any filesystem operations, the OS user permissions are the deciding rules." | T-392, T-393, T-394 |
+| 2026-11-15 | spec-truth reconciliation — FAIL | v0.1 confirmed against T-327 to T-387 and B-036 to B-039, except: REQ-013 panel and editor layout (B-040, open); REQ-010 and REQ-016, files.read and files.write follow a workspace AGENTS.md or CLAUDE.md link out of the workspace (resolved by v0.2, product owner decision, tasks T-392 to T-394); REQ-007, the Roles page and manual say a save rewrites a missing role file that roles.change refuses (follow-up tasks T-389 to T-391) | none |
+| 2026-11-15 | v0.2. REQ-010: `files.read` and `files.write` still accept only skill files, instruction files and a registered workspace's context files, now the context files `instructions.list` lists: the `AGENTS.md` or `CLAUDE.md` file, or the other name pi agent reads in its place, of the workspace and of its parent folders; and follow symbolic links wherever they lead, with no check on the target; a file the operating system refuses is refused `invalid_input` naming the system's reason; new AC-010.4. REQ-016 and AC-016.1: the link checks are dropped; `files.read`, `files.write` and `skill` follow links, and the operating system's permissions decide. REQ-008 and Workflow: `skill` refuses a path that leaves the skill folder as written, and follows a link inside it. Definitions, Instruction file: a workspace's context file, by the same names and folders. Exclusions: "Confining file operations". Alternatives Considered: refusing links out of a folder and parent folders' context files. REQ-004's owner-only check of search paths is unchanged. No identifier changed or retired. S-006 v0.8 widens its exclusion's exception to the context files of the workspace and its parent folders. | Product owner decision of 2026-11-15, after the S-008 spec-truth reconciliation: "We don't stop any filesystem operations, the OS user permissions are the deciding rules." Architecture consistency review of v0.2, finding F1: REQ-010 named only `AGENTS.md` and `CLAUDE.md`, so a listed `AGENTS.override.md` would have been refused. | T-392, T-393, T-394 |
