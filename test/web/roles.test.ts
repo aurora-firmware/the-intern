@@ -335,8 +335,11 @@ describe("the Roles page in chrome", () => {
         });
 
         await page.fill(`${roleCard("ghost")} textarea[name="tools"]`, "read");
+        const saved = page.waitForResponse((response) => new URL(response.url()).pathname === CHANGE_PATH, {
+            timeout: WAIT_MS,
+        });
         await page.click(`${roleCard("ghost")} .role-save`);
-        await waitFor(page, `document.querySelector('${roleCard("ghost")}')?.dataset.changed === "true"`);
+        await saved;
 
         t.assert.deepEqual((await roleOf(daemon, "ghost"))?.tools, ["read"]);
         t.assert.equal("instructions" in (bodies[0] ?? {}), false);
