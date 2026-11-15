@@ -56,6 +56,23 @@ const named = (listing: Listing, name: string): Listed => {
 };
 
 describe("the skills catalog of a role", () => {
+    it("lists the default skills of the desk and gp roles on a fresh instance (AC-001.1)", async () => {
+        const rig = await start();
+        const skillsFolder = join(rig.dirs.dataDir, "skills");
+
+        const desk = await listRole(rig, "desk");
+        const gp = await listRole(rig, "gp");
+
+        const about = named(desk, "about-the-intern");
+        assert.equal(about.enabled, true);
+        assert.equal(about.path, join(skillsFolder, "about-the-intern"));
+        for (const name of ["carry-out-a-part", "bob-command-line"]) {
+            const skill = named(gp, name);
+            assert.equal(skill.enabled, true);
+            assert.equal(skill.path, join(skillsFolder, name));
+        }
+    });
+
     it("lists the workspace copy in use and the search path and internal copies as shadowed", async () => {
         const rig = await start({ configToml: searchPathsToml(["team-skills"]) });
         const teamSkills = join(rig.dirs.root, "team-skills");

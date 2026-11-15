@@ -232,7 +232,9 @@ the configuration file's fingerprint (ADR-009 decision 5).
 
 **How does the `about-the-intern` skill stay in step with the manual?** It bundles byte copies of the manual pages it
 draws from, and a unit test compares them with `docs/manual/` (S-008 REQ-017). No generator: a copy is the simplest
-thing a check can compare exactly, and VitePress markup in a page reads well enough to a model.
+thing a check can compare exactly, and VitePress markup in a page reads well enough to a model. `biome.json` excludes
+`src/shipped/skills/about-the-intern/manual`, because Biome would reformat the copies and `docs/manual/` is outside its
+includes.
 
 **How does an agent run `bob`?** pi-durable's `createBashTool` with a `prepare` hook, which adds the instance's
 runtime directory, the conversation id and a launcher folder to the command's environment (S-008 REQ-014).

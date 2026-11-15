@@ -52,6 +52,17 @@ const enabledOf = async (rig: Rig, name: string): Promise<boolean | undefined> =
         (skill) => skill.name === name,
     )?.enabled;
 
+/** The service learns of a check box change after the page sent it, so the answer is awaited, not read once. */
+async function waitUntilEnabled(rig: Rig, name: string): Promise<boolean | undefined> {
+    const deadline = Date.now() + WAIT_MS;
+    let enabled = await enabledOf(rig, name);
+    while (enabled !== true && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+        enabled = await enabledOf(rig, name);
+    }
+    return enabled;
+}
+
 async function openPanel(t: TestContext, rig: Rig) {
     const browser = await launchBrowser(t, "chrome");
     if (browser === undefined) return undefined;
@@ -82,7 +93,38 @@ describe("the Skills panel on the Job page in chrome", () => {
         await box.check({ timeout: WAIT_MS });
 
         t.assert.equal(await box.isChecked(), true);
-        t.assert.equal(await enabledOf(rig, SKILL), true);
+        t.assert.equal(await waitUntilEnabled(rig, SKILL), true);
+    });
+
+    it("keeps a check box checked while the panel reads again after the change", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const rig = await startRig();
+        const page = await openPanel(t, rig);
+        if (page === undefined) return;
+        const css = `main details.activity[data-conversation="${rig.lead}"] .skill-row[data-skill="${SKILL}"] input[type=checkbox]`;
+        await page.evaluate((selector) => {
+            const box = document.querySelector(selector) as HTMLInputElement;
+            const seen: boolean[] = [];
+            Object.assign(globalThis, { seenChecked: seen });
+            box.addEventListener("click", () => {
+                const start = performance.now();
+                const sample = () => {
+                    seen.push((document.querySelector(selector) as HTMLInputElement).checked);
+                    if (performance.now() - start < 300) requestAnimationFrame(sample);
+                };
+                requestAnimationFrame(sample);
+            });
+        }, css);
+
+        await panelOf(page, rig).locator(`.skill-row[data-skill="${SKILL}"] input[type=checkbox]`).check({
+            timeout: WAIT_MS,
+        });
+        await page.waitForTimeout(400);
+
+        const seen = await page.evaluate(() => (globalThis as unknown as { seenChecked: boolean[] }).seenChecked);
+        t.assert.equal(seen.length > 0, true);
+        t.assert.equal(seen.includes(false), false);
     });
 
     it("shows a skill enabled elsewhere in the open panel without a reload", {
