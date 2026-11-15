@@ -81,6 +81,59 @@ async function commonPromptPath(rig: Rig): Promise<string> {
 }
 
 describe("the Skills panel on the Job page in chrome", () => {
+    it("lays the panel out as white cards with the check box beside the name and the source apart from Edit", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const rig = await startRig();
+        const page = await openPanel(t, rig);
+        if (page === undefined) return;
+        const row = panelOf(page, rig).locator(`.skill-row[data-skill="${SKILL}"]`);
+        await panelOf(page, rig).locator(".instruction-row .file-open").first().click();
+        await panelOf(page, rig).locator(".file-editor textarea").waitFor({ timeout: WAIT_MS });
+
+        const layout = await page.evaluate(
+            ([rowCss, panelCss]) => {
+                const box = (css: string) => document.querySelector(css) as HTMLElement;
+                const rect = (css: string) => box(css).getBoundingClientRect();
+                const style = (css: string) => getComputedStyle(box(css));
+                const panel = box(panelCss);
+                const editorRect = (panel.querySelector(".file-editor") as HTMLElement).getBoundingClientRect();
+                const areaRect = (panel.querySelector(".file-editor textarea") as HTMLElement).getBoundingClientRect();
+                const editorStyle = getComputedStyle(panel.querySelector(".file-editor") as HTMLElement);
+                const check = rect(`${rowCss} input[type=checkbox]`);
+                const name = rect(`${rowCss} .skill-name`);
+                const source = rect(`${rowCss} .skill-source`);
+                const edit = rect(`${rowCss} .file-open`);
+                return {
+                    listStyle: style(`${panelCss} .skill-rows`).listStyleType,
+                    rowBackground: style(rowCss).backgroundColor,
+                    rowBorder: style(rowCss).borderTopWidth,
+                    editorBackground: editorStyle.backgroundColor,
+                    editorBorder: editorStyle.borderTopWidth,
+                    checkBesideName:
+                        Math.abs(check.top + check.height / 2 - (name.top + name.height / 2)) < check.height,
+                    checkLeftOfName: check.right <= name.left,
+                    sourceToEditGap: edit.left >= source.right + 4 || edit.top >= source.bottom,
+                    areaFillsEditor: editorRect.width - areaRect.width < 40,
+                };
+            },
+            [
+                `main details.activity[data-conversation="${rig.lead}"] .skill-row[data-skill="${SKILL}"]`,
+                `main details.activity[data-conversation="${rig.lead}"] .conversation-skills`,
+            ] as const,
+        );
+        t.assert.equal(await row.count(), 1);
+        t.assert.equal(layout.listStyle, "none");
+        t.assert.equal(layout.rowBackground, "rgb(255, 255, 255)");
+        t.assert.equal(layout.rowBorder, "1px");
+        t.assert.equal(layout.editorBackground, "rgb(255, 255, 255)");
+        t.assert.equal(layout.editorBorder, "1px");
+        t.assert.equal(layout.checkBesideName, true);
+        t.assert.equal(layout.checkLeftOfName, true);
+        t.assert.equal(layout.sourceToEditGap, true);
+        t.assert.equal(layout.areaFillsEditor, true);
+    });
+
     it("shows a skill enabled after its check box is checked, and the service agrees", {
         timeout: TEST_TIMEOUT_MS,
     }, async (t) => {
