@@ -126,8 +126,10 @@ bob skills disable code-review --conversation 5
 
 Every agent, the front desk included, has the `skill` tool, whatever its role's tools are. The agent gives it the name
 of an enabled skill and gets the text of that skill's `SKILL.md`. It can also give a path inside the skill's folder
-and get that file. The tool refuses a skill that isn't enabled for the agent, a path that leaves the skill's folder
-and a file that doesn't exist. The agent sees the error and carries on. Run scripts that a skill bundles with the
+and get that file. The tool refuses a skill that isn't enabled for the agent, a path written to leave the skill's
+folder, such as `../other.md`, and a file that doesn't exist. It follows a symbolic link inside the skill's folder
+wherever it leads. Whether the target can be read depends on the permissions of the account The Intern runs as, and a
+refusal shows the system's reason. The agent sees the error and carries on. Run scripts that a skill bundles with the
 agent's `bash` tool; `skill` only reads.
 
 ## Restore a shipped file

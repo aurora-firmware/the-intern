@@ -213,10 +213,19 @@ You can edit only these files:
 
 - a file inside a skill folder, in the internal folder, a search path or a registered workspace's `.pi/skills`
 - a file in the internal folder's `instructions` folder
-- the `AGENTS.md` or `CLAUDE.md` file directly inside a registered workspace
+- the context files of a registered workspace and of each of its parent folders: `AGENTS.override.md`, `AGENTS.md`,
+  `AGENTS.MD`, `CLAUDE.md` or `CLAUDE.MD`, the names the agent reads, including a file the agent skips because another
+  name in the same folder takes its place
 
-The files of a workspace's parent folders are listed but can't be opened here. A file that isn't UTF-8 text or is
-larger than 1 MiB is refused. The editor never creates or deletes a file.
+A file that isn't UTF-8 text or is larger than 1 MiB is refused.
+
+A file that is a symbolic link is read and saved at the link's target, wherever it is, and the link stays. Whether the
+target can be read or written depends on the permissions of the account The Intern runs as, and a refusal shows the
+system's reason.
+
+A save through a link replaces the target file with a new one. A target that another account owned becomes owned by the
+account The Intern runs as; its mode is kept, and so is its group where that account may set it. A target in a folder
+that account can't write is refused, even when the file itself is writable. The editor never creates or deletes a file.
 
 If the file changed on disk after the editor read it, the service refuses **Save** as a conflict. The page shows the
 refusal, keeps the text you typed and offers **Use the text from disk**. Select it to replace your text with the file's
