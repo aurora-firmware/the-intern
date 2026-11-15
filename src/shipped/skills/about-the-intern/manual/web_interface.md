@@ -145,8 +145,12 @@ so above the list:
   afterwards. Agents already seated keep their settings.
 
 If the file changed on disk since the page read it, for example by a hand edit, the service refuses the save as a
-conflict and shows its message, and nothing is overwritten. If the file is gone, the role shows a notice, and saving
-instructions writes it again. A role whose file is missing or empty can't be seated.
+conflict and shows its message, and nothing is overwritten. If the file is gone, the role shows a notice that names the
+file and the remedy. Its Instructions box is disabled, so you can't save instructions for that role, but **Save** still
+saves the role's other fields. Saving never writes the missing file back. For a shipped role, select **Restore** under
+**Shipped role instructions** in the Skills and instructions section, or run `bob instructions restore <name>`. For a
+team role, create the file again by hand, or remove the role and create it again. A role whose file is missing or empty
+can't be seated.
 
 Each role has a collapsed **Skills** control that opens its [Skills panel](#the-skills-panel). The check boxes there
 set the skills the role starts with, so they affect only agents seated afterwards.
