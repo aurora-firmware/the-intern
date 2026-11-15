@@ -853,7 +853,7 @@ model request) and ADR-001 decision 4 (the enabled set and its upgrade write). L
 | Shipped text | `src/shipped/` | `instructions/common.md`, `instructions/roles/{bob,gp,desk}.md` and `skills/{carry-out-a-part,about-the-intern,bob-command-line}/`, laid out as the internal folder is (ADR-009 decision 1). `instructions/common.md` is the common prompt, formerly `preamble.md` |
 | Shipped roles | `src/roles/shipped_roles.ts` | The shipped role names, their tools and their default skill names (REQ-001's table). It no longer reads any text |
 | Internal folder | `src/skills/internal_folder.ts` | The paths (`instructions/common.md`, `roleInstructionPath(dataDir, role)`, `skills/`), the manifest, ADR-009's start rule and the restores |
-| File store | `src/skills/file_store.ts` | The one serial queue for every write to an instruction or skill file, the version token, the atomic write, the allowed files of REQ-010 and the `files_changed` events |
+| File store | `src/skills/file_store.ts` | The one serial queue for every write to an instruction or skill file, the version token, the atomic write at a link's target, and the `files_changed` events |
 | Discovery | `src/skills/skill_discovery.ts` | Walks one source and reads each `SKILL.md` |
 | Resolution | `src/skills/skill_resolution.ts` | Pure: priority between sources, the order inside a source, shadowed copies, an agent's enabled skills and the missing names |
 | Configuration | `src/skills/skills_section.ts`, `src/roles/roles_section.ts` | `[skills] paths`, and roles whose `skills` are names, with the older forms kept for the migration |
@@ -862,7 +862,7 @@ model request) and ADR-001 decision 4 (the enabled set and its upgrade write). L
 | `skill` tool | `src/skills/skill_tool_extension.ts` | The pi-durable extension `intern.skill-tool` |
 | Enabled set | `src/host/seating.ts`, `src/host/skill_set.ts` | The seat write that resets it; the enable and disable commit with its `intern.skills` entry; the upgrade write |
 | Component | `src/skills/skills_component.ts` | The daemon hooks, the extensions, the operations |
-| Operations | `src/service/skill_operations.ts`, `src/service/instruction_operations.ts`, `src/service/file_operations.ts`, `src/service/role_operations.ts` | `skills.*`, `instructions.*`, `files.*`, and the role operations' file writes |
+| Operations | `src/service/skill_operations.ts`, `src/service/instruction_operations.ts`, `src/service/file_operations.ts`, `src/service/role_operations.ts` | `skills.*`, `instructions.*`, `files.*` with the files REQ-010 names, and the role operations' file writes |
 | Commands | `src/cli/skills_commands.ts`, `src/cli/instructions_commands.ts`, `src/cli/skill_text.ts` | S-005's conventions, on the client library |
 | Pages | `web/ui/components/skills_panel.ts`, `web/ui/components/file_editor.ts`, `web/ui/model/skills.ts`, `web/ui/pages/roles.ts` | The panel, the editor, their pure model, and the Roles page's Skills and instructions section |
 
@@ -939,8 +939,10 @@ ADR-009 states the rules; `src/skills/internal_folder.ts` builds them.
 - **Discovery.** A source folder that holds `SKILL.md` is one skill. Otherwise the walk reads its subfolders at any
   depth, with `readdir` from `node:fs/promises` so the event loop isn't held, in byte order of the names. A folder that
   holds `SKILL.md` is a skill, and the walk doesn't go into it: its other files are its bundled files. A file is never a
-  skill on its own. Symbolic links to folders are followed, and a set of real paths per source stops a cycle. A missing
-  source holds nothing; a missing search path also gives a diagnostic.
+  skill on its own. Symbolic links to folders are followed, and a set of real paths per source stops a cycle. A skill's
+  folder is the path the walk found it at, with its links kept, not its real path: `files.*` and the `skill` tool check
+  a path against it as written (REQ-016). A missing source holds nothing; a missing search path also gives a
+  diagnostic.
 - **Reading a skill.** `parseFrontmatter` from `@earendil-works/pi-coding-agent` reads the frontmatter, as pi agent's
   loader does. The name is the frontmatter's `name`, or the folder's name when it has none. A file that can't be read
   or parsed, or has no non-empty `description`, is left out with the reason. A name that breaks the Agent Skills name
@@ -1021,18 +1023,38 @@ equal bytes, and a change touches only its section (REQ-015).
 
 ### Files through the service
 
-`files.read` and `files.write` resolve the path first. They take the real path of the nearest existing folder on the
-path and add the rest, so a missing file and a symbolic link both resolve before the check. The allowed files are:
+`files.read` and `files.write` check the path by the file it names, then follow its symbolic links wherever they lead
+(REQ-010, REQ-016). The Intern makes no check of its own on where a link leads; the service account's permissions
+decide, as ADR-002 decision 4 states. The allowed files, read fresh at each call, are:
 
-- a file below the real path of any skill folder the catalog found, used, shadowed or left out, in the internal folder,
-  a search path or the `.pi/skills` of a workspace `workspaces.list()` returns, per-role defaults included;
-- a file below the real path of `<data dir>/instructions`;
-- the real paths of `AGENTS.md` and `CLAUDE.md` directly inside such a workspace.
+- a file below any skill folder the catalog found, used, shadowed or left out, in the internal folder, a search path
+  or the `.pi/skills` of a workspace `workspaces.list()` returns, per-role defaults included;
+- a file below `<data dir>/instructions`;
+- `AGENTS.md` and `CLAUDE.md` directly inside such a workspace or any of its parent folders, up to `/`, the folders
+  `loadProjectContextFiles` walks for the prompt and for `instructions.list`.
 
-They then refuse in this order: a path outside them `invalid_input`, a missing file `not_found`, a folder, a file over
-1 MiB or text that isn't UTF-8 (`TextDecoder` with `fatal: true`) `invalid_input`. `files.write` also refuses text over
-1 MiB. The kind that `files_changed` and `instructions.list` give is `common`, `role` (under `instructions/roles/`),
-`instructions` (any other file of that folder), `workspace` or `skill`.
+The path must be absolute. It is normalised with `path.resolve`, which settles `.` and `..` and follows no link, and is
+accepted when it lies in the allowed files above as they are written, each workspace and skill folder by the path it
+is registered or found at. It is also accepted when its real path lies in the allowed files taken as real paths, so a
+path given through a linked folder, or the target of a workspace's linked `AGENTS.md`, names the same file. A path
+written below an allowed folder is accepted even when a link on it leads elsewhere. Every other path is refused
+`invalid_input`, whatever it points at, so `/etc/passwd` and `config.toml` stay refused (AC-010.2).
+
+The read and the write then act on the link's target. They refuse in this order: a missing file, or a link whose
+target is missing (`ENOENT`, `ENOTDIR`), `not_found`; a call the system refuses (`EACCES`, `EPERM`, `EROFS`, or `ELOOP`
+for a cycle of links) `invalid_input`, naming the path and the system's reason from `util.getSystemErrorMessage`, such
+as "permission denied"; a folder, a file over 1 MiB or text that isn't UTF-8 (`TextDecoder` with `fatal: true`)
+`invalid_input`. Any other system error stays `internal`. `files.write` also refuses text over 1 MiB. The kind that
+`files_changed` and `instructions.list` give is `common`, `role` (under `instructions/roles/`), `instructions` (any
+other file of that folder), `workspace` (a workspace's or a parent folder's context file) or `skill`; `files_changed`
+names the path as the caller gave it, normalised, which is the path `skills.list` and `instructions.list` return.
+
+`writeFileAtomic` resolves the link with `realpath`, writes the temporary file in the target's folder and renames it
+onto the target, so the link stays and the rename stays on one file system. The temporary file takes the target's mode
+bits, and its group when the service account may set it (`chown` with the owner unchanged, an `EPERM` ignored). Its
+owner is the service account, so a file another account owned becomes the service account's after a save. A target
+whose folder the service account can't write is refused `invalid_input` with the system's reason, even when the file
+itself is writable, because an atomic write needs a new file beside it.
 
 ### The `skill` tool
 
@@ -1042,8 +1064,12 @@ so it is offered whatever the role's tools are, and ADR-001's upgrade write adds
 
 A call reads the conversation's document through the tool's `DocumentReader` and the catalog, and resolves the agent's
 enabled skills as the prompt does. It returns an error result, and the run goes on, for a name that isn't enabled, a
-`file` that is absolute or whose real path leaves the real path of the skill's folder, and a file that is missing or is
-a folder. Without `file` it returns `SKILL.md`, frontmatter included. The text is cut with pi agent's `truncateHead` at
+`file` that is absolute or that, as written, leaves the skill's folder (`path.resolve(folder, file)` outside the folder
+the catalog found, no link followed), and a file that is missing, a link whose target is missing, or a folder. Links
+inside the folder, `SKILL.md` included, are followed wherever they lead, with no check on the target (REQ-008,
+REQ-016). A target the system refuses (`EACCES`, `EPERM`, `ELOOP`) gives an error result naming the file and the
+system's reason from `util.getSystemErrorMessage`, never a thrown error. Without `file` it returns `SKILL.md`,
+frontmatter included. The text is cut with pi agent's `truncateHead` at
 `DEFAULT_MAX_LINES` and `DEFAULT_MAX_BYTES`, the limits of its `read` tool, with a closing line saying so.
 
 ### Agents reach `bob`
