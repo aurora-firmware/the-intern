@@ -52,6 +52,17 @@ const enabledOf = async (rig: Rig, name: string): Promise<boolean | undefined> =
         (skill) => skill.name === name,
     )?.enabled;
 
+/** The service learns of a check box change after the page sent it, so the answer is awaited, not read once. */
+async function waitUntilEnabled(rig: Rig, name: string): Promise<boolean | undefined> {
+    const deadline = Date.now() + WAIT_MS;
+    let enabled = await enabledOf(rig, name);
+    while (enabled !== true && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+        enabled = await enabledOf(rig, name);
+    }
+    return enabled;
+}
+
 async function openPanel(t: TestContext, rig: Rig) {
     const browser = await launchBrowser(t, "chrome");
     if (browser === undefined) return undefined;
@@ -82,7 +93,7 @@ describe("the Skills panel on the Job page in chrome", () => {
         await box.check({ timeout: WAIT_MS });
 
         t.assert.equal(await box.isChecked(), true);
-        t.assert.equal(await enabledOf(rig, SKILL), true);
+        t.assert.equal(await waitUntilEnabled(rig, SKILL), true);
     });
 
     it("keeps a check box checked while the panel reads again after the change", {
