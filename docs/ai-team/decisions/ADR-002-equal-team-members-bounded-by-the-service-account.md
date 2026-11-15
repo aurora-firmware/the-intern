@@ -34,7 +34,10 @@ Intern runs as bounds what it can do, not logins or per-action rules.
    REQ-018).
 6. **Owner-only files.** Every directory and file The Intern creates on its machine, the export route's temporary copy
    included, is accessible only to the service account, and an unsafe existing directory stops startup (S-002
-   REQ-006). A file a client saves from the export route is outside this rule.
+   REQ-006). A file a client saves from the export route is outside this rule. So is a save that replaces an
+   existing file a team member edits through the service (S-008 REQ-010): the file is the team's, not one The Intern
+   creates, so the save keeps its mode bits, and its group where the service account may set it, at the target of
+   any symbolic link. Only its owner becomes the service account, because an atomic write puts a new file in place.
 
 ## Consequences
 

@@ -1,7 +1,7 @@
 ---
 id: S-008
 title: Skills and instructions
-version: '0.1'
+version: '0.2'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-13'
 author: planner
@@ -28,7 +28,7 @@ service operation, page, way in) and the shared vocabulary of `docs/system_overv
 | Term | Meaning in this spec |
 |---|---|
 | Skill | A folder holding a `SKILL.md` file whose frontmatter gives a `name` and a `description`, plus any bundled files, in the shared Agent Skills format (REQ-004). |
-| Instruction file | A markdown file whose text goes into an agent's system prompt: the common prompt, a role's instructions, or a workspace's `AGENTS.md`/`CLAUDE.md` (REQ-007). |
+| Instruction file | A markdown file whose text goes into an agent's system prompt: the common prompt, a role's instructions, or a workspace's context file: the `AGENTS.md` or `CLAUDE.md` file, or the other name pi agent reads in its place, of the workspace or one of its parent folders (REQ-007). |
 | Common prompt | The instruction file every agent gets first, whatever its role (REQ-001). It replaces the fixed preamble. |
 | Shipped content | The common prompt, the shipped roles' instructions and the shipped skills, as the installed package carries them (REQ-001). |
 | Internal folder | The folder under the instance's data directory that holds the live copy of the shipped content and the team roles' instruction files (REQ-002). |
@@ -86,6 +86,9 @@ Journeys, in priority order:
   rather than invoke them.
 - **Skills chosen in a job request, a handoff or an invocation.** A new seat starts with its role's defaults, and a
   team member or the agent switches skills afterwards (REQ-006).
+- **Confining file operations.** `files.read`, `files.write` and the `skill` tool follow symbolic links wherever they
+  lead; the operating system's permissions for the service account decide what can be read or written (REQ-010,
+  REQ-016). The Intern adds no limit of its own, by design.
 - **The service account's own pi agent skill folders.** `~/.pi/agent/skills` and `~/.agents/skills` aren't loaded by
   default. A team adds one as a search path like any other folder.
 
@@ -113,6 +116,9 @@ Journeys, in priority order:
 - **`show`, `add`, `edit` and `remove` commands for skill and instruction files.** Rejected by the product owner: files
   are read and changed with the team's own tools, and the commands change only configuration.
 - **A skill set per schedule entry.** Rejected: from the Schedules page the panel opens the role the entry names.
+- **Refusing symbolic links that lead out of a skill folder or a workspace, and parent folders' context files.**
+  Rejected by the product owner on 2026-11-15: The Intern doesn't stop file operations, and the
+  operating system's permissions decide.
 
 ## Interfaces
 
@@ -244,6 +250,7 @@ First start of this version: seed the internal folder, migrate the configuration
 Later start after an upgrade: update unedited shipped files, add new ones                     REQ-003
 Team member or agent edits an instruction file or skill (by hand, web, or agent tools)        REQ-010
   (web save after the file changed on disk → refused conflict, typed text kept, disk text offered)  REQ-010, REQ-013
+  (a linked file is read and written at its target; the system's permissions decide)           REQ-010, REQ-016
 Team member adds a search path or drops a skill folder into one                               REQ-004
   (path not absolute, missing, or reachable by other accounts → refused; in the file → startup stops)  REQ-004
 Team member enables a skill for a role or for one running agent                               REQ-005, REQ-006
@@ -251,7 +258,7 @@ Team member enables a skill for a role or for one running agent                 
 Agent's next model request: prompt built from common, role, workspace files and enabled skills REQ-007
   (broken skill or missing file → left out with a diagnostic, the agent carries on)           REQ-004, REQ-007
 Agent loads a skill with `skill`                                                               REQ-008
-  (skill not enabled, or file outside its folder → refused)                                   REQ-008
+  (skill not enabled, or a path written out of its folder → refused; a link is followed)      REQ-008, REQ-016
 Seat changes → enabled skills reset to the new role's defaults                                REQ-006
 Team member inspects: `bob skills list`, `bob instructions list`, the Skills panel             REQ-009, REQ-012, REQ-013
 Team member restores a shipped file                                                            REQ-003
@@ -570,8 +577,9 @@ with it goes without that part, with a diagnostic.
 
 Every agent, the front desk included, SHALL be offered `skill`, whatever its role's tool set. Given the name of a skill
 enabled for that agent, it SHALL return the text of its `SKILL.md`; given also a `file` path relative to the skill
-folder, the text of that file. It SHALL refuse a skill that isn't enabled for the agent, a path that leaves the skill
-folder, and a file that is missing, each with an error the agent sees. It SHALL return text within the same size limit
+folder, the text of that file. It SHALL refuse a skill that isn't enabled for the agent, a path that, as written,
+leaves the skill folder, and a file that is missing, each with an error the agent sees. A symbolic link inside the
+skill folder is followed wherever it leads (REQ-016). It SHALL return text within the same size limit
 as pi agent's `read` tool. The system prompt's skill listing SHALL tell the agent to load skills with `skill`.
 Frontmatter fields other than `name` and `description` SHALL be ignored.
 
@@ -623,19 +631,24 @@ SHALL return file text.
 
 ### REQ-010 — Editing file text through the service
 
-`files.read` SHALL return the text of a skill file or an instruction file with a version token, and `files.write` SHALL
-replace it when the token still matches the file on disk, writing atomically and keeping the file's permissions. A file
-changed since the token was read SHALL be refused `conflict`. Both SHALL accept only these files, symbolic links
-resolved first:
+`files.read` SHALL return the text of one of the files below with a version token, and `files.write` SHALL replace it
+when the token still matches the file on disk, writing atomically and keeping the file's permissions. A file changed
+since the token was read SHALL be refused `conflict`. Both SHALL accept only paths that name these files:
 
 - a file inside a skill folder found in the internal folder, a search path, or a registered workspace's `.pi/skills`
 - a file in the internal folder's `instructions` folder
-- the `AGENTS.md` or `CLAUDE.md` file directly inside a registered workspace; parent folders' files are listed by
-  `instructions.list` but are neither read nor written here, because nobody checks who owns them
+- a context file of a registered workspace: a file directly inside the workspace or one of its parent folders named as
+  pi agent names its context files (`AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md` or `CLAUDE.MD`),
+  whether or not pi agent reads it there in place of another; `instructions.list` lists only the one it reads
 
-Any other path SHALL be refused `invalid_input`, a file that doesn't exist `not_found`, and a file that isn't UTF-8 text
-or is larger than 1 MiB `invalid_input`. Neither SHALL create or delete a file. An edit SHALL take effect as REQ-007
-states, and SHALL be published as `files_changed`.
+A path that names one of these files SHALL be accepted wherever its symbolic links lead, inside or outside the
+workspace, skill folder or internal folder; the file is read and written at the link's target. The operating system's
+permissions for the service account decide whether that target can be read or written, and the service SHALL make no
+check of its own on where a link leads (REQ-016). Any other path SHALL be refused `invalid_input`, a file that doesn't
+exist, a link whose target doesn't exist included, `not_found`, a file the operating system refuses to read or write
+`invalid_input` naming the system's reason, and a file that isn't UTF-8 text or is larger than 1 MiB `invalid_input`.
+Neither SHALL create or delete a file. An edit SHALL take effect as REQ-007 states, and SHALL be published as
+`files_changed`.
 
 #### AC-010.1 — A write after a hand edit
 
@@ -659,6 +672,17 @@ states, and SHALL be published as `files_changed`.
 - **When:** `files.write` saves `instructions/roles/gp.md`, and `instructions.restore gp` runs after it
 - **Then:** two `files_changed` deltas arrive, each naming the file and its kind; a hand edit of the same file sends
   none
+
+**Verification:** test — `test/service/file_operations.test.ts`.
+
+#### AC-010.4 — A parent folder's file and a link out of the workspace
+
+- **Given:** a registered workspace `/srv/work/app` whose `AGENTS.md` is a symbolic link to `/srv/notes/app.md`
+  outside the workspace, and a parent folder file `/srv/work/AGENTS.md`, both readable and writable by the service
+  account
+- **When:** a team member reads each file with `files.read` and saves it with `files.write`
+- **Then:** each call succeeds; the save of the workspace's `AGENTS.md` changes `/srv/notes/app.md` and leaves the link
+  in place, and each save is published as `files_changed`
 
 **Verification:** test — `test/service/file_operations.test.ts`.
 
@@ -796,14 +820,18 @@ parts it touches.
 ### REQ-016 — Trusted input
 
 The internal folder, search paths and workspaces are trusted input: owner-only, checked when added (REQ-002, REQ-004).
-Reading and writing through the service SHALL stay within REQ-010's files and the `skill` tool within the enabled
-skill's folder, symbolic links resolved before the check.
+`files.read`, `files.write` and the `skill` tool SHALL accept a path by the file it names (REQ-008, REQ-010) and SHALL
+follow its symbolic links wherever they lead, with no check of their own on where the target is. The operating
+system's permissions for the service account SHALL decide whether the target can be read or written: The Intern
+doesn't confine file operations by design. A target the system refuses SHALL give an error naming the system's reason.
 
 #### AC-016.1 — A link out of the skill folder
 
-- **Given:** an enabled skill whose folder holds a symbolic link to `/etc/passwd`
-- **When:** an agent calls `skill` with that file, and a team member calls `files.read` for it
-- **Then:** both are refused
+- **Given:** an enabled skill whose folder holds a symbolic link `notes.md` to a file outside the folder that the
+  service account can read, and a link `secret.md` to a file outside the folder that it can't read
+- **When:** an agent calls `skill` with each file, and a team member calls `files.read` for each
+- **Then:** for `notes.md` both return the target's text; for `secret.md` the `skill` call returns an error naming the
+  system's reason, such as permission denied, and `files.read` is refused `invalid_input` naming it
 
 **Verification:** test — `test/service/skill_tool.test.ts`.
 
@@ -889,3 +917,8 @@ manual, and a check in `npm run check` SHALL fail when the skill and the manual 
   later spec or change request; in this version such fields are ignored (REQ-008), so no behaviour here depends on it.
 
 ## Amendment Log
+
+| Date | What changed | Why | Affected tasks |
+|------|-------------|-----|----------------|
+| 2026-11-15 | spec-truth reconciliation — FAIL | v0.1 confirmed against T-327 to T-387 and B-036 to B-039, except: REQ-013 panel and editor layout (B-040, open); REQ-010 and REQ-016, files.read and files.write follow a workspace AGENTS.md or CLAUDE.md link out of the workspace (resolved by v0.2, product owner decision, tasks T-392 to T-394); REQ-007, the Roles page and manual say a save rewrites a missing role file that roles.change refuses (follow-up tasks T-389 to T-391) | none |
+| 2026-11-15 | v0.2. REQ-010: `files.read` and `files.write` accept only skill files, files in the internal folder's `instructions` folder, and the context files of a registered workspace: a file directly inside the workspace or one of its parent folders named as pi agent names its context files (`AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md` or `CLAUDE.MD`), whether or not pi agent reads it there in place of another, while `instructions.list` lists only the one it reads; and follow symbolic links wherever they lead, with no check on the target; a file the operating system refuses is refused `invalid_input` naming the system's reason; new AC-010.4. REQ-016 and AC-016.1: the link checks are dropped; `files.read`, `files.write` and `skill` follow links, and the operating system's permissions decide. REQ-008 and Workflow: `skill` refuses a path that leaves the skill folder as written, and follows a link inside it. Definitions, Instruction file: a workspace's context file, of the workspace and its parent folders. Exclusions: "Confining file operations". Alternatives Considered: refusing links out of a folder and parent folders' context files. REQ-004's owner-only check of search paths is unchanged. No identifier changed or retired. S-006 v0.8 widens its exclusion's exception to any file named as pi agent names its context files in the workspace and its parent folders. | Product owner decision of 2026-11-15, after the S-008 spec-truth reconciliation: "We don't stop any filesystem operations, the OS user permissions are the deciding rules." Architecture consistency review of v0.2: finding F1, REQ-010 named only `AGENTS.md` and `CLAUDE.md`, so a listed `AGENTS.override.md` would have been refused; finding F2, REQ-010 accepted only the file `instructions.list` lists, so a context file pi agent reads in place of another one shadows, such as an `AGENTS.md` beside an `AGENTS.override.md`, couldn't be opened, and "a skill file or an instruction file" didn't cover every accepted file. | T-392, T-393, T-394 |
