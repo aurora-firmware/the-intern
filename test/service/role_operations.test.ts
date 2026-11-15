@@ -476,6 +476,76 @@ describe("the role operations", () => {
         assert.equal("instructionsVersion" in (listed ?? {}), false);
     });
 
+    it("refuses invalid_input naming the file and the by-hand remedy, and creates no file, for instructions on a team role whose file is missing", async () => {
+        const env = await hermetic();
+        const { invoke } = await start(env);
+        await invoke("roles.create", reviewer);
+        await rm(instructionFile(env));
+
+        const error = await refusal(
+            invoke("roles.change", { name: "reviewer", instructions: "Review hard.", tools: ["bash"] }),
+        );
+
+        assert.equal(error.code, "invalid_input");
+        assert.ok(error.message.includes(instructionFile(env)));
+        assert.match(error.message, /create the file again by hand, or remove the role and create it again/);
+        await assert.rejects(readFile(instructionFile(env), "utf8"), { code: "ENOENT" });
+    });
+
+    it("refuses invalid_input naming the file and bob instructions restore, and creates no file, for instructions on a shipped role whose file is missing", async () => {
+        const env = await hermetic();
+        const { invoke } = await start(env);
+        const file = roleInstructionPath(env.dataDir, "gp");
+        await rm(file, { force: true });
+
+        const error = await refusal(invoke("roles.change", { name: "gp", instructions: "Something else." }));
+
+        assert.equal(error.code, "invalid_input");
+        assert.ok(error.message.includes(file));
+        assert.match(error.message, /bob instructions restore gp/);
+        await assert.rejects(readFile(file, "utf8"), { code: "ENOENT" });
+    });
+
+    it("refuses as for a missing file, and creates no file, when the token came before the file was deleted", async () => {
+        const env = await hermetic();
+        const { invoke, roles } = await start(env);
+        await invoke("roles.create", reviewer);
+        const token = await tokenOf(roles, "reviewer");
+        await rm(instructionFile(env));
+
+        const error = await refusal(
+            invoke("roles.change", { name: "reviewer", instructions: "Review hard.", instructionsVersion: token }),
+        );
+
+        assert.equal(error.code, "invalid_input");
+        assert.ok(error.message.includes(instructionFile(env)));
+        assert.match(error.message, /create the file again by hand/);
+        await assert.rejects(readFile(instructionFile(env), "utf8"), { code: "ENOENT" });
+    });
+
+    it("applies a change without instructions and leaves the file missing when the file is missing", async () => {
+        const env = await hermetic();
+        const { invoke } = await start(env);
+        await invoke("roles.create", reviewer);
+        await rm(instructionFile(env));
+
+        const answer = (await invoke("roles.change", { name: "reviewer", tools: ["bash"] })) as {
+            role: { tools: string[]; instructionsMissing?: boolean };
+        };
+
+        assert.deepEqual(answer.role.tools, ["bash"]);
+        assert.equal(answer.role.instructionsMissing, true);
+        await assert.rejects(readFile(instructionFile(env), "utf8"), { code: "ENOENT" });
+    });
+
+    it("refuses not_found for instructions on an unknown role when no token comes with them", async () => {
+        const { invoke } = await start(await hermetic());
+
+        const error = await refusal(invoke("roles.change", { name: "nobody", instructions: "x" }));
+
+        assert.equal(error.code, "not_found");
+    });
+
     it("announces files_changed with kind role for each file a role operation writes or removes", async () => {
         const env = await hermetic();
         const { invoke, roles, announced } = await start(env);
