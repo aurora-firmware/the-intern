@@ -1,9 +1,12 @@
 /**
  * The `skill` tool (S-008 REQ-008, REQ-016): an agent loads the text of a skill enabled for it, or a file the skill
- * bundles. It only reads, so a call cut short by a restart is safe to run again.
+ * bundles. It only reads, so a call cut short by a restart is safe to run again. A file path that leaves the skill's
+ * folder as written is refused; a link inside the folder is followed wherever it leads.
  */
-import { readFile, realpath, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, readFile, realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve } from "node:path";
+import { getSystemErrorMessage } from "node:util";
 import type { Context } from "@earendil-works/chord/context";
 import { type Static, Type } from "@earendil-works/pi-ai";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateHead } from "@earendil-works/pi-coding-agent";
@@ -66,22 +69,33 @@ function textOf(content: string): ToolExecutionResult {
 
 type Located = { path: string } | { problem: string };
 
-// The real path of the file must lie under the real path of the skill's folder, so a link can't lead out of it.
+// A `file` that is absolute, or that as written (no link followed) leaves the skill's folder, is refused. Links in the
+// folder are then followed wherever they lead, with no check on the target: the system's permissions decide. A target
+// the system refuses (EACCES, EPERM, a cycle of links) gives a problem naming the file and the system's reason.
+const REFUSED_BY_SYSTEM = new Set(["EACCES", "EPERM", "ELOOP"]);
+
+function systemRefusal(file: string, error: unknown): Located | undefined {
+    const { code, errno } = error as NodeJS.ErrnoException;
+    if (code === undefined || errno === undefined || !REFUSED_BY_SYSTEM.has(code)) return undefined;
+    return { problem: `${file} can't be read: ${getSystemErrorMessage(errno)}` };
+}
+
 async function locateFile(skill: CatalogSkill, file: string): Promise<Located> {
-    if (isAbsolute(file)) return { problem: `${file} is not inside the skill's folder; give a path relative to it` };
+    const outside = { problem: `${file} is not inside the skill's folder; give a path relative to it` };
+    if (isAbsolute(file)) return outside;
     const target = resolve(skill.folder, file);
-    let realFolder: string;
-    let realTarget: string;
+    if (!isInside(skill.folder, target)) return outside;
     try {
-        realFolder = await realpath(skill.folder);
-        realTarget = await realpath(target);
+        const realTarget = await realpath(target);
+        if (!(await stat(realTarget)).isFile()) return { problem: `${file} is not a file` };
+        await access(realTarget, constants.R_OK);
+        return { path: realTarget };
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return { problem: `${file} is missing: no such file` };
+        const refused = systemRefusal(file, error);
+        if (refused !== undefined) return refused;
         throw error;
     }
-    if (!isInside(realFolder, realTarget)) return { problem: `${file} is not inside the skill's folder` };
-    if (!(await stat(realTarget)).isFile()) return { problem: `${file} is not a file` };
-    return { path: realTarget };
 }
 
 async function callSkill(
