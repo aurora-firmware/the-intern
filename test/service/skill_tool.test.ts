@@ -3,7 +3,7 @@
  * bundles, and a call that leaves the skill's folder or names a skill that isn't enabled is refused.
  */
 import assert from "node:assert/strict";
-import { chmod, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -433,15 +433,16 @@ describe("the files.read operation on an enabled skill's file", () => {
         rig = undefined;
     });
 
-    it("refuses a SKILL.md that is a symbolic link to /etc/passwd", async () => {
+    it("returns the text and a version of a SKILL.md that is a symbolic link to a readable file outside the skill folder", async () => {
         rig = await startSkillsRig();
         const file = join(rig.dirs.dataDir, "skills/carry-out-a-part/SKILL.md");
-        await rm(file);
-        await symlink("/etc/passwd", file);
+        const target = join(rig.dirs.root, "linked-skill.md");
+        await rename(file, target);
+        await symlink(target, file);
 
-        await assert.rejects(
-            rig.invoke("files.read", { path: file }),
-            (error: unknown) => (error as { code?: string }).code === "invalid_input",
-        );
+        const read = (await rig.invoke("files.read", { path: file })) as { text: string; version: string };
+
+        assert.equal(read.text, await readFile(target, "utf8"));
+        assert.match(read.version, /^[0-9a-f]{64}$/);
     });
 });
