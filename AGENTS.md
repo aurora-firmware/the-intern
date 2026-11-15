@@ -49,6 +49,11 @@ npm test
 `npm run test:unit`, `npm run test:service` and `npm run test:web` run the three test folders separately.
 `test:web` drives real browsers; `README.md`, Development environment, says how to get them.
 
+The terminal shows one dot per test and, after the run, a "Failed tests:" block with each failure's name, error and
+stack. It prints no counts. The full `spec` output goes to `.tmp/test-logs/unit.log`, `service.log` and `web.log`; each
+run overwrites its log, and the `ℹ pass` and `ℹ fail` counts are at the end of it. `npm run test:verbose` runs the
+three folders in the same order with the `spec` output on the terminal.
+
 ## Run
 
 Start a development instance of the daemon with its directories under `.tmp/` (the flags take absolute paths):

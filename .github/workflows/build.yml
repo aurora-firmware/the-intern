@@ -95,3 +95,11 @@ jobs:
         env:
           BOB_WEB_ALL_BROWSERS: "1"
         run: npm test
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: .tmp/test-logs/
+          include-hidden-files: true
