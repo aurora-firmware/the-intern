@@ -149,6 +149,17 @@ export function roleOperations(component: AgentsComponent) {
         }
     };
 
+    // A missing file is a hand change: the service never writes it again, so it names the remedy instead.
+    const refuseMissingFile = async (role: CatalogRole): Promise<void> => {
+        if (!(await withInstructions(role)).instructionsMissing) return;
+        const { name } = role;
+        const file = roleInstructionPath(component.skills.dataDir(), name);
+        const remedy = role.shipped
+            ? `run "bob instructions restore ${name}"`
+            : "create the file again by hand, or remove the role and create it again";
+        throw new ServiceError("invalid_input", `Role "${name}" has no instruction file ${file}; ${remedy}`);
+    };
+
     const listOperation = defineOperation<ServiceContext, Record<string, never>, { roles: ListedRole[] }>({
         name: "roles.list",
         kind: "read",
@@ -192,7 +203,9 @@ export function roleOperations(component: AgentsComponent) {
         run: (_ctx, { name, change, instructions, instructionsVersion }) =>
             mappingRefusals(async () => {
                 // An unknown role is left to the catalog, which refuses it not_found.
-                if (instructions !== undefined && instructionsVersion === undefined && catalog().get(name)) {
+                const existing = catalog().get(name);
+                if (instructions !== undefined && existing) await refuseMissingFile(existing);
+                if (instructions !== undefined && instructionsVersion === undefined && existing) {
                     throw new ServiceError(
                         "invalid_input",
                         `Role "${name}" instructions need instructionsVersion, the token roles.list returned with them`,
