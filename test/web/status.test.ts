@@ -4,7 +4,7 @@ import { type Clock, throttled } from "../../web/ui/model/throttle.ts";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, type FakeScript, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
-import { afterTwoFrames, holdNextRead } from "../support/hold_read.ts";
+import { holdNextRead, trackOperations } from "../support/hold_read.ts";
 import { scaled } from "../support/time_scale.ts";
 import { startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
@@ -253,6 +253,7 @@ describe("the Status page in chrome", () => {
         const page = await browser.newPage();
         await openStatus(page, port);
         await page.waitForSelector(`${STATUS} .status-usage-total`, { timeout: WAIT_MS });
+        const calls = trackOperations(page);
         const held = holdNextRead(page, port, "usage.get");
 
         await say(daemon, desk, "ask");
@@ -260,12 +261,8 @@ describe("the Status page in chrome", () => {
         daemon.releaseRuns();
         const after = await waitForUsage(daemon, 0);
         await waitForShownTotal(page, after);
-        const finished = page.waitForResponse((response) => response.url().endsWith("/operations/usage.get"), {
-            timeout: WAIT_MS,
-        });
         held.release();
-        await finished;
-        await afterTwoFrames(page);
+        await calls.settled();
 
         t.assert.equal(
             (await shownTokens(page)).reduce((sum, each) => sum + each, 0),

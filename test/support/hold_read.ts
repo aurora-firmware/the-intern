@@ -1,4 +1,5 @@
-import type { Page } from "playwright-core";
+import type { Page, Request } from "playwright-core";
+import { scaled } from "./time_scale.ts";
 
 type Held = { isRead: Promise<void>; release: () => void };
 
@@ -38,6 +39,35 @@ export function holdNextRead(page: Page, port: number, operation: string, refusa
     return { isRead, release };
 }
 
-/** Two animation frames: whatever the page does with a response it got has been shown by then. */
-export const afterTwoFrames = (page: Page): Promise<unknown> =>
-    page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+const SETTLE_TIMEOUT_MS = scaled(30_000);
+const SETTLE_POLL_MS = 20;
+
+/**
+ * Counts the page's calls to the service that have started and not finished. A read makes several calls one after the
+ * other, so `settled` waits until none is under way, and then for two animation frames, which is when the page has
+ * shown what the last read gave it; it checks again that no new call started meanwhile.
+ */
+export function trackOperations(page: Page): { settled: () => Promise<void> } {
+    const underWay = new Set<Request>();
+    const isOperation = (url: string) => url.includes("/operations/");
+    page.on("request", (request) => {
+        if (isOperation(request.url())) underWay.add(request);
+    });
+    const finish = (request: Request) => underWay.delete(request);
+    page.on("requestfinished", finish);
+    page.on("requestfailed", finish);
+    const settled = async (): Promise<void> => {
+        const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+        for (;;) {
+            while (underWay.size > 0) {
+                if (Date.now() > deadline) throw new Error("the page's calls to the service did not finish");
+                await new Promise((resolve) => setTimeout(resolve, SETTLE_POLL_MS));
+            }
+            await page.evaluate(
+                () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+            );
+            if (underWay.size === 0) return;
+        }
+    };
+    return { settled };
+}
