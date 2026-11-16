@@ -5,6 +5,7 @@ import { droppedMessages, type SentMessage, unsettledMessages } from "../../web/
 import { launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, type FakeScript, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { holdNextRead, trackOperations } from "../support/hold_read.ts";
 import { scaled } from "../support/time_scale.ts";
 import { startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
@@ -213,6 +214,30 @@ describe("the Front desk page in chrome", () => {
 
         await waitForAnswer(page, "echo: missed");
         await until("the desk to be read again", async () => deskReads() > before);
+    });
+
+    it("keeps showing the desk when an older read is refused after a newer one succeeded", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { port } = await startDesk("echo");
+        const proxy = await startWebProxy();
+        proxies.push(proxy);
+        const browser = await launchBrowser(t, "chrome", { proxyPort: proxy.port });
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        const calls = trackOperations(page);
+        const held = holdNextRead(page, port, "desk.get", "The first read is refused.");
+
+        await page.goto(pageUrl(port, "/ui/#/desk"));
+        await held.isRead;
+        proxy.forceFeedEnd("lagging");
+        await page.waitForSelector(BOX, { timeout: WAIT_MS });
+        held.release();
+        await calls.settled();
+
+        t.assert.equal(await page.locator("main .refusal").count(), 0);
+        await sendMessage(page, "still here");
+        await waitForAnswer(page, "echo: still here");
     });
 
     it("disables sending and Stop while the service can't be reached", { timeout: TEST_TIMEOUT_MS }, async (t) => {
