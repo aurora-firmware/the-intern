@@ -13,7 +13,7 @@ import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { scaled } from "../support/time_scale.ts";
 
-const POLL_ATTEMPTS = 200;
+const POLL_ATTEMPTS = scaled(200);
 const POLL_PAUSE_MS = 25;
 const REPLY_DELAY_MS = 150;
 const LONG_REPLY_DELAY_MS = 20_000;
@@ -131,6 +131,16 @@ async function pollUntil(isDone: () => boolean): Promise<void> {
     assert.fail("the expected condition never held");
 }
 
+/** Submits to the conversation and waits until it is in the admission queue, so the next submission arrives after it. */
+async function submitAndAwaitArrival(fixture: Fixture, conversationId: string, content: string): Promise<string> {
+    const submissionId = await fixture.submit(conversationId, content);
+    await pollUntil(() => {
+        const { active, waiting } = fixture.admission.state();
+        return active.includes(conversationId) || waiting.some((run) => run.conversationId === conversationId);
+    });
+    return submissionId;
+}
+
 async function settle(host: HarnessHost, submissionId: string): Promise<void> {
     const state = await waitForSubmission(host, submissionId, SETTLE_TIMEOUT_MS);
     assert.equal(state.state, "done");
@@ -146,7 +156,7 @@ describe("admission with one worker thread", () => {
 
         const submissions: string[] = [];
         for (const [index, conversationId] of conversations.entries()) {
-            submissions.push(await fixture.submit(conversationId, `message-${index}`));
+            submissions.push(await submitAndAwaitArrival(fixture, conversationId, `message-${index}`));
         }
         for (const submissionId of submissions) await settle(fixture.host, submissionId);
 
@@ -163,9 +173,9 @@ describe("admission with one worker thread", () => {
             await fixture.newConversation(),
             await fixture.newConversation(),
         ];
-        await fixture.submit(first, "message-0");
-        await fixture.submit(second, "message-1");
-        await fixture.submit(third, "message-2");
+        await submitAndAwaitArrival(fixture, first, "message-0");
+        await submitAndAwaitArrival(fixture, second, "message-1");
+        await submitAndAwaitArrival(fixture, third, "message-2");
 
         await pollUntil(() => fixture.admission.state().waiting.length === 2);
 
@@ -189,9 +199,9 @@ describe("admission with one worker thread", () => {
             await fixture.newConversation(),
             await fixture.newConversation(),
         ];
-        await fixture.submit(first, "message-0");
-        await fixture.submit(second, "message-1");
-        await fixture.submit(third, "message-2");
+        await submitAndAwaitArrival(fixture, first, "message-0");
+        await submitAndAwaitArrival(fixture, second, "message-1");
+        await submitAndAwaitArrival(fixture, third, "message-2");
         await pollUntil(() => fixture.admission.state().waiting.length === 2);
 
         await abortConversation(fixture.host, first);
@@ -211,9 +221,9 @@ describe("admission with one worker thread", () => {
             await fixture.newConversation(),
             await fixture.newConversation(),
         ];
-        await fixture.submit(first, "message-0");
-        await fixture.submit(second, "message-1");
-        await fixture.submit(third, "message-2");
+        await submitAndAwaitArrival(fixture, first, "message-0");
+        await submitAndAwaitArrival(fixture, second, "message-1");
+        await submitAndAwaitArrival(fixture, third, "message-2");
         await pollUntil(() => fixture.admission.state().waiting.length === 2);
 
         await abortConversation(fixture.host, second);
@@ -287,7 +297,7 @@ describe("admission after the host is opened again", () => {
         conversations.push(await first.newConversation());
         const submissions: string[] = [];
         for (const [index, conversationId] of conversations.entries()) {
-            submissions.push(await first.submit(conversationId, `message-${index}`));
+            submissions.push(await submitAndAwaitArrival(first, conversationId, `message-${index}`));
         }
         await pollUntil(() => first.admission.state().waiting.length === 2);
         await closeFixture(first);
@@ -311,7 +321,7 @@ describe("admission after the host is opened again", () => {
         await first.admission.acquire(idle, neverAborted());
         const submissions: string[] = [];
         for (const [index, conversationId] of waitingConversations.entries()) {
-            submissions.push(await first.submit(conversationId, `message-${index}`));
+            submissions.push(await submitAndAwaitArrival(first, conversationId, `message-${index}`));
         }
         await pollUntil(() => first.admission.state().waiting.length === 2);
         assert.deepEqual(first.admission.state().active, [idle]);
@@ -339,7 +349,7 @@ describe("admission after the host is opened again", () => {
         conversations.push(await first.newConversation());
         const submissions: string[] = [];
         for (const [index, conversationId] of conversations.entries()) {
-            submissions.push(await first.submit(conversationId, `message-${index}`));
+            submissions.push(await submitAndAwaitArrival(first, conversationId, `message-${index}`));
         }
         await pollUntil(() => first.admission.state().waiting.length === 1);
         assert.deepEqual(first.admission.state().active, [conversations[0], conversations[1]]);

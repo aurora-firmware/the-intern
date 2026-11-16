@@ -266,6 +266,10 @@ describe("the front desk on one worker thread", { timeout: TEST_TIMEOUT_MS }, ()
         await until(() => fixture.calls.some((call) => call.lastUser.includes("first job")), "the first lead to run");
         assert.equal((await fixture.workerThreads()).inUse, 1);
         await fixture.submitToDesk("desk question");
+        await until(
+            async () => (await fixture.workerThreads()).waiting.some((run) => run.conversationId === fixture.deskId),
+            "the front desk run to wait",
+        );
         await fixture.invoke("jobs.create", { text: "second job" });
 
         await until(async () => (await fixture.workerThreads()).waiting.length === 2, "two runs to wait");
