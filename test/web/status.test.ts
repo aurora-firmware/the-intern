@@ -254,7 +254,7 @@ describe("the Status page in chrome", () => {
         await openStatus(page, port);
         await page.waitForSelector(`${STATUS} .status-usage-total`, { timeout: WAIT_MS });
         const calls = trackOperations(page);
-        const held = holdNextRead(page, port, "usage.get");
+        const held = await holdNextRead(page, port, "usage.get");
 
         await say(daemon, desk, "ask");
         await held.isRead;

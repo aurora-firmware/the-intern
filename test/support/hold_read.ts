@@ -1,6 +1,9 @@
 import type { Page, Request } from "playwright-core";
 import { scaled } from "./time_scale.ts";
 
+const SETTLE_TIMEOUT_MS = scaled(30_000);
+const SETTLE_POLL_MS = 20;
+
 type Held = { isRead: Promise<void>; release: () => void };
 
 /**
@@ -8,17 +11,18 @@ type Held = { isRead: Promise<void>; release: () => void };
  * the data as of that moment, and the page gets it only after `release`. Later calls pass through. With `refusal`,
  * the page gets that refusal (status 400) when released instead of the answer.
  */
-export function holdNextRead(page: Page, port: number, operation: string, refusal?: string): Held {
+export async function holdNextRead(page: Page, port: number, operation: string, refusal?: string): Promise<Held> {
     let markRead: () => void = () => undefined;
     let release: () => void = () => undefined;
-    const isRead = new Promise<void>((resolve) => {
+    const isRead = new Promise<void>((resolve, reject) => {
         markRead = resolve;
+        setTimeout(() => reject(new Error(`the page made no call to ${operation}`)), SETTLE_TIMEOUT_MS).unref();
     });
     const isReleased = new Promise<void>((resolve) => {
         release = resolve;
     });
     let isHeld = false;
-    void page.route(`**/operations/${operation}`, async (route) => {
+    await page.route(`**/operations/${operation}`, async (route) => {
         if (isHeld) return route.fallback();
         isHeld = true;
         // `route.fetch()` can't resolve the test host, so the service is asked at its loopback address.
@@ -38,9 +42,6 @@ export function holdNextRead(page: Page, port: number, operation: string, refusa
     });
     return { isRead, release };
 }
-
-const SETTLE_TIMEOUT_MS = scaled(30_000);
-const SETTLE_POLL_MS = 20;
 
 /**
  * Counts the page's calls to the service that have started and not finished. A read makes several calls one after the

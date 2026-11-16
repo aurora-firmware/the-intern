@@ -137,7 +137,7 @@ describe("the Workspaces page in chrome", () => {
         const before = await makeDirectory(env, "before");
         const elsewhere = await makeDirectory(env, "elsewhere");
         const calls = trackOperations(page);
-        const held = holdNextRead(page, port, "workspaces.list");
+        const held = await holdNextRead(page, port, "workspaces.list");
 
         await daemon.invoke("workspaces.register", { path: before });
         await held.isRead;

@@ -226,7 +226,7 @@ describe("the Front desk page in chrome", () => {
         if (browser === undefined) return;
         const page = await browser.newPage();
         const calls = trackOperations(page);
-        const held = holdNextRead(page, port, "desk.get", "The first read is refused.");
+        const held = await holdNextRead(page, port, "desk.get", "The first read is refused.");
 
         await page.goto(pageUrl(port, "/ui/#/desk"));
         await held.isRead;

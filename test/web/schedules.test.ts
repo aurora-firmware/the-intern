@@ -136,7 +136,7 @@ describe("the Schedules page in chrome", () => {
         await page.goto(pageUrl(port, "/ui/#/schedules"));
         await page.waitForSelector(entryCard, { timeout: WAIT_MS });
         const calls = trackOperations(page);
-        const held = holdNextRead(page, port, "schedules.list");
+        const held = await holdNextRead(page, port, "schedules.list");
 
         await daemon.invoke("schedules.create", { name: "before", cron: "0 3 * * *", request: "Starts the read." });
         await held.isRead;
