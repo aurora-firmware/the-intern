@@ -29,8 +29,9 @@ import { DEFAULT_LEAD_ROLE } from "../../src/roles/shipped_roles.ts";
 import type { ConversationListing, InvocationTree } from "../../src/service/conversation_read_operations.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 const quietLogger = createLogger({ stream: { write: () => true } });
 const webCaller: Caller = { actor: { kind: "team_member", wayIn: "web interface" } };

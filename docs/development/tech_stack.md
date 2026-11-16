@@ -46,12 +46,15 @@ approves it. A rule that comes from a spec or an ADR changes with that spec or A
 `node:test` with `node:assert/strict`. Tests are kept apart by folder: `test/unit`, `test/service` (the whole daemon,
 including crash and resume) and `test/web` (real pages in real browsers against a daemon child). `npm test` runs them
 all, `test/web` last and on its own, because its time checks suffer under the other folders' load; `test:unit`,
-`test:service` and `test:web` run one folder each. `test:web` runs at most 2 files at a time
-(`--test-concurrency=2`). Each of the three scripts sends two reporters to two places: the `dot` reporter to the
-terminal, which then shows one character per test and a "Failed tests:" block with each failure's error and stack, and
-the `spec` reporter to `.tmp/test-logs/<folder>.log`, which holds every test and its console output. A script creates
-`.tmp/test-logs` first, so a fresh checkout works. `test:verbose` runs the three folders with the `spec` reporter on
-the terminal. The CI workflow uploads `.tmp/test-logs/` as an artifact when the test step fails.
+`test:service` and `test:web` run one folder each. `test:web` runs at most 2 files at a time (`--test-concurrency=2`)
+and `test:service` at most 10 (`--test-concurrency=10`): on a busy machine, more files at once only slow each test past
+its waits. Each wait and timeout a test writes goes through `scaled()` in `test/support/time_scale.ts`. The environment
+variable `TEST_TIME_SCALE` (1 to 10) multiplies them; without it, the factor is twice the one-minute load average per
+core, between 2 and 4. Each of the three scripts sends two reporters to two places: the `dot` reporter to the terminal,
+which then shows one character per test and a "Failed tests:" block with each failure's error and stack, and the `spec`
+reporter to `.tmp/test-logs/<folder>.log`, which holds every test and its console output. A script creates
+`.tmp/test-logs` first, so a fresh checkout works. `test:verbose` runs the three folders with the `spec` reporter on the
+terminal. The CI workflow uploads `.tmp/test-logs/` as an artifact when the test step fails.
 
 **Which tool drives the browser in `test/web`?** `playwright-core` 1.65.0, a dev dependency, driven from `node:test`. It
 covers all of S-006 REQ-021's browsers: Chrome, and Edge where it is installed, through their real builds

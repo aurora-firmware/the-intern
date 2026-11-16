@@ -1,5 +1,6 @@
+import { scaled } from "./time_scale.ts";
 /** How long a job may take to reach a status before a test treats it as stuck. */
-export const JOB_STATUS_DEADLINE_MS = 30_000;
+export const JOB_STATUS_DEADLINE_MS = scaled(30_000);
 
 const POLL_INTERVAL_MS = 20;
 

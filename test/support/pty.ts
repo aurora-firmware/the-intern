@@ -3,9 +3,10 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_EXIT_DEADLINE_MS, exitWithin } from "./exit_deadline.ts";
+import { scaled } from "./time_scale.ts";
 
 const BOB_ENTRY = join(import.meta.dirname, "..", "..", "src", "cli", "bob.ts");
-const DEFAULT_WAIT_FOR_MS = 20_000;
+const DEFAULT_WAIT_FOR_MS = scaled(20_000);
 const POLL_MS = 10;
 
 export type PtySession = {

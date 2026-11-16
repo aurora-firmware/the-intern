@@ -20,9 +20,10 @@ import type { Storage } from "../../src/host/harness_host.ts";
 import { ServiceError } from "../../src/service/operations.ts";
 import { createFakeModel, type FakeReply } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const TEAM_MEMBER = { actor: { kind: "team_member" } } as const;
-const WAIT_TIMEOUT_MS = 10_000;
+const WAIT_TIMEOUT_MS = scaled(10_000);
 const POLL_INTERVAL_MS = 10;
 const BOUND_TEST_TIMEOUT_MS = STOP_BOUND_MS + 5_000;
 

@@ -25,9 +25,10 @@ import type { DaemonStatus } from "../../src/service/status_operation.ts";
 import { createSkillsComponent } from "../../src/skills/skills_component.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const TEAM_MEMBER = { actor: { kind: "team_member" } } as const;
-const WAIT_TIMEOUT_MS = 10_000;
+const WAIT_TIMEOUT_MS = scaled(10_000);
 const POLL_INTERVAL_MS = 10;
 const RUN_DELAY_MS = 400;
 

@@ -19,8 +19,9 @@ import { readConversationMeta } from "../../src/host/seating.ts";
 import { createJobsComponent, type JobsComponentOptions } from "../../src/jobs/jobs_component.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 const emailCaller: Caller = { actor: { kind: "team_member", wayIn: "email" } };
 const webCaller: Caller = { actor: { kind: "team_member", wayIn: "web interface" } };

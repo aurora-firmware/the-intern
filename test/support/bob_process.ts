@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { DEFAULT_EXIT_DEADLINE_MS, exitWithin } from "./exit_deadline.ts";
+import { scaled } from "./time_scale.ts";
 
 const BOB_ENTRY = join(import.meta.dirname, "..", "..", "src", "cli", "bob.ts");
 
@@ -57,7 +58,7 @@ export type BobChild = {
     exited: Promise<number | null>;
 };
 
-const DEFAULT_WAIT_FOR_MS = 20_000;
+const DEFAULT_WAIT_FOR_MS = scaled(20_000);
 const WAIT_FOR_POLL_MS = 10;
 
 /** Starts `node src/cli/bob.ts` as a child that keeps running; the test reads its output as it arrives. */

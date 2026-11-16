@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const POLL_INTERVAL_MS = 20;
-const WAIT_BOUND_MS = 30_000;
-const TEST_TIMEOUT_MS = 90_000;
+const WAIT_BOUND_MS = scaled(30_000);
+const TEST_TIMEOUT_MS = scaled(90_000);
 const ENTRIES_LIMIT = 200;
 // The fake model holds the summary answer back, so the second input arrives while the run is inside its compaction.
 const INSIDE_COMPACTION_MS = 800;

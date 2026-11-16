@@ -32,8 +32,9 @@ import type { Seat } from "../../src/roles/role_model.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 const SETTLE_PAUSE_MS = 100;
 const quietLogger = createLogger({ stream: { write: () => true } });

@@ -14,8 +14,9 @@ import type { Seat } from "../../src/roles/role_model.ts";
 import { commonPromptPath, roleInstructionPath } from "../../src/skills/internal_folder.ts";
 import { createDiagnosticLog, type DiagnosticLog } from "../../src/skills/skill_discovery.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 10_000;
+const WAIT_MS = scaled(10_000);
 const COMMON = "COMMON-TEXT";
 const job: JobLinks = { jobId: "job-1", isLead: true, origin: { kind: "request", wayIn: "cli" }, depth: 0 };
 const actor: SeatActor = { kind: "team_member", wayIn: "cli" };

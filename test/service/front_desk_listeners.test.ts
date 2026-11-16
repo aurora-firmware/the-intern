@@ -25,10 +25,11 @@ import type { Caller } from "../../src/service/operations.ts";
 import { startDaemon } from "../support/daemon_process.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_TIMEOUT_MS = 20_000;
+const WAIT_TIMEOUT_MS = scaled(20_000);
 const POLL_INTERVAL_MS = 10;
-const TEST_TIMEOUT_MS = 60_000;
+const TEST_TIMEOUT_MS = scaled(60_000);
 const LOOPBACK = "127.0.0.1";
 const IN_PROCESS: Caller = { actor: { kind: "team_member" } };
 const quietLogger = createLogger({ stream: { write: () => true } });

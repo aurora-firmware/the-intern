@@ -4,10 +4,11 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { processCommand } from "../support/process_command.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const FIXTURE = join(import.meta.dirname, "..", "support", "orphan_fixture.ts");
-const START_TIMEOUT_MS = 30_000;
-const GONE_TIMEOUT_MS = 10_000;
+const START_TIMEOUT_MS = scaled(30_000);
+const GONE_TIMEOUT_MS = scaled(10_000);
 const POLL_MS = 20;
 
 type Started = { pid: number; root: string };

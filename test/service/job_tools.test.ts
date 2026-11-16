@@ -22,8 +22,9 @@ import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import { createSchedulesComponent } from "../../src/schedules/schedules_component.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 const SCRIPT_INPUT = "script";
 const quietLogger = createLogger({ stream: { write: () => true } });

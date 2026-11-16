@@ -8,18 +8,20 @@ import { afterEach, describe, it, mock } from "node:test";
 import type { Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
-import { STOP_BOUND_MS } from "../../src/daemon/constants.ts";
+import { MAX_SUBMISSION_WAIT_MS, STOP_BOUND_MS } from "../../src/daemon/constants.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
 import { LOCAL_SOCKET_FILE, localSocketPath, MAX_SOCKET_PATH_BYTES } from "../../src/listeners/socket_path.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_TIMEOUT_MS = 10_000;
+const WAIT_TIMEOUT_MS = scaled(10_000);
 const POLL_INTERVAL_MS = 10;
 const RUN_DELAY_MS = 60_000;
-const WAIT_CALL_TIMEOUT_MS = 300_000;
+/** The longest wait the daemon takes, sent to the product, so never scaled. */
+const WAIT_CALL_TIMEOUT_MS = MAX_SUBMISSION_WAIT_MS;
 const PERMISSION_BITS = 0o777;
 const OWNER_ONLY_FILE_MODE = 0o600;
 const STOP_TEST_TIMEOUT_MS = STOP_BOUND_MS + 10_000;

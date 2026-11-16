@@ -9,10 +9,11 @@ import {
     startDaemon,
 } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const POLL_INTERVAL_MS = 50;
-const WAIT_BOUND_MS = 30_000;
-const TEST_TIMEOUT_MS = 90_000;
+const WAIT_BOUND_MS = scaled(30_000);
+const TEST_TIMEOUT_MS = scaled(90_000);
 const FAKE_PROVIDER = "faux";
 const FAKE_MODEL = "faux-1";
 const CODE_REVIEW = "code-review";

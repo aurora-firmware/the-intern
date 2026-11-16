@@ -54,6 +54,9 @@ stack. It prints no counts. The full `spec` output goes to `.tmp/test-logs/unit.
 run overwrites its log, and the `ℹ pass` and `ℹ fail` counts are at the end of it. `npm run test:verbose` runs the
 three folders in the same order with the `spec` output on the terminal.
 
+Test waits and timeouts run at 2 to 4 times their written length, more on a busier machine; set `TEST_TIME_SCALE`
+(1 to 10) to choose the factor. Write a new wait or timeout as `scaled(ms)` from `test/support/time_scale.ts`.
+
 ## Run
 
 Start a development instance of the daemon with its directories under `.tmp/` (the flags take absolute paths):

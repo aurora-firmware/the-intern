@@ -25,8 +25,9 @@ import type { Caller } from "../../src/service/operations.ts";
 import { createSkillsComponent } from "../../src/skills/skills_component.ts";
 import { createFakeModel, type FakeReply, type FakeTranscript } from "./fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "./hermetic_env.ts";
+import { scaled } from "./time_scale.ts";
 
-const WAIT_TIMEOUT_MS = 20_000;
+const WAIT_TIMEOUT_MS = scaled(20_000);
 const POLL_INTERVAL_MS = 10;
 const OWNER_ONLY_MODE = 0o700;
 /** Operations such as `jobs.create` refuse the in-process way in, so calls are made as a team member at the command line. */

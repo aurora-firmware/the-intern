@@ -31,10 +31,11 @@ import {
     startFixture,
     type View,
 } from "../support/listeners_feed_fixture.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const TEST_TIMEOUT_MS = 90_000;
+const TEST_TIMEOUT_MS = scaled(90_000);
 /** The stalled client's test runs the loop until the stream ends, then as often again in the control conversation. */
-const STALL_TEST_TIMEOUT_MS = 180_000;
+const STALL_TEST_TIMEOUT_MS = scaled(180_000);
 /**
  * The bound a run with a stalled subscriber must finish in, relative to the same run with none: generous enough for a
  * loaded machine, far below a run that waits on its subscriber.
@@ -47,7 +48,7 @@ const NODE_DEFAULT_IDLE_TIMEOUT_MS = 5000;
 const LONG_WAIT_MS = 6000;
 const HOLD_INPUT = "hold";
 /** Longer than the test; stopping the daemon aborts the held answer. */
-const HOLD_DELAY_MS = 120_000;
+const HOLD_DELAY_MS = scaled(120_000);
 const TAG_HEADER = "x-test-request";
 const REQUEST_START_CHANNEL = "http.server.request.start";
 

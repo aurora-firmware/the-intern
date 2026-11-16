@@ -14,8 +14,9 @@ import { steerConversation } from "../../src/host/steering.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import { type Caller, ServiceError } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 const OWNER_ONLY = 0o600;
 const quietLogger = createLogger({ stream: { write: () => true } });

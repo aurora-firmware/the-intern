@@ -5,13 +5,14 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { type DaemonProcess, type StartDaemonOptions, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const NOTE_BYTES = 1_000_000;
 const NOTE_COUNT = 24;
 const EXIT_BOUND_MS = 10_000;
-const TEST_TIMEOUT_MS = 90_000;
+const TEST_TIMEOUT_MS = scaled(90_000);
 const POLL_INTERVAL_MS = 20;
-const WAIT_BOUND_MS = 20_000;
+const WAIT_BOUND_MS = scaled(20_000);
 const LOOPBACK = "127.0.0.1";
 const FAKE_PROVIDER = "faux";
 const FAKE_MODEL = "faux-1";

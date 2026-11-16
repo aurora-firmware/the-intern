@@ -6,9 +6,10 @@ import { afterEach, describe, it } from "node:test";
 import { localTimeText } from "../../src/schedules/schedule_time.ts";
 import { ServiceError } from "../../src/service/operations.ts";
 import { type ScheduleRig, startScheduleRig } from "../support/schedule_rig.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const rigs: ScheduleRig[] = [];
-const TEST_TIMEOUT_MS = 60_000;
+const TEST_TIMEOUT_MS = scaled(60_000);
 const FAILED_EXIT = 1;
 
 afterEach(async () => {

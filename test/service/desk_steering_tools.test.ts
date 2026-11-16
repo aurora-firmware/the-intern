@@ -29,10 +29,11 @@ import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import { SKILL_TOOL_NAME } from "../../src/roles/role_model.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
-const TEST_TIMEOUT_MS = 60_000;
+const TEST_TIMEOUT_MS = scaled(60_000);
 const SCRIPT_INPUT = "script";
 const HANG_PROMPT = "hang until aborted";
 const ANSWER = "the nightly build on ci-2";

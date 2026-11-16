@@ -11,8 +11,9 @@ import { createSkillsComponent } from "../../src/skills/skills_component.ts";
 import type { FakeReply, FakeTranscript } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { startSkillsRig } from "../support/skills_rig.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_TIMEOUT_MS = 10_000;
+const WAIT_TIMEOUT_MS = scaled(10_000);
 const POLL_INTERVAL_MS = 10;
 const FOLDER_MODE = 0o700;
 const FILE_MODE = 0o600;

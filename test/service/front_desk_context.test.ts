@@ -23,10 +23,11 @@ import { createDeskComponent } from "../../src/desk/desk_component.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import { type Caller, ServiceError } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
-const TEST_TIMEOUT_MS = 60_000;
+const TEST_TIMEOUT_MS = scaled(60_000);
 const SMALL_CONTEXT_WINDOW = 2_000;
 const quietLogger = createLogger({ stream: { write: () => true } });
 const commandLine: Caller = { actor: { kind: "team_member", wayIn: "command line" } };

@@ -20,8 +20,9 @@ import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { commonPromptPath, roleInstructionPath } from "../../src/skills/internal_folder.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 const caller: Caller = { actor: { kind: "team_member", wayIn: "command line" } };
 const FILE = "instructions/roles/reviewer.md";

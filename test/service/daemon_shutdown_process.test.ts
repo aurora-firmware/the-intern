@@ -2,14 +2,15 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const EXIT_BOUND_MS = 10_000;
 const LONG_SLEEP_SECONDS = "60";
 const SHORT_SLEEP_SECONDS = "2";
 const POLL_INTERVAL_MS = 50;
-const WAIT_BOUND_MS = 30_000;
-const SETTLE_TIMEOUT_MS = 20_000;
-const TEST_TIMEOUT_MS = 60_000;
+const WAIT_BOUND_MS = scaled(30_000);
+const SETTLE_TIMEOUT_MS = scaled(20_000);
+const TEST_TIMEOUT_MS = scaled(60_000);
 const ENTRIES_LIMIT = 200;
 
 type Entry = { kind: string; data: unknown };

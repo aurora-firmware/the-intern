@@ -12,8 +12,9 @@ import { networkSection } from "../../src/listeners/network_section.ts";
 import { localSocketPath } from "../../src/listeners/socket_path.ts";
 import { createStaticFiles } from "../../src/listeners/static_files.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_TIMEOUT_MS = 10_000;
+const WAIT_TIMEOUT_MS = scaled(10_000);
 const POLL_INTERVAL_MS = 10;
 const LOOPBACK = "127.0.0.1";
 const LEAKED_CONTENT = "contents-of-a-file-outside-the-root";

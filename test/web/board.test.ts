@@ -3,12 +3,13 @@ import type { Page } from "playwright-core";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, type FakeScript, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 import { startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const REFUSAL = "The board could not be read for this test";
 const QUIET_MS = 700;
-const TEST_TIMEOUT_MS = 180_000;
+const TEST_TIMEOUT_MS = scaled(180_000);
 const FIRST_DONE_COUNT = 50;
 const OLDER_DONE_COUNT = 2;
 const COLUMN_TITLES = ["To do", "In progress", "Blocked", "Done"];

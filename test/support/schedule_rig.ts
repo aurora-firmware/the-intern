@@ -17,8 +17,9 @@ import { createSchedulesComponent, type ScheduleClock } from "../../src/schedule
 import type { Caller } from "../../src/service/operations.ts";
 import { createFakeModel } from "./fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "./hermetic_env.ts";
+import { scaled } from "./time_scale.ts";
 
-const WAIT_TIMEOUT_MS = 20_000;
+const WAIT_TIMEOUT_MS = scaled(20_000);
 const POLL_INTERVAL_MS = 10;
 /** `jobs.create` refuses the in-process way in, so calls are made as a team member at the command line. */
 const TEAM_MEMBER: Caller = { actor: { kind: "team_member", wayIn: "command line" } };

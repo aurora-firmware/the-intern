@@ -4,8 +4,9 @@ import type { DaemonStatus } from "../../src/service/status_operation.ts";
 import { runBob } from "../support/bob_process.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const SETTLE_TIMEOUT_MS = 20_000;
+const SETTLE_TIMEOUT_MS = scaled(20_000);
 
 const envs: HermeticEnv[] = [];
 const daemons: DaemonProcess[] = [];

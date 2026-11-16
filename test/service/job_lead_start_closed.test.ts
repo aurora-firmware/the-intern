@@ -21,8 +21,9 @@ import { createJobsComponent, type WritePoint } from "../../src/jobs/jobs_compon
 import { leadStartRequestId } from "../../src/service/job_operations.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 const quietLogger = createLogger({ stream: { write: () => true } });
 const caller: Caller = { actor: { kind: "team_member", wayIn: "command line" } };

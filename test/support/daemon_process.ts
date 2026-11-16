@@ -12,9 +12,10 @@ import { ServiceError, type ServiceErrorCode } from "../../src/service/operation
 import type { DaemonStatus } from "../../src/service/status_operation.ts";
 import type { HermeticEnv } from "./hermetic_env.ts";
 import { guardProcess } from "./process_guard.ts";
+import { scaled } from "./time_scale.ts";
 
 const CHILD_ENTRY = join(import.meta.dirname, "daemon_child.ts");
-const READY_POLL_TIMEOUT_MS = 30_000;
+const READY_POLL_TIMEOUT_MS = scaled(30_000);
 
 /**
  * `handoff-clean`: a seated agent's first answer is a Clean handoff to `gp` with the note `CLEAN-NOTE`; the new agent's

@@ -3,10 +3,11 @@ import type { Page } from "playwright-core";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 30_000;
+const WAIT_MS = scaled(30_000);
 const POLL_MS = 100;
-const TEST_TIMEOUT_MS = 120_000;
+const TEST_TIMEOUT_MS = scaled(120_000);
 const TEXT = "main .create-job textarea";
 const TITLE = "main .create-job input";
 const CREATE = "main .create-job button";

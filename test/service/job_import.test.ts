@@ -16,8 +16,9 @@ import { JOB_SCHEMA_VERSION } from "../../src/jobs/job_store.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 const OWNER_ONLY = 0o600;
 const DATABASE_NAME = "the-intern.sqlite";

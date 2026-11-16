@@ -3,10 +3,11 @@ import type { Page } from "playwright-core";
 import { type BrowserName, launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, freeLoopbackPort, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 import { startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
 const BROWSERS: BrowserName[] = ["chrome", "msedge", "firefox"];
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const BANNER = ".connection-banner";
 const FEED_MODULE = "./feed_connection.ts";
 const OTHER_VERSION = "99.0.0";

@@ -8,12 +8,13 @@ import { afterEach, describe, it } from "node:test";
 import { type BobChild, runBob, spawnBob } from "../support/bob_process.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const ESC = String.fromCharCode(27);
 const BEL = String.fromCharCode(7);
 const CLIPBOARD_WRITE = `${ESC}]52;c;ZXZpbA==${BEL}`;
 const FORGED_DONE = "C-1 done (complete): all good";
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 
 type Fixture = { env: HermeticEnv; daemon: DaemonProcess };

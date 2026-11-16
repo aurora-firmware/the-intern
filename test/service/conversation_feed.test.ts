@@ -24,10 +24,11 @@ import type { Seat } from "../../src/roles/role_model.ts";
 import { readEntriesPage } from "../../src/service/conversation_entries.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const RUN_DELAY_MS = 150;
-const SUBMISSION_TIMEOUT_MS = 10_000;
-const NEXT_TIMEOUT_MS = 5000;
+const SUBMISSION_TIMEOUT_MS = scaled(10_000);
+const NEXT_TIMEOUT_MS = scaled(5000);
 
 type FakeModel = ReturnType<typeof createFakeModel>;
 type Fixture = { host: HarnessHost; feed: ObservationFeed; agentModel: string };

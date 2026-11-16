@@ -12,8 +12,9 @@ import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts"
 import { createNetworkListenerComponent } from "../../src/listeners/network_listener.ts";
 import { networkSection } from "../../src/listeners/network_section.ts";
 import { createHermeticEnv, type HermeticEnv } from "./hermetic_env.ts";
+import { scaled } from "./time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 const NETWORK_CONFIG = `[network]\naddress = "127.0.0.1"\nport = 8080\n`;
 
