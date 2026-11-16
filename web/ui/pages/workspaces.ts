@@ -126,14 +126,17 @@ export const WorkspacesPage = ({ feed }: { feed: FeedConnection | null | undefin
         // `undefined` means the tab is still connecting: the first read waits for the feed.
         if (feed === undefined) return;
         let isClosed = false;
+        // Reads overlap and finish in any order: only the one that started last may show what it read.
+        let latestRead = 0;
         const reload: Reload = async () => {
+            const thisRead = ++latestRead;
             try {
                 const read = await readWorkspaces();
-                if (isClosed) return;
+                if (isClosed || thisRead !== latestRead) return;
                 setWorkspaces(read);
                 setFailure(undefined);
             } catch (error) {
-                if (!isClosed) setFailure({ error });
+                if (!isClosed && thisRead === latestRead) setFailure({ error });
             }
         };
         mountedReload = reload;
