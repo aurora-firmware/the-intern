@@ -160,6 +160,8 @@ client" changes by amending [ADR-005](../ai-team/decisions/ADR-005-commands-load
 - Tests are hermetic: temporary directories for state and runtime paths, an isolated pi agent folder, no dependence on
   the user's own pi configuration, a running daemon or inherited environment variables.
 - Tests are kept apart by folder (`test/unit`, `test/service`, `test/web`), as recorded in `tech_stack.md`.
+- A test sets up the order it needs and waits for states or events, never for a length of time; `test/AGENTS.md` has
+  the rules and the bugs behind them.
 
 ## Web pages
 
