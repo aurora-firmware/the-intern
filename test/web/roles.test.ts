@@ -6,6 +6,7 @@ import type { Page } from "playwright-core";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { holdNextRead } from "../support/hold_read.ts";
 import { scaled } from "../support/time_scale.ts";
 import { startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
@@ -80,37 +81,6 @@ async function seatedInstructions(daemon: DaemonProcess, text: string): Promise<
 
 const waitFor = (page: Page, condition: string) =>
     page.waitForFunction(condition, undefined, { timeout: WAIT_MS, polling: POLL_MS });
-
-/**
- * Holds the response of the next `roles.list` the page makes: the list is read from the service at once, so it is the
- * list as of that moment, and the page gets it only after `release`. Later reads pass through.
- */
-function holdNextRolesList(page: Page, port: number): { isRead: Promise<void>; release: () => void } {
-    let markRead: () => void = () => undefined;
-    let release: () => void = () => undefined;
-    const isRead = new Promise<void>((resolve) => {
-        markRead = resolve;
-    });
-    const isReleased = new Promise<void>((resolve) => {
-        release = resolve;
-    });
-    let isHeld = false;
-    void page.route("**/operations/roles.list", async (route) => {
-        if (isHeld) return route.fallback();
-        isHeld = true;
-        // `route.fetch()` can't resolve the test host, so the service is asked at its loopback address.
-        const answer = await fetch(`http://127.0.0.1:${port}/operations/roles.list`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: route.request().postData() ?? "{}",
-        });
-        const body = await answer.text();
-        markRead();
-        await isReleased;
-        await route.fulfill({ status: answer.status, contentType: "application/json", body });
-    });
-    return { isRead, release };
-}
 
 async function openRoles(page: Page, port: number): Promise<void> {
     await page.goto(pageUrl(port, "/ui/#/roles"));
@@ -415,7 +385,7 @@ describe("the Roles page in chrome", () => {
         if (browser === undefined) return;
         const page = await browser.newPage();
         await openRoles(page, port);
-        const held = holdNextRolesList(page, port);
+        const held = await holdNextRead(page, port, "roles.list");
 
         await daemon.invoke("roles.create", { name: "before", instructions: "Starts the read.", tools: [] });
         await held.isRead;
