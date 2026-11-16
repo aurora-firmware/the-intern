@@ -86,15 +86,18 @@ export const SchedulesPage = ({ feed }: { feed: FeedConnection | null | undefine
         // A read can straddle a skip delta, and the delta does not trigger a reread: the skips seen since the read
         // began are put back on what it returns.
         const seenSkips: ScheduleDelta[] = [];
+        // Reads overlap and finish in any order: only the one that started last may show what it read.
+        let latestRead = 0;
         const reload: Reload = async () => {
+            const thisRead = ++latestRead;
             const seenBefore = seenSkips.length;
             try {
                 const read = await readData();
-                if (isClosed) return;
+                if (isClosed || thisRead !== latestRead) return;
                 setData({ ...read, cards: addSkips(read.cards, seenSkips.slice(seenBefore)) });
                 setFailure(undefined);
             } catch (error) {
-                if (!isClosed) setFailure({ error });
+                if (!isClosed && thisRead === latestRead) setFailure({ error });
             }
         };
         const apply: Apply = (delta) => {

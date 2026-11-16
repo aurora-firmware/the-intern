@@ -2,8 +2,9 @@ import { afterEach, describe, it } from "node:test";
 import type { Page } from "playwright-core";
 import { type Clock, throttled } from "../../web/ui/model/throttle.ts";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
-import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
+import { type DaemonProcess, type FakeScript, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { holdNextRead, refuseOperations, trackOperations } from "../support/hold_read.ts";
 import { scaled } from "../support/time_scale.ts";
 import { startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
@@ -93,10 +94,12 @@ describe("throttled", () => {
     });
 });
 
-async function startServer(): Promise<{ daemon: DaemonProcess; port: number; desk: string }> {
+async function startServer(
+    script: FakeScript = "echo",
+): Promise<{ daemon: DaemonProcess; port: number; desk: string }> {
     const env = await createHermeticEnv();
     envs.push(env);
-    const daemon = startDaemon({ hermetic: env, script: "echo", turnEndRule: false, networkListener: true });
+    const daemon = startDaemon({ hermetic: env, script, turnEndRule: false, networkListener: true });
     daemons.push(daemon);
     await daemon.ready;
     const { conversationId } = (await daemon.invoke("desk.get", {})) as { conversationId: string };
@@ -150,6 +153,46 @@ const shownTokens = (page: Page): Promise<number[]> =>
 async function openStatus(page: Page, port: number): Promise<void> {
     await page.goto(pageUrl(port, "/ui/#/status"));
     await page.waitForSelector(STATUS, { timeout: WAIT_MS });
+}
+
+const callsTo = (proxy: WebProxy, operation: string): number =>
+    proxy.requests().filter((request) => request.url.includes(`/operations/${operation}`)).length;
+
+/** Waits until the page has read the feed's first snapshot, so the next `reconnectFeed` ends an open stream. */
+const waitForFeed = (proxy: WebProxy) => until("the feed to be open", async () => proxy.feedBytes() > 0);
+
+/** Ends the feed once and waits for the new stream's snapshot, which makes the page read everything once. */
+async function reconnectFeed(proxy: WebProxy): Promise<void> {
+    const bytes = proxy.feedBytes();
+    proxy.forceFeedEnd("lagging");
+    await until("the feed to reconnect", async () => proxy.feedBytes() > bytes);
+}
+
+async function until(describeWait: string, check: () => Promise<boolean>): Promise<void> {
+    const deadline = Date.now() + WAIT_MS;
+    while (!(await check())) {
+        if (Date.now() > deadline) throw new Error(`timed out waiting for ${describeWait}`);
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    }
+}
+
+/** Opens the Status page through a proxy and waits until it shows its usage, models and an open feed. */
+async function openStatusThroughProxy(t: Parameters<typeof launchBrowser>[0], port: number, isUsageAwaited = true) {
+    const proxy = await startWebProxy();
+    proxies.push(proxy);
+    const browser = await launchBrowser(t, "chrome", { proxyPort: proxy.port });
+    if (browser === undefined) return undefined;
+    const page = await browser.newPage();
+    await openStatus(page, port);
+    if (isUsageAwaited) await page.waitForSelector(`${STATUS} .status-usage-total`, { timeout: WAIT_MS });
+    await page.waitForSelector(`${STATUS} .status-model`, { timeout: WAIT_MS });
+    await waitForFeed(proxy);
+    return { page, proxy };
+}
+
+/** How many calls one read of the usage makes: the total, and one per conversation. */
+async function usageCallsPerRead(daemon: DaemonProcess): Promise<number> {
+    return 1 + ((await daemon.invoke("conversations.list", {})) as unknown[]).length;
 }
 
 describe("the Status page in chrome", () => {
@@ -241,5 +284,101 @@ describe("the Status page in chrome", () => {
         proxy.forceFeedEnd("lagging");
 
         await waitForShownTotal(page, after);
+    });
+
+    it("keeps the newer usage when an older read finishes last", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { daemon, port, desk } = await startServer("gated");
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openStatus(page, port);
+        await page.waitForSelector(`${STATUS} .status-usage-total`, { timeout: WAIT_MS });
+        const calls = trackOperations(page);
+        const held = await holdNextRead(page, port, "usage.get");
+
+        await say(daemon, desk, "ask");
+        await held.isRead;
+        daemon.releaseRuns();
+        const after = await waitForUsage(daemon, 0);
+        await waitForShownTotal(page, after);
+        held.release();
+        await calls.settled();
+
+        t.assert.equal(
+            (await shownTokens(page)).reduce((sum, each) => sum + each, 0),
+            after,
+        );
+    });
+
+    it("keeps the newer usage when an older read is refused last", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { daemon, port } = await startServer();
+        const opened = await openStatusThroughProxy(t, port);
+        if (opened === undefined) return;
+        const { page, proxy } = opened;
+        const calls = trackOperations(page);
+        const held = await holdNextRead(page, port, "usage.get", "The older read is refused.");
+        await reconnectFeed(proxy);
+        await held.isRead;
+        const before = callsTo(proxy, "usage.get");
+        const newerCalls = await usageCallsPerRead(daemon);
+
+        await reconnectFeed(proxy);
+        await until("the newer read's usage calls", async () => callsTo(proxy, "usage.get") >= before + newerCalls);
+        await calls.settled(1);
+        held.release();
+        await calls.settled();
+
+        t.assert.equal(await page.locator(`${STATUS} .refusal`).count(), 0);
+    });
+
+    it("keeps the refusal of a newer read when an older read succeeds last", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { port } = await startServer();
+        const opened = await openStatusThroughProxy(t, port);
+        if (opened === undefined) return;
+        const { page, proxy } = opened;
+        const calls = trackOperations(page);
+        const held = await holdNextRead(page, port, "usage.get");
+        await reconnectFeed(proxy);
+        await held.isRead;
+        const liftRefusal = await refuseOperations(page, "The newer read is refused.");
+
+        await reconnectFeed(proxy);
+        await page.waitForSelector(`${STATUS} .refusal`, { timeout: WAIT_MS });
+        await liftRefusal();
+        held.release();
+        await calls.settled();
+
+        t.assert.equal(await page.locator(`${STATUS} .refusal`).count(), 1);
+    });
+
+    it("shows a usage read although a read of another kind started after it", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { daemon, port, desk } = await startServer();
+        // Not waiting for the usage: with one counter for all kinds the page never shows it, and the test must get as
+        // far as its own assertion.
+        const opened = await openStatusThroughProxy(t, port, false);
+        if (opened === undefined) return;
+        const { page, proxy } = opened;
+        proxy.dropFeedEvents();
+        await say(daemon, desk, "first");
+        const tokens = await waitForUsage(daemon, 0);
+        const calls = trackOperations(page);
+        const held = await holdNextRead(page, port, "usage.get");
+        const modelCalls = callsTo(proxy, "models.list");
+
+        await reconnectFeed(proxy);
+        await held.isRead;
+        await until("the models read", async () => callsTo(proxy, "models.list") > modelCalls);
+        await calls.settled(1);
+        held.release();
+        await calls.settled();
+
+        t.assert.equal(
+            (await shownTokens(page)).reduce((sum, each) => sum + each, 0),
+            tokens,
+        );
     });
 });

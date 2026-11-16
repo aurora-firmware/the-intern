@@ -6,6 +6,7 @@ import type { Page } from "playwright-core";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, freeLoopbackPort, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { holdNextRead, refuseOperations, trackOperations } from "../support/hold_read.ts";
 import { scaled } from "../support/time_scale.ts";
 
 const WAIT_MS = scaled(30_000);
@@ -125,6 +126,71 @@ describe("the Schedules page in chrome", () => {
             page,
             `document.querySelector('${entryCard} .schedule-next')?.textContent !== ${JSON.stringify(nextBefore)}`,
         );
+    });
+
+    it("keeps the newer entries when an older read finishes last", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { daemon, port } = await startServer();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await page.goto(pageUrl(port, "/ui/#/schedules"));
+        await page.waitForSelector(entryCard, { timeout: WAIT_MS });
+        const calls = trackOperations(page);
+        const held = await holdNextRead(page, port, "schedules.list");
+
+        await daemon.invoke("schedules.create", { name: "before", cron: "0 3 * * *", request: "Starts the read." });
+        await held.isRead;
+        await daemon.invoke("schedules.create", { name: "elsewhere", cron: "0 4 * * *", request: "Made meanwhile." });
+        await page.waitForSelector(cardOf("elsewhere"), { timeout: WAIT_MS });
+        held.release();
+        await calls.settled();
+
+        t.assert.equal(await page.locator(cardOf("elsewhere")).count(), 1);
+    });
+
+    it("keeps the newer entries when an older read is refused last", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { daemon, port } = await startServer();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await page.goto(pageUrl(port, "/ui/#/schedules"));
+        await page.waitForSelector(entryCard, { timeout: WAIT_MS });
+        const calls = trackOperations(page);
+        const held = await holdNextRead(page, port, "schedules.list", "The older read is refused.");
+
+        await daemon.invoke("schedules.create", { name: "before", cron: "0 3 * * *", request: "Starts the read." });
+        await held.isRead;
+        await daemon.invoke("schedules.create", { name: "elsewhere", cron: "0 4 * * *", request: "Made meanwhile." });
+        await page.waitForSelector(cardOf("elsewhere"), { timeout: WAIT_MS });
+        held.release();
+        await calls.settled();
+
+        t.assert.equal(await page.locator("main .refusal").count(), 0);
+        t.assert.equal(await page.locator(cardOf("elsewhere")).count(), 1);
+    });
+
+    it("keeps the refusal of a newer read when an older read succeeds last", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { daemon, port } = await startServer();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await page.goto(pageUrl(port, "/ui/#/schedules"));
+        await page.waitForSelector(entryCard, { timeout: WAIT_MS });
+        const calls = trackOperations(page);
+        const held = await holdNextRead(page, port, "schedules.list");
+
+        await daemon.invoke("schedules.create", { name: "before", cron: "0 3 * * *", request: "Starts the read." });
+        await held.isRead;
+        const liftRefusal = await refuseOperations(page, "The newer read is refused.");
+        await daemon.invoke("schedules.create", { name: "elsewhere", cron: "0 4 * * *", request: "Made meanwhile." });
+        await page.waitForSelector("main .refusal", { timeout: WAIT_MS });
+        await liftRefusal();
+        held.release();
+        await calls.settled();
+
+        t.assert.equal(await page.locator("main .refusal").count(), 1);
     });
 
     it("shows a skipped fire with its reason and the open run's link when the next due time arrives", {

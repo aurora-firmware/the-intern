@@ -5,6 +5,7 @@ import type { Page } from "playwright-core";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { holdNextRead, refuseOperations, trackOperations } from "../support/hold_read.ts";
 import { scaled } from "../support/time_scale.ts";
 import { startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
@@ -125,6 +126,74 @@ describe("the Workspaces page in chrome", () => {
         proxy.forceFeedEnd("lagging");
 
         await page.waitForSelector(workspaceRow(path), { timeout: WAIT_MS });
+    });
+
+    it("keeps the newer workspaces when an older read finishes last", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { daemon, port, env } = await startServer();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openWorkspaces(page, port);
+        const before = await makeDirectory(env, "before");
+        const elsewhere = await makeDirectory(env, "elsewhere");
+        const calls = trackOperations(page);
+        const held = await holdNextRead(page, port, "workspaces.list");
+
+        await daemon.invoke("workspaces.register", { path: before });
+        await held.isRead;
+        await daemon.invoke("workspaces.register", { path: elsewhere });
+        await page.waitForSelector(workspaceRow(elsewhere), { timeout: WAIT_MS });
+        held.release();
+        await calls.settled();
+
+        t.assert.equal(await page.locator(workspaceRow(elsewhere)).count(), 1);
+    });
+
+    it("keeps the newer workspaces when an older read is refused last", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { daemon, port, env } = await startServer();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openWorkspaces(page, port);
+        const before = await makeDirectory(env, "before");
+        const elsewhere = await makeDirectory(env, "elsewhere");
+        const calls = trackOperations(page);
+        const held = await holdNextRead(page, port, "workspaces.list", "The older read is refused.");
+
+        await daemon.invoke("workspaces.register", { path: before });
+        await held.isRead;
+        await daemon.invoke("workspaces.register", { path: elsewhere });
+        await page.waitForSelector(workspaceRow(elsewhere), { timeout: WAIT_MS });
+        held.release();
+        await calls.settled();
+
+        t.assert.equal(await page.locator("main .refusal").count(), 0);
+        t.assert.equal(await page.locator(workspaceRow(elsewhere)).count(), 1);
+    });
+
+    it("keeps the refusal of a newer read when an older read succeeds last", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { daemon, port, env } = await startServer();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openWorkspaces(page, port);
+        const before = await makeDirectory(env, "before");
+        const elsewhere = await makeDirectory(env, "elsewhere");
+        const calls = trackOperations(page);
+        const held = await holdNextRead(page, port, "workspaces.list");
+
+        await daemon.invoke("workspaces.register", { path: before });
+        await held.isRead;
+        const liftRefusal = await refuseOperations(page, "The newer read is refused.");
+        await daemon.invoke("workspaces.register", { path: elsewhere });
+        await page.waitForSelector("main .refusal", { timeout: WAIT_MS });
+        await liftRefusal();
+        held.release();
+        await calls.settled();
+
+        t.assert.equal(await page.locator("main .refusal").count(), 1);
     });
 
     it("disables registering and unregistering while the service can't be reached", {

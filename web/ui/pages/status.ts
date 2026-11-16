@@ -167,18 +167,22 @@ export const StatusPage = ({ feed }: { feed: FeedConnection | null | undefined }
         // `undefined` means the tab is still connecting: the first read waits for the feed.
         if (feed === undefined) return;
         let isClosed = false;
-        const load =
-            <T>(read: () => Promise<T>, show: (value: T) => void) =>
-            async () => {
+        // Reads of one kind overlap and finish in any order: only the one that started last may show what it read.
+        // The kinds are independent, so each has its own counter.
+        const load = <T>(read: () => Promise<T>, show: (value: T) => void) => {
+            let latestRead = 0;
+            return async () => {
+                const thisRead = ++latestRead;
                 try {
                     const value = await read();
-                    if (isClosed) return;
+                    if (isClosed || thisRead !== latestRead) return;
                     show(value);
                     setFailure(undefined);
                 } catch (error) {
-                    if (!isClosed) setFailure({ error });
+                    if (!isClosed && thisRead === latestRead) setFailure({ error });
                 }
             };
+        };
         const loadStatus = load(readStatus, setStatus);
         const loadUsage = load(readUsage, setUsage);
         const loadModels = load(readModels, setModels);
