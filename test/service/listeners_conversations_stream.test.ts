@@ -173,7 +173,7 @@ describe("the end of a feed stream for several conversations", { timeout: TEST_T
         const { streams, reads } = await openStalledFeeds(fixture, idsQuery("conversations", [quiet, looping]), 2);
 
         // Each stream reads two subscriptions, and its end closes both.
-        await loopUntilClosed(fixture, looping, reads, 2 * LISTENERS.length);
+        await loopUntilClosed(fixture, looping, { reads, subscriptions: 2 * LISTENERS.length });
         const endings = await Promise.all(streams.map(readToEnd));
 
         assert.deepEqual(endings, [
