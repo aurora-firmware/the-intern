@@ -2,8 +2,9 @@ import { afterEach, describe, it } from "node:test";
 import type { Page } from "playwright-core";
 import { type Clock, throttled } from "../../web/ui/model/throttle.ts";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
-import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
+import { type DaemonProcess, type FakeScript, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { afterTwoFrames, holdNextRead } from "../support/hold_read.ts";
 import { scaled } from "../support/time_scale.ts";
 import { startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
@@ -93,10 +94,12 @@ describe("throttled", () => {
     });
 });
 
-async function startServer(): Promise<{ daemon: DaemonProcess; port: number; desk: string }> {
+async function startServer(
+    script: FakeScript = "echo",
+): Promise<{ daemon: DaemonProcess; port: number; desk: string }> {
     const env = await createHermeticEnv();
     envs.push(env);
-    const daemon = startDaemon({ hermetic: env, script: "echo", turnEndRule: false, networkListener: true });
+    const daemon = startDaemon({ hermetic: env, script, turnEndRule: false, networkListener: true });
     daemons.push(daemon);
     await daemon.ready;
     const { conversationId } = (await daemon.invoke("desk.get", {})) as { conversationId: string };
@@ -241,5 +244,32 @@ describe("the Status page in chrome", () => {
         proxy.forceFeedEnd("lagging");
 
         await waitForShownTotal(page, after);
+    });
+
+    it("keeps the newer usage when an older read finishes last", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { daemon, port, desk } = await startServer("gated");
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openStatus(page, port);
+        await page.waitForSelector(`${STATUS} .status-usage-total`, { timeout: WAIT_MS });
+        const held = holdNextRead(page, port, "usage.get");
+
+        await say(daemon, desk, "ask");
+        await held.isRead;
+        daemon.releaseRuns();
+        const after = await waitForUsage(daemon, 0);
+        await waitForShownTotal(page, after);
+        const finished = page.waitForResponse((response) => response.url().endsWith("/operations/usage.get"), {
+            timeout: WAIT_MS,
+        });
+        held.release();
+        await finished;
+        await afterTwoFrames(page);
+
+        t.assert.equal(
+            (await shownTokens(page)).reduce((sum, each) => sum + each, 0),
+            after,
+        );
     });
 });
