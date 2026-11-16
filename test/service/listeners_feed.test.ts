@@ -8,6 +8,7 @@ import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import type { IncomingMessage, OutgoingHttpHeaders, Server } from "node:http";
 import { afterEach, describe, it, mock } from "node:test";
 import { MAX_SUBMISSION_WAIT_MS } from "../../src/daemon/constants.ts";
+import { FEED_MAX_PENDING } from "../../src/feed/observation_feed.ts";
 import { LISTENER_TIMEOUT_MS } from "../../src/listeners/listener_server.ts";
 import type { FakeTranscript } from "../support/fake_model.ts";
 import {
@@ -17,17 +18,20 @@ import {
     type FeedEvent,
     type FeedStream,
     type Fixture,
+    haveClosed,
     LAGGING_END,
     LISTENERS,
     type Listener,
     LOOP_INPUT,
-    loopingReply,
+    LOOP_STEPS,
+    loopingReplyOf,
     loopUntilClosed,
     nextEvent,
     openStalledFeeds,
     readToEnd,
     recordSubscriptionReads,
     runLoops,
+    type StalledFeeds,
     startFixture,
     type View,
 } from "../support/listeners_feed_fixture.ts";
@@ -37,11 +41,14 @@ const TEST_TIMEOUT_MS = scaled(90_000);
 /** The stalled client's test runs the loop until the stream ends, then as often again in the control conversation. */
 const STALL_TEST_TIMEOUT_MS = scaled(180_000);
 /**
- * The bound a run with a stalled subscriber must finish in, relative to the same run with none: generous enough for a
- * loaded machine, far below a run that waits on its subscriber.
+ * A run that fills the connection's socket buffers with fewer than `FEED_MAX_PENDING` deltas: about three deltas per
+ * step, and a tool call of `PADDED_BYTES` in every third of them, so the run sends far more than the few megabytes
+ * a loopback connection and the client's receive buffer hold.
  */
-const RUN_TIME_FACTOR = 2;
-const RUN_TIME_MARGIN_MS = 2000;
+const PADDED_STEPS = 16;
+const PADDED_BYTES = 1024 * 1024;
+/** A run longer than the model's context window would be cut short by a compaction. */
+const NO_COMPACTION = { compaction: { enabled: false } };
 /** Node's default `keepAliveTimeout`, the idle timeout a listener left at its defaults would apply. */
 const NODE_DEFAULT_IDLE_TIMEOUT_MS = 5000;
 /** Longer than Node's default idle timeout; the full 5-minute wait is not run in `npm test`. */
@@ -224,25 +231,82 @@ function loopShape(entries: readonly Entry[]): unknown[] {
         .map((entry) => [entry.kind, JSON.stringify(entry.data).match(/"(text|arguments)":("[^"]*"|\{[^}]*\})/g)]);
 }
 
+/** The highest sequence number among the deltas a recorded subscription handed its listener, 0 for none. */
+function highestPulled(reads: readonly unknown[]): number {
+    const seqs = reads.map((read) => (read as { delta?: { seq: number } }).delta?.seq ?? 0);
+    return Math.max(0, ...seqs);
+}
+
 describe("a feed client that stops reading", { timeout: STALL_TEST_TIMEOUT_MS }, () => {
-    it("ends the stalled stream over each listener with lagging and leaves the run's time and entries alone", async () => {
-        const fixture = await startFixture(loopingReply);
+    it("ends the stalled stream over each listener with lagging after a run that finished unread, with the entries of a run without a subscriber", async () => {
+        // The steps of each run in the observed conversation, in order: a full run, or one that ends a step after its
+        // stream closes, well within the flush a closed stream gets. The control conversation then makes the same runs.
+        const stepsOfRuns: number[] = [];
+        let isControl = false;
+        let controlRuns = 0;
+        let thisRun = 0;
+        let stalled: StalledFeeds | undefined;
+        const fixture = await startFixture(
+            loopingReplyOf(({ step }) => {
+                if (step === 0) {
+                    thisRun = isControl ? controlRuns++ : stepsOfRuns.push(LOOP_STEPS) - 1;
+                } else if (!isControl && stalled !== undefined && haveClosed(stalled.reads, 1)) {
+                    stepsOfRuns[thisRun] = Math.min(stepsOfRuns[thisRun] ?? LOOP_STEPS, step);
+                }
+                return stepsOfRuns[thisRun] ?? LOOP_STEPS;
+            }),
+            {},
+            NO_COMPACTION,
+        );
         const control = await fixture.idleConversation("control");
         const observed = await fixture.idleConversation("observed");
-        const stalled = await openStalledFeeds(fixture, `?scope=conversation&id=${observed}`, 1);
-
-        const observedLoops = await loopUntilClosed(fixture, observed, stalled.reads, LISTENERS.length);
-        const endings = await Promise.all(stalled.streams.map(readToEnd));
-        const controlLoops = await runLoops(fixture, control, observedLoops.count);
+        // Over each listener alone: a stream that closed in an earlier run would be cut off before it is read again.
+        const endings = [];
+        let runs = 0;
+        for (const listener of LISTENERS) {
+            const query = `?scope=conversation&id=${observed}`;
+            stalled = await openStalledFeeds(fixture, query, 1, { isHeld: true, listeners: [listener] });
+            runs += await loopUntilClosed(fixture, observed, {
+                reads: stalled.reads,
+                subscriptions: 1,
+                runsBefore: runs,
+            });
+            assert.equal(stalled.streams[0]?.unread(), 0, `the run over the ${listener} ended with nothing read`);
+            stalled.resume();
+            endings.push(...(await Promise.all(stalled.streams.map(readToEnd))));
+        }
+        isControl = true;
+        await runLoops(fixture, control, runs);
 
         assert.deepEqual(endings, [
             { last: LAGGING_END, how: "ended" },
             { last: LAGGING_END, how: "ended" },
         ]);
-        const bound = controlLoops.runTimeMs * RUN_TIME_FACTOR + RUN_TIME_MARGIN_MS;
-        const observedTime = observedLoops.runTimeMs;
-        assert.ok(observedTime <= bound, `the runs took ${observedTime} ms, the bound is ${bound} ms`);
         assert.deepEqual(loopShape(await fixture.entries(observed)), loopShape(await fixture.entries(control)));
+    });
+
+    it("finishes a run that fills the connection's socket buffers while the stream is still open and unread", async () => {
+        const fixture = await startFixture(
+            loopingReplyOf(() => PADDED_STEPS, PADDED_BYTES),
+            {},
+            NO_COMPACTION,
+        );
+        const observed = await fixture.idleConversation("observed");
+        const query = `?scope=conversation&id=${observed}`;
+        const stalled = await openStalledFeeds(fixture, query, 1, { isHeld: true });
+        const reader = await fixture.openFeed("local socket", query);
+        assert.equal((await nextEvent(reader)).name, "snapshot");
+
+        await fixture.submitAndSettle(observed, LOOP_INPUT);
+
+        const lastSeq = (await readDeltasUntilSettled(reader)).at(-1)?.id ?? 0;
+        assert.ok(lastSeq < FEED_MAX_PENDING, `the run made ${lastSeq} deltas, fewer than ${FEED_MAX_PENDING}`);
+        for (const [index, stream] of stalled.streams.entries()) {
+            const reads = stalled.reads[index] ?? [];
+            assert.ok(highestPulled(reads) < lastSeq, `the listener left deltas of the run unpulled (stream ${index})`);
+            assert.ok(!reads.some((read) => "closed" in (read as object)), `the stream ${index} is still open`);
+            assert.equal(stream.unread(), 0, `the stream ${index} delivered nothing after its snapshot`);
+        }
     });
 });
 
