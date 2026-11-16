@@ -1,7 +1,7 @@
 ---
 id: S-003
 title: Control endpoint
-version: '0.7'
+version: '0.8'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-01'
 author: planner
@@ -688,12 +688,34 @@ committed change.
 
 #### AC-011.1 — A stalled HTTP reader
 
-- **Given:** a conversation feed open over a listener whose client stops reading
+- **Given:** a conversation feed open over a listener whose client never reads
 - **When:** a run produces more than 1000 deltas
-- **Then:** the stream is ended with `lagging`, the run finishes in the same time bound as with no subscriber, and its
-  entries are the same
+- **Then:** the stream is ended with `lagging`, the run finishes while the client still has read nothing, and its
+  entries are the same as a run with no subscriber
 
-**Verification:** test — a service test with a client that pauses its socket.
+**Verification:** test — a service test with a client that pauses its socket (`test/service/listeners_feed.test.ts`).
+
+#### AC-011.2 — No run waits on a connection
+
+- **Given:** the listener and feed code
+- **When:** a reviewer follows a delta from the run to a client's connection
+- **Then:** nothing on that path makes the run wait on the connection: deltas a client has not read wait in the feed
+  without holding the run, at most 1000 per stream as REQ-011 counts them (S-002 REQ-015), and past that the stream
+  is ended with `lagging` instead of the run waiting
+
+**Verification:** inspection (design review) — the commit observation the feed reads
+(`src/host/host_observation.ts`), the observation feed (`src/feed/observation_feed.ts`,
+`src/feed/instance_feed.ts`), the HTTP front that hands each subscription to the feed stream
+(`src/listeners/http_front.ts`), the listener's feed stream (`src/listeners/feed_stream.ts`), and the
+"Observation feed" entries of `docs/development/architecture.md` (Runtime shape, and the Daemon internals table).
+
+#### AC-011.3 — A stalled reader doesn't delay a run
+
+- **Given:** a conversation feed open over a listener whose client never reads
+- **When:** a run produces fewer than 1000 deltas but enough to fill the connection's socket buffers
+- **Then:** the run finishes while that stream is still open and unread
+
+**Verification:** test — `test/service/listeners_feed.test.ts`.
 
 ### REQ-012 — No call cut short while running
 
@@ -799,8 +821,8 @@ export route's free-space margin (REQ-016).
 
 ## Success Criteria
 
-1. Every acceptance scenario of REQ-001 to REQ-016 passes in `npm test` on the fake model, with a temporary instance,
-   a temporary socket and free loopback ports only.
+1. Every acceptance scenario of REQ-001 to REQ-016 verified by test passes in `npm test` on the fake model, with a
+   temporary instance, a temporary socket and free loopback ports only.
 2. One test calls every operation of the catalogue except `feed.subscribe` through both listeners and gets the same
    result as in-process (REQ-003); the feed's tests cover `feed.subscribe` (REQ-006). Measured by `npm test`.
 3. With no `[network]` section, a ready daemon has no listening TCP socket (REQ-002). Measured by `npm test`.
@@ -844,3 +866,4 @@ None affect the specified behaviour.
 | 2026-11-07 | spec-truth reconciliation — PASS | v0.6 text corrections confirmed; no S-003 behaviour changed in 75c7c946..0604b54f; read limited to S-006's findings | none |
 | 2026-11-07 | spec-truth reconciliation — PASS | B-030 changes one test only; AC-016.6 passes as root in CI; a failing rm is untested, and ADR-001 decision 2 owns that behaviour; read limited to REQ-016 | none |
 | 2026-11-07 | v0.7. Users: triggers leave the wording. No behaviour change. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
+| 2026-11-16 | v0.8. AC-011.1 drops its timing clause, "the run finishes in the same time bound as with no subscriber": its client never reads, and the run finishes while that client still has read nothing, with the same entries as a run with no subscriber. New AC-011.2, verified by inspection (design review): no run waits on a client's connection; deltas a client has not read wait in the feed without holding the run, at most 1000 per stream as REQ-011 counts them (S-002 REQ-015), and past that the stream is ended with `lagging`. Its review covers the commit observation, the observation feed, the HTTP front and the listener's feed stream. New AC-011.3, verified by test: with a client that never reads, a run of fewer than 1000 deltas that fills the connection's socket buffers finishes while the stream is still open and unread, so "no delay" is tested without timing. REQ-011 is unchanged. Success Criteria 1 counts the scenarios verified by test, since AC-009.3, AC-011.2, AC-013.1 and AC-014.2 are inspections. No identifier retired. | Product owner decision of 2026-11-16: the timing clause can't be tested reliably, because the test compares two wall-clock measurements taken at different moments on a shared machine (B-042), and tests must be deterministic. S-003 v0.8 architecture consistency review: the first wording of AC-011.2 placed the unread deltas in a listener buffer, which conversation and instance streams don't have. | B-042, whose fix implements the tests of AC-011.1 and AC-011.3 |
