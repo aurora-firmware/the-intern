@@ -41,6 +41,9 @@ async function until(describeWait: string, check: () => Promise<boolean>): Promi
 const statusOf = async (daemon: DaemonProcess, conversationId: string) =>
     ((await daemon.invoke("conversations.get", { conversationId })) as { status: string }).status;
 
+const threadsInUse = async (daemon: DaemonProcess) =>
+    ((await daemon.invoke("daemon.status", {})) as { workerThreads: { inUse: number } }).workerThreads.inUse;
+
 const jobOf = async (daemon: DaemonProcess, job: Job) =>
     (await daemon.invoke("jobs.get", { job: job.id })) as {
         status: string;
@@ -62,8 +65,7 @@ async function startWaitingLead(): Promise<Rig> {
     daemons.push(daemon);
     await daemon.ready;
     const held = (await daemon.invoke("jobs.create", { text: "holds the thread" })) as Job;
-    const heldLead = (await jobOf(daemon, held)).leadConversation;
-    await until("the first lead to run", async () => (await statusOf(daemon, heldLead)) === "running");
+    await until("the first lead to hold the worker thread", async () => (await threadsInUse(daemon)) === 1);
     const job = (await daemon.invoke("jobs.create", { text: "waits for a thread" })) as Job;
     const lead = (await jobOf(daemon, job)).leadConversation;
     await until(

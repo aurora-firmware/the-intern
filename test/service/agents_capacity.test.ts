@@ -195,6 +195,10 @@ describe("agent runs against the worker-thread cap", () => {
         const firstId = await started.createLead("first work");
         await waitFor(() => started.callsOf("first work").length === 1, "the first run to hold the worker thread");
         const secondId = await started.createLead("second work");
+        await waitFor(
+            async () => (await started.workerThreads()).waiting.some((waiter) => waiter.conversationId === secondId),
+            "the second run to enter the queue before the third is created",
+        );
         const thirdId = await started.createLead("third work");
 
         await waitFor(async () => (await started.workerThreads()).waiting.length === 2, "two runs to wait");
