@@ -58,8 +58,13 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   records a request with the caller's way in, an agent's job a follow-up of its conversation, and only a job source
   states its own origin (S-002 REQ-012, AC-012.5). The scheduler and `schedules.run` are that job source; see Schedules.
 - **Observation feed.** The one source of live data for clients: a snapshot, then deltas. A client that is slow or
-  gone never affects an agent run (S-002). A conversation's snapshot and deltas carry its state and the entries each
-  commit added, never its whole view, and clients read stored history through `conversations.entries`
+  gone never affects an agent run (S-002): the feed hears each commit synchronously inside pi-durable's delivery and
+  only queues it, never awaiting a subscriber (`src/host/host_observation.ts`). Each subscription holds at most 1000
+  undelivered deltas and is closed `lagging` past that (S-002 REQ-015). A listener pulls the next delta only once the
+  connection has taken the last one, so a client that stops reading leaves its deltas in the subscription; the stream
+  of several conversations moves them into one queue with the same bound across the connection (S-003 REQ-011). A
+  conversation's snapshot and deltas carry its state and the entries each commit added, never its whole view, and
+  clients read stored history through `conversations.entries`
   ([ADR-008](../ai-team/decisions/ADR-008-the-conversation-feed-sends-state-and-new-entries-never-the-whole-view.md)).
 - **Worker threads.** A worker thread is a logical slot for one active agent run, not an operating-system thread. The
   count is fixed, and work beyond it waits in a stored arrival order (S-001, S-002, ADR-001).
