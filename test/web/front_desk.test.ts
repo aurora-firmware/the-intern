@@ -113,6 +113,29 @@ const entriesOf = async (daemon: DaemonProcess, conversationId: string): Promise
     ((await daemon.invoke("conversations.entries", { conversationId, limit: 500 })) as { entries: Entry[] }).entries;
 
 describe("the Front desk page in chrome", () => {
+    it("waits for an answer that is not shown yet and resolves once it is", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await page.setContent("<main></main>");
+
+        const waiting = waitForAnswer(page, "echo: later").then(() => "resolved");
+        const early = await Promise.race([
+            waiting,
+            new Promise((resolve) => setTimeout(resolve, POLL_MS * 3, "waiting")),
+        ]);
+        await page.evaluate(() => {
+            document
+                .querySelector("main")
+                ?.insertAdjacentHTML("beforeend", "<p class='activity-assistant'>echo: later</p>");
+        });
+
+        t.assert.equal(early, "waiting");
+        t.assert.equal(await waiting, "resolved");
+    });
+
     it("shows the answer to a request for a job and the job on the Board as W-n", {
         timeout: TEST_TIMEOUT_MS,
     }, async (t) => {
