@@ -1,4 +1,4 @@
-import type { Page, Request } from "playwright-core";
+import type { Page, Request, Route } from "playwright-core";
 import { scaled } from "./time_scale.ts";
 
 const SETTLE_TIMEOUT_MS = scaled(30_000);
@@ -46,9 +46,10 @@ export async function holdNextRead(page: Page, port: number, operation: string, 
 /**
  * Counts the page's calls to the service that have started and not finished. A read makes several calls one after the
  * other, so `settled` waits until none is under way, and then for two animation frames, which is when the page has
- * shown what the last read gave it; it checks again that no new call started meanwhile.
+ * shown what the last read gave it; it checks again that no new call started meanwhile. `heldCalls` is the number of
+ * calls the test holds on purpose, which are not waited for.
  */
-export function trackOperations(page: Page): { settled: () => Promise<void> } {
+export function trackOperations(page: Page): { settled: (heldCalls?: number) => Promise<void> } {
     const underWay = new Set<Request>();
     const isOperation = (url: string) => url.includes("/operations/");
     page.on("request", (request) => {
@@ -57,18 +58,29 @@ export function trackOperations(page: Page): { settled: () => Promise<void> } {
     const finish = (request: Request) => underWay.delete(request);
     page.on("requestfinished", finish);
     page.on("requestfailed", finish);
-    const settled = async (): Promise<void> => {
+    const settled = async (heldCalls = 0): Promise<void> => {
         const deadline = Date.now() + SETTLE_TIMEOUT_MS;
         for (;;) {
-            while (underWay.size > 0) {
+            while (underWay.size > heldCalls) {
                 if (Date.now() > deadline) throw new Error("the page's calls to the service did not finish");
                 await new Promise((resolve) => setTimeout(resolve, SETTLE_POLL_MS));
             }
             await page.evaluate(
                 () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
             );
-            if (underWay.size === 0) return;
+            if (underWay.size <= heldCalls) return;
         }
     };
     return { settled };
+}
+
+/**
+ * Answers every call the page makes to the service from now on with a refusal (status 400), until the returned
+ * function lifts it. Calls already held are not touched.
+ */
+export async function refuseOperations(page: Page, refusal: string): Promise<() => Promise<void>> {
+    const handler = (route: Route) =>
+        route.fulfill({ status: 400, json: { error: { code: "invalid_input", message: refusal } } });
+    await page.route("**/operations/*", handler);
+    return () => page.unroute("**/operations/*", handler);
 }
