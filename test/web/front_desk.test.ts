@@ -91,10 +91,13 @@ async function until(describeWait: string, check: () => Promise<boolean>): Promi
 const answers = (page: Page) => page.locator("main .activity-assistant").allTextContents();
 
 const waitForAnswer = (page: Page, text: string) =>
-    waitFor(
-        page,
-        "(wanted) => [...document.querySelectorAll('main .activity-assistant')].some((node) => node.textContent?.includes(wanted))",
+    page.waitForFunction(
+        (wanted) =>
+            [...document.querySelectorAll("main .activity-assistant")].some((node) =>
+                node.textContent?.includes(wanted),
+            ),
         text,
+        { timeout: WAIT_MS, polling: POLL_MS },
     );
 
 async function openDesk(page: Page, port: number): Promise<void> {
@@ -108,6 +111,9 @@ async function sendMessage(page: Page, text: string): Promise<void> {
     await page.click(SEND);
     await waitFor(page, "document.querySelector('main .desk textarea')?.value === ''");
 }
+
+const jobsOf = async (daemon: DaemonProcess): Promise<Job[]> =>
+    ((await daemon.invoke("jobs.list", {})) as { jobs: Job[] }).jobs;
 
 const entriesOf = async (daemon: DaemonProcess, conversationId: string): Promise<Entry[]> =>
     ((await daemon.invoke("conversations.entries", { conversationId, limit: 500 })) as { entries: Entry[] }).entries;
@@ -147,9 +153,9 @@ describe("the Front desk page in chrome", () => {
 
         await sendMessage(page, "create job paint the fence");
 
+        await until("the job to be made", async () => (await jobsOf(daemon)).length > 0);
         await waitForAnswer(page, "echo: create job paint the fence");
-        const jobs = (await daemon.invoke("jobs.list", {})) as { jobs: Job[] };
-        const [job] = jobs.jobs;
+        const [job] = await jobsOf(daemon);
         t.assert.match(job?.number ?? "", /^W-\d+$/);
         await page.evaluate(() => Object.assign(location, { hash: "#/" }));
         await page.waitForSelector(`main a[href='#/jobs/${job?.number}']`, { timeout: WAIT_MS });
