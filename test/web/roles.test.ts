@@ -81,6 +81,37 @@ async function seatedInstructions(daemon: DaemonProcess, text: string): Promise<
 const waitFor = (page: Page, condition: string) =>
     page.waitForFunction(condition, undefined, { timeout: WAIT_MS, polling: POLL_MS });
 
+/**
+ * Holds the response of the next `roles.list` the page makes: the list is read from the service at once, so it is the
+ * list as of that moment, and the page gets it only after `release`. Later reads pass through.
+ */
+function holdNextRolesList(page: Page, port: number): { isRead: Promise<void>; release: () => void } {
+    let markRead: () => void = () => undefined;
+    let release: () => void = () => undefined;
+    const isRead = new Promise<void>((resolve) => {
+        markRead = resolve;
+    });
+    const isReleased = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    let isHeld = false;
+    void page.route("**/operations/roles.list", async (route) => {
+        if (isHeld) return route.fallback();
+        isHeld = true;
+        // `route.fetch()` can't resolve the test host, so the service is asked at its loopback address.
+        const answer = await fetch(`http://127.0.0.1:${port}/operations/roles.list`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: route.request().postData() ?? "{}",
+        });
+        const body = await answer.text();
+        markRead();
+        await isReleased;
+        await route.fulfill({ status: answer.status, contentType: "application/json", body });
+    });
+    return { isRead, release };
+}
+
 async function openRoles(page: Page, port: number): Promise<void> {
     await page.goto(pageUrl(port, "/ui/#/roles"));
     await page.waitForSelector(roleCard("gp"), { timeout: WAIT_MS });
@@ -374,6 +405,32 @@ describe("the Roles page in chrome", () => {
         });
 
         await page.waitForSelector(roleCard("elsewhere"), { timeout: WAIT_MS });
+    });
+
+    it("keeps a role created elsewhere when an older read of the roles finishes last", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { daemon, port } = await startServer();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openRoles(page, port);
+        const held = holdNextRolesList(page, port);
+
+        await daemon.invoke("roles.create", { name: "before", instructions: "Starts the read.", tools: [] });
+        await held.isRead;
+        await daemon.invoke("roles.create", { name: "elsewhere", instructions: "Made meanwhile.", tools: [] });
+        await page.waitForSelector(roleCard("elsewhere"), { timeout: WAIT_MS });
+        const finished = page.waitForResponse((response) => response.url().endsWith("/operations/instructions.list"), {
+            timeout: WAIT_MS,
+        });
+        held.release();
+        await finished;
+        await page.evaluate(
+            () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+        );
+
+        t.assert.equal(await page.locator(roleCard("elsewhere")).count(), 1);
     });
 
     it("reads the roles again on a new instance snapshot", { timeout: TEST_TIMEOUT_MS }, async (t) => {
