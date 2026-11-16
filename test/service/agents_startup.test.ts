@@ -8,9 +8,10 @@ import { type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { guardProcess } from "../support/process_guard.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const BOB_ENTRY = join(import.meta.dirname, "..", "..", "src", "cli", "bob.ts");
-const WAIT_TIMEOUT_MS = 20_000;
+const WAIT_TIMEOUT_MS = scaled(20_000);
 const OWNER_ONLY_MODE = 0o700;
 const quietLogger = createLogger({ stream: { write: () => true } });
 

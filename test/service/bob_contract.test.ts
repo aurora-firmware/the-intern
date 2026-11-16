@@ -8,10 +8,11 @@ import { localSocketPath } from "../../src/daemon/state_layout.ts";
 import { type BobChild, type BobResult, runBob, spawnBob } from "../support/bob_process.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const EXIT_OK = 0;
 const EXIT_REFUSED = 1;
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 const PAGE_LIMIT = 500;
 const OWNER_ONLY_MODE = 0o700;

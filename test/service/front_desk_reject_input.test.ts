@@ -18,10 +18,11 @@ import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import { type Caller, ServiceError } from "../../src/service/operations.ts";
 import { createFakeModel, type FakeTranscript } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
-const TEST_TIMEOUT_MS = 60_000;
+const TEST_TIMEOUT_MS = scaled(60_000);
 const MAKE_A_JOB = "make a job";
 const HOLD_THE_RUN = "hold the run";
 const HOLD_MS = 60_000;

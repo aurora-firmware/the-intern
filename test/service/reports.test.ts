@@ -21,9 +21,10 @@ import {
 import type { JobStatus } from "../../src/jobs/job_model.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const EARLIER_INPUT = "the earlier input";
-const WAIT_MS = 10_000;
+const WAIT_MS = scaled(10_000);
 const POLL_MS = 20;
 const SETTLE_MS = 300;
 const logger = createLogger({ stream: { write: () => true } });

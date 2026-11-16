@@ -3,10 +3,11 @@ import type { BrowserContext, Page } from "playwright-core";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 import { type RecordedRequest, startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
-const WAIT_MS = 30_000;
-const TEST_TIMEOUT_MS = 120_000;
+const WAIT_MS = scaled(30_000);
+const TEST_TIMEOUT_MS = scaled(120_000);
 const FONT_PATH = "/ui/assets/fonts/";
 
 type Job = { id: string; number: string };

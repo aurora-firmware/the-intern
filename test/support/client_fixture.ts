@@ -21,10 +21,11 @@ import { localSocketPath } from "../../src/listeners/socket_path.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createFakeModel, type FakeTranscript } from "./fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "./hermetic_env.ts";
+import { scaled } from "./time_scale.ts";
 
-const WAIT_TIMEOUT_MS = 20_000;
+const WAIT_TIMEOUT_MS = scaled(20_000);
 const POLL_INTERVAL_MS = 10;
-export const TEST_TIMEOUT_MS = 90_000;
+export const TEST_TIMEOUT_MS = scaled(90_000);
 const LOOPBACK = "127.0.0.1";
 const IN_PROCESS: Caller = { actor: { kind: "team_member" } };
 const quietLogger = createLogger({ stream: { write: () => true } });

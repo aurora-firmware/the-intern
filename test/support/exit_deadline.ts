@@ -1,7 +1,8 @@
 import type { ChildProcess } from "node:child_process";
+import { scaled } from "./time_scale.ts";
 
 /** How long a `bob` child may run before a test treats it as hung. A test that needs longer sets its own deadline. */
-export const DEFAULT_EXIT_DEADLINE_MS = 120_000;
+export const DEFAULT_EXIT_DEADLINE_MS = scaled(120_000);
 
 /**
  * Resolves with the child's exit status once it closes. A child still running at the deadline is killed with

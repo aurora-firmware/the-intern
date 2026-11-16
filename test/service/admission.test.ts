@@ -11,12 +11,13 @@ import { abortConversation, submitInput, waitForSubmission } from "../../src/hos
 import { type HarnessHost, openHarnessHost } from "../../src/host/harness_host.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const POLL_ATTEMPTS = 200;
 const POLL_PAUSE_MS = 25;
 const REPLY_DELAY_MS = 150;
 const LONG_REPLY_DELAY_MS = 20_000;
-const SETTLE_TIMEOUT_MS = 20_000;
+const SETTLE_TIMEOUT_MS = scaled(20_000);
 
 type FakeModel = ReturnType<typeof createFakeModel>;
 

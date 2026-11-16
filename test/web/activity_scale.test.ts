@@ -5,13 +5,14 @@ import { type BrowserName, launchBrowser, pageUrl } from "../support/browser.ts"
 import { withColdContext } from "../support/cold_context.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 import { startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
 const BROWSERS: BrowserName[] = ["chrome", "msedge", "firefox"];
-const WAIT_MS = 60_000;
+const WAIT_MS = scaled(60_000);
 const POLL_MS = 100;
 const SETTLE_MS = 1000;
-const TEST_TIMEOUT_MS = 600_000;
+const TEST_TIMEOUT_MS = scaled(600_000);
 const PAGE_OPEN_LIMIT_MS = 3000;
 const EXPAND_LIMIT_MS = 500;
 const ATTEMPTS = 3;

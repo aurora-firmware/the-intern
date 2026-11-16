@@ -3,13 +3,14 @@ import type { BrowserContext, Page } from "playwright-core";
 import { type BrowserName, launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 import { startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
 const BROWSERS: BrowserName[] = ["chrome", "msedge", "firefox"];
 const WORKER_URL = "./feed_worker.ts?v=test";
 const PAGE_PATH = "/ui/index.html";
 const SETTLE_MS = 400;
-const WAIT_MS = 15_000;
+const WAIT_MS = scaled(15_000);
 
 const envs: HermeticEnv[] = [];
 const daemons: DaemonProcess[] = [];

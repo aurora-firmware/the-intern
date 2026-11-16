@@ -22,8 +22,9 @@ import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
 import type { DaemonStatus } from "../../src/service/status_operation.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const OWNER_ONLY_MODE = 0o700;
 const PERMISSION_BITS = 0o777;
 const caller = { actor: { kind: "team_member" as const, wayIn: "command line" as const } };

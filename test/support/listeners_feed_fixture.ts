@@ -24,13 +24,14 @@ import type { Caller, Catalogue } from "../../src/service/operations.ts";
 import { createFakeModel, type FakeModelOptions, type FakeReply, type FakeTranscript } from "./fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "./hermetic_env.ts";
 import { waitForJobStatus } from "./job_status.ts";
+import { scaled } from "./time_scale.ts";
 
-export const WAIT_TIMEOUT_MS = 20_000;
+export const WAIT_TIMEOUT_MS = scaled(20_000);
 export const POLL_INTERVAL_MS = 10;
-export const SETTLE_WAIT_MS = 30_000;
-export const EVENT_TIMEOUT_MS = 10_000;
+export const SETTLE_WAIT_MS = scaled(30_000);
+export const EVENT_TIMEOUT_MS = scaled(10_000);
 /** How long the loop may run again before a client that stops reading must have been ended. */
-export const STALL_DEADLINE_MS = 60_000;
+export const STALL_DEADLINE_MS = scaled(60_000);
 
 export const ENTRIES_PAGE_LIMIT = 500;
 export const LOOPBACK = "127.0.0.1";

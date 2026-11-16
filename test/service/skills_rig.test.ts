@@ -6,8 +6,9 @@ import { afterEach, describe, it } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { DEFAULT_SHIPPED_ROOT } from "../../src/skills/internal_folder.ts";
 import { type SkillsRig, startSkillsRig } from "../support/skills_rig.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 
 const rigs: SkillsRig[] = [];

@@ -14,8 +14,9 @@ import { type Caller, createCatalogue, ServiceError } from "../../src/service/op
 import { runtimeReadOperations } from "../../src/service/runtime_read_operations.ts";
 import { createFakeModel, type FakeReply } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const SETTLE_TIMEOUT_MS = 20_000;
+const SETTLE_TIMEOUT_MS = scaled(20_000);
 const SLOW_REPLY_MS = 1_500;
 const SHORT_WAIT_MS = 50;
 const POLL_ATTEMPTS = 200;

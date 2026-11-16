@@ -20,8 +20,9 @@ import { conversationControlOperations } from "../../src/service/conversation_co
 import { type Caller, createCatalogue, ServiceError } from "../../src/service/operations.ts";
 import { createFakeModel, type FakeReply } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 const BUSY_DELAY_MS = 400;
 const caller: Caller = { actor: { kind: "team_member" } };

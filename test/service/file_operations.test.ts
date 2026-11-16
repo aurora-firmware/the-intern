@@ -27,8 +27,9 @@ import type { FileChange } from "../../src/skills/file_store.ts";
 import { DEFAULT_SHIPPED_ROOT } from "../../src/skills/internal_folder.ts";
 import { createSkillsComponent } from "../../src/skills/skills_component.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_TIMEOUT_MS = 10_000;
+const WAIT_TIMEOUT_MS = scaled(10_000);
 const POLL_INTERVAL_MS = 10;
 const ONE_MIB = 1024 * 1024;
 const TEAM_MEMBER: Caller = { actor: { kind: "team_member", wayIn: "command line" } };

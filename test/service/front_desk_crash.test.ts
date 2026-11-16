@@ -8,11 +8,12 @@ import { afterEach, describe, it } from "node:test";
 import { type DaemonProcess, type FakeScript, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { waitForJobStatus } from "../support/job_status.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const POLL_INTERVAL_MS = 10;
-const WAIT_BOUND_MS = 30_000;
-const TEST_TIMEOUT_MS = 90_000;
-const SETTLE_TIMEOUT_MS = 30_000;
+const WAIT_BOUND_MS = scaled(30_000);
+const TEST_TIMEOUT_MS = scaled(90_000);
+const SETTLE_TIMEOUT_MS = scaled(30_000);
 const LIMIT = 200;
 const SLOW_DELAY_MS = 3_000;
 const LEAD_MESSAGE = "from-desk";

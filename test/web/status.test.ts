@@ -4,11 +4,12 @@ import { type Clock, throttled } from "../../web/ui/model/throttle.ts";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 import { startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
-const WAIT_MS = 30_000;
+const WAIT_MS = scaled(30_000);
 const POLL_MS = 100;
-const TEST_TIMEOUT_MS = 120_000;
+const TEST_TIMEOUT_MS = scaled(120_000);
 const STATUS = "main .status";
 const TOTAL_TOKENS = `${STATUS} .status-usage-total .usage-row[data-kind="model"]`;
 

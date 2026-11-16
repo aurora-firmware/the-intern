@@ -4,11 +4,12 @@ import { launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, type FakeScript, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { waitForJobStatus } from "../support/job_status.ts";
+import { scaled } from "../support/time_scale.ts";
 import { startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const QUIET_MS = 700;
-const TEST_TIMEOUT_MS = 120_000;
+const TEST_TIMEOUT_MS = scaled(120_000);
 
 type Job = { id: string; number: string; title: string };
 

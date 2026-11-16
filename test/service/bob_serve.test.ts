@@ -8,9 +8,10 @@ import { nodeTransport } from "../../src/client/node_transport.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { guardProcess } from "../support/process_guard.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const BOB_ENTRY = join(import.meta.dirname, "..", "..", "src", "cli", "bob.ts");
-const WAIT_TIMEOUT_MS = 20_000;
+const WAIT_TIMEOUT_MS = scaled(20_000);
 const USAGE_EXIT_STATUS = 2;
 
 const envs: HermeticEnv[] = [];

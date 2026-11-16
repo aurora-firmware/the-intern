@@ -48,10 +48,11 @@ import { createFileChangeHub, type FileChangeHub } from "../../src/skills/file_s
 import { createSkillsComponent } from "../../src/skills/skills_component.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const TEAM_MEMBER: Caller = { actor: { kind: "team_member" } };
-const NEXT_TIMEOUT_MS = 5000;
-const SUBMISSION_TIMEOUT_MS = 10_000;
+const NEXT_TIMEOUT_MS = scaled(5000);
+const SUBMISSION_TIMEOUT_MS = scaled(10_000);
 const RUN_DELAY_MS = 100;
 const MAX_OPENING_MICROTASKS = 1000;
 const ACTOR: SeatActor = { kind: "team_member", wayIn: "cli" };

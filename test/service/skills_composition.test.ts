@@ -9,8 +9,9 @@ import { internalHarness } from "../../src/host/harness_host.ts";
 import { manifestPath } from "../../src/skills/internal_folder.ts";
 import { createSkillsComponent, type SkillsComponent } from "../../src/skills/skills_component.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_TIMEOUT_MS = 20_000;
+const WAIT_TIMEOUT_MS = scaled(20_000);
 const quietLogger = createLogger({ stream: { write: () => true } });
 
 const envs: HermeticEnv[] = [];

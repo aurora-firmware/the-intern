@@ -7,6 +7,7 @@ import { type DaemonProcess, type FakeScript, startDaemon } from "../support/dae
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { hasScript, type PtySession, runInPty } from "../support/pty.ts";
 import { renderTerminal } from "../support/screen_renderer.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const CTRL_C = "\x03";
 const CTRL_D = "\x04";
@@ -14,7 +15,7 @@ const LINE = "are you still there?";
 const LONG_LINE = "tell me everything about the running jobs please";
 const PROMPT = "> ";
 const UNREACHABLE_NOTICE = "The Intern isn't reachable; trying again";
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 const SKIP_REASON = "util-linux `script` is missing";
 

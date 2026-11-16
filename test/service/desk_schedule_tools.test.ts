@@ -27,10 +27,11 @@ import { createSchedulesComponent } from "../../src/schedules/schedules_componen
 import type { Caller } from "../../src/service/operations.ts";
 import { runBob } from "../support/bob_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
-const TEST_TIMEOUT_MS = 60_000;
+const TEST_TIMEOUT_MS = scaled(60_000);
 const SCRIPT_INPUT = "script";
 const NAME = "backups-check";
 const REQUEST = "Check that the backups ran.";

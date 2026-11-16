@@ -23,8 +23,9 @@ import {
     startFixture,
     type View,
 } from "../support/listeners_feed_fixture.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const TEST_TIMEOUT_MS = 90_000;
+const TEST_TIMEOUT_MS = scaled(90_000);
 const STOPPED_END: FeedEvent = { name: "end", data: { reason: "stopped" } };
 
 type Wrapped = { conversationId: string; event: { seq?: number; view?: View } };

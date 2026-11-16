@@ -23,8 +23,9 @@ import { REMINDER_TEXT } from "../../src/jobs/turn_end_rule.ts";
 import { DEFAULT_LEAD_ROLE } from "../../src/roles/shipped_roles.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 const SETTLE_MS = 300;
 const HELD_TEXT = "the answer that reached the parked lead";

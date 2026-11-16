@@ -32,11 +32,12 @@ import {
 } from "../../src/host/seating.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 type FakeModel = FauxProviderRegistration;
 type ModelId = "model-one" | "model-two";
 
-const WAIT_MS = 10_000;
+const WAIT_MS = scaled(10_000);
 const context = BACKGROUND_CONTEXT;
 const fakes: FakeModel[] = [];
 const envs: HermeticEnv[] = [];

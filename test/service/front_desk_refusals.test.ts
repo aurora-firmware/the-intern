@@ -24,10 +24,11 @@ import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import { checkTurnEnd, REMINDER_TEXT } from "../../src/jobs/turn_end_rule.ts";
 import { type Caller, ServiceError } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
-const TEST_TIMEOUT_MS = 60_000;
+const TEST_TIMEOUT_MS = scaled(60_000);
 const HANG_PROMPT = "hang until aborted";
 const NOT_A_JOB = /not a job conversation/;
 const quietLogger = createLogger({ stream: { write: () => true } });

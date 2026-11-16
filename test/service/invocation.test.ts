@@ -34,10 +34,11 @@ import {
 } from "../../src/host/seating.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const SUMMARY_TEXT = "SUMMARY-OF-THE-EARLIER-WORK";
 const EARLIER_INPUT = "the earlier input";
-const WAIT_MS = 10_000;
+const WAIT_MS = scaled(10_000);
 const fakes: FauxProviderRegistration[] = [];
 const envs: HermeticEnv[] = [];
 const hosts: HarnessHost[] = [];

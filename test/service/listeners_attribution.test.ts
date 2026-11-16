@@ -24,11 +24,12 @@ import { localSocketPath } from "../../src/listeners/socket_path.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_TIMEOUT_MS = 20_000;
+const WAIT_TIMEOUT_MS = scaled(20_000);
 const POLL_INTERVAL_MS = 10;
-const SETTLE_WAIT_MS = 20_000;
-const TEST_TIMEOUT_MS = 60_000;
+const SETTLE_WAIT_MS = scaled(20_000);
+const TEST_TIMEOUT_MS = scaled(60_000);
 const ENTRIES_LIMIT = 200;
 const LOOPBACK = "127.0.0.1";
 const IN_PROCESS: Caller = { actor: { kind: "team_member" } };

@@ -7,8 +7,9 @@ import { type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { ServiceError } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_TIMEOUT_MS = 20_000;
+const WAIT_TIMEOUT_MS = scaled(20_000);
 const caller = { actor: { kind: "team_member" as const } };
 const quietLogger = createLogger({ stream: { write: () => true } });
 

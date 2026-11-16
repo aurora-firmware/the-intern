@@ -25,12 +25,13 @@ import { createFakeModel, type FakeModelOptions, type FakeTranscript } from "../
 import { createHermeticEnv } from "../support/hermetic_env.ts";
 import { waitForJobStatus } from "../support/job_status.ts";
 import { createTestClock, type ScheduleRig, startScheduleRig } from "../support/schedule_rig.ts";
+import { scaled } from "../support/time_scale.ts";
 
 type ReplyFn = Parameters<typeof createFakeModel>[0];
 
 const rigs: ScheduleRig[] = [];
-const TEST_TIMEOUT_MS = 60_000;
-const WAIT_TIMEOUT_MS = 20_000;
+const TEST_TIMEOUT_MS = scaled(60_000);
+const WAIT_TIMEOUT_MS = scaled(20_000);
 const POLL_INTERVAL_MS = 10;
 const FAKE_MODEL = "faux/faux-1";
 const MINUTE_MS = 60_000;

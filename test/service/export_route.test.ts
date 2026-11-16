@@ -17,8 +17,9 @@ import { networkSection } from "../../src/listeners/network_section.ts";
 import { localSocketPath } from "../../src/listeners/socket_path.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { waitForJobStatus } from "../support/job_status.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 const LOOPBACK = "127.0.0.1";
 const NETWORK_CONFIG = `[network]\naddress = "${LOOPBACK}"\nport = 8080\n`;

@@ -41,10 +41,11 @@ import {
 } from "../../src/skills/skill_tool_extension.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { type SkillsRig, startSkillsRig } from "../support/skills_rig.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const EACCES = constants.errno.EACCES;
 const ELOOP = constants.errno.ELOOP;
-const WAIT_MS = 10_000;
+const WAIT_MS = scaled(10_000);
 const MAX_LINES = 2000;
 const MAX_BYTES = 50 * 1024;
 const job: JobLinks = { jobId: "job-1", isLead: true, origin: { kind: "request", wayIn: "cli" }, depth: 0 };

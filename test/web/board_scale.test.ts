@@ -6,10 +6,11 @@ import { withColdContext } from "../support/cold_context.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { type FeedWatch, watchFeed } from "../support/feed_watch.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const BROWSERS: BrowserName[] = ["chrome", "msedge", "firefox"];
-const WAIT_MS = 20_000;
-const TEST_TIMEOUT_MS = 180_000;
+const WAIT_MS = scaled(20_000);
+const TEST_TIMEOUT_MS = scaled(180_000);
 const CHANGE_LIMIT_MS = 2000;
 const PAGE_OPEN_LIMIT_MS = 3000;
 const INTERACTION_LIMIT_MS = 500;

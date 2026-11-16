@@ -11,8 +11,9 @@ import { afterEach, describe, it } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { FakeReply, FakeTranscript } from "../support/fake_model.ts";
 import { type SkillsRig, startSkillsRig } from "../support/skills_rig.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 const CODE_REVIEW = "code-review";
 const TEAM_MEMBER = { kind: "team_member", wayIn: "command line" };

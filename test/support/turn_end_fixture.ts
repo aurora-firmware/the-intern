@@ -16,8 +16,9 @@ import { createJobsComponent, type WritePoint } from "../../src/jobs/jobs_compon
 import { DEFAULT_LEAD_ROLE } from "../../src/roles/shipped_roles.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "./hermetic_env.ts";
+import { scaled } from "./time_scale.ts";
 
-export const WAIT_MS = 20_000;
+export const WAIT_MS = scaled(20_000);
 export const POLL_MS = 10;
 export const SETTLE_MS = 250;
 export const TEAM_TEXT = "please also check the staging copy";

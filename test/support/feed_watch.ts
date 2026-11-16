@@ -1,9 +1,11 @@
+import { scaled } from "./time_scale.ts";
+
 /**
  * A test's own subscriber to the instance feed of a daemon's network listener: it reads `GET /feed?scope=instance`
  * event by event and notes the moment each delta was read, so a browser test can measure from the feed event to a page.
  */
 const LOOPBACK = "127.0.0.1";
-const EVENT_WAIT_MS = 20_000;
+const EVENT_WAIT_MS = scaled(20_000);
 
 export type FeedDelta = { type: string; number?: string; seq: number };
 

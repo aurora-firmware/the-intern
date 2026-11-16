@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it, mock } from "node:test";
 import { ClientError, UnreachableError } from "../../src/client/client.ts";
+import { MAX_SUBMISSION_WAIT_MS } from "../../src/daemon/constants.ts";
 import type { Caller, Catalogue } from "../../src/service/operations.ts";
 import {
     cleanupFixtures,
@@ -18,15 +19,16 @@ import {
     until,
 } from "../support/client_fixture.ts";
 import type { FakeTranscript } from "../support/fake_model.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const UNKNOWN_CONVERSATION = { conversationId: "999" };
 const UNKNOWN_CONVERSATION_FEED = { scope: "conversation", conversationId: "999" } as const;
 const INSTANCE_FEED = { scope: "instance" } as const;
 const HOLD_INPUT = "hold";
 /** Longer than the test; stopping the daemon aborts the held answer. */
-const HOLD_DELAY_MS = 120_000;
-/** Longer than the test, so only the daemon stopping ends the wait. */
-const WAIT_LONGER_THAN_TEST_MS = 120_000;
+const HOLD_DELAY_MS = scaled(120_000);
+/** The longest wait the daemon takes, longer than the test, so only the daemon stopping ends the wait. */
+const WAIT_LONGER_THAN_TEST_MS = MAX_SUBMISSION_WAIT_MS;
 const WATCHED_ROLE = { name: "watched", instructions: "Watch.", tools: ["read"], skills: [] };
 
 afterEach(async () => {

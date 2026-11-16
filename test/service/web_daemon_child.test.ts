@@ -14,10 +14,11 @@ import {
     startDaemon,
 } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const POLL_INTERVAL_MS = 20;
-const WAIT_BOUND_MS = 30_000;
-const TEST_TIMEOUT_MS = 90_000;
+const WAIT_BOUND_MS = scaled(30_000);
+const TEST_TIMEOUT_MS = scaled(90_000);
 const HOLD_CHECK_MS = 500;
 const ENTRIES_LIMIT = 200;
 const INVOKED_COUNT = 8;

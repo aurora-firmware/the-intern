@@ -18,12 +18,13 @@ import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import { DEFAULT_LEAD_ROLE } from "../../src/roles/shipped_roles.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "./hermetic_env.ts";
+import { scaled } from "./time_scale.ts";
 
 /** A lead step that holds the lead's model request, so its run stays busy, until the request is aborted. */
 export const HOLD_STEP = "hold";
 /** An invoked agent's job prompt that holds its model request, so its run stays busy, until the request is aborted. */
 export const HELD_AGENT_PROMPT = "hold this agent's request";
-export const WAIT_MS = 20_000;
+export const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 export const SETTLE_MS = 300;
 // The model's window is 128000 tokens and a background compaction starts 32768 tokens below the blocking threshold.

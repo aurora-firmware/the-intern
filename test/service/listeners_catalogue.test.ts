@@ -27,12 +27,13 @@ import { type Caller, ServiceError, type ServiceErrorCode } from "../../src/serv
 import { createFakeModel, type FakeTranscript } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { createTestOperations, type StorageSwitch } from "../support/test_operations.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const WAIT_TIMEOUT_MS = 20_000;
+const WAIT_TIMEOUT_MS = scaled(20_000);
 const POLL_INTERVAL_MS = 10;
-const HOLD_DELAY_MS = 60_000;
-const SETTLE_WAIT_MS = 20_000;
-const TEST_TIMEOUT_MS = 120_000;
+const HOLD_DELAY_MS = scaled(60_000);
+const SETTLE_WAIT_MS = scaled(20_000);
+const TEST_TIMEOUT_MS = scaled(120_000);
 const LOOPBACK = "127.0.0.1";
 /** Input starting with this word holds the fake model's answer until the run is aborted. */
 const HOLD_WORD = "hold";

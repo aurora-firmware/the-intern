@@ -10,12 +10,13 @@ import { REMINDER_TEXT } from "../../src/jobs/turn_end_rule.ts";
 import { type DaemonProcess, type FakeScript, startDaemon } from "./daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "./hermetic_env.ts";
 import { waitForJobStatus } from "./job_status.ts";
+import { scaled } from "./time_scale.ts";
 
-export const TEST_TIMEOUT_MS = 90_000;
+export const TEST_TIMEOUT_MS = scaled(90_000);
 export const DAEMON_AUTHOR = { kind: "daemon" };
 export const STOPPED_REASON = "stopped by a team member";
 const POLL_INTERVAL_MS = 50;
-const WAIT_BOUND_MS = 30_000;
+const WAIT_BOUND_MS = scaled(30_000);
 const LIMIT = 200;
 const FAKE_PROVIDER = "faux";
 const FAKE_MODEL = "faux-1";

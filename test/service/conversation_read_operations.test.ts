@@ -38,8 +38,9 @@ import {
 import { type Caller, createCatalogue, ServiceError } from "../../src/service/operations.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const SETTLE_TIMEOUT_MS = 20_000;
+const SETTLE_TIMEOUT_MS = scaled(20_000);
 const BUSY_DELAY_MS = 400;
 const POLL_ATTEMPTS = 200;
 const POLL_PAUSE_MS = 25;

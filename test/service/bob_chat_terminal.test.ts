@@ -8,6 +8,7 @@ import { type DaemonProcess, type FakeScript, startDaemon } from "../support/dae
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { hasScript, type PtySession, runInPty } from "../support/pty.ts";
 import { renderTerminal } from "../support/screen_renderer.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const ESC = String.fromCharCode(27);
 const BEL = String.fromCharCode(7);
@@ -17,7 +18,7 @@ const FIRST = "what's running?";
 const SECOND = "and what is blocked?";
 const THIRD = "anything else?";
 const LONG = "tell me everything about the running jobs please";
-const WAIT_MS = 20_000;
+const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
 const PROMPT = "> ";
 const SKIP_REASON = "util-linux `script` is missing";

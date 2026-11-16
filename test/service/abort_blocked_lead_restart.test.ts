@@ -8,10 +8,11 @@ import { join } from "node:path";
 import { afterEach, it } from "node:test";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
 const POLL_INTERVAL_MS = 50;
-const WAIT_BOUND_MS = 30_000;
-const TEST_TIMEOUT_MS = 90_000;
+const WAIT_BOUND_MS = scaled(30_000);
+const TEST_TIMEOUT_MS = scaled(90_000);
 const HISTORY_LIMIT = 200;
 const BLOCK_TEXT = "block me";
 

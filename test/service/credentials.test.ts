@@ -5,9 +5,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { scaled } from "../support/time_scale.ts";
 
-const TEST_TIMEOUT_MS = 90_000;
-const SETTLE_TIMEOUT_MS = 30_000;
+const TEST_TIMEOUT_MS = scaled(90_000);
+const SETTLE_TIMEOUT_MS = scaled(30_000);
 const FILE_MODE = 0o600;
 const FAR_FUTURE_EXPIRY_MS = 4_102_444_800_000;
 
