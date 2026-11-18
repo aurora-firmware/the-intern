@@ -35,11 +35,12 @@ vocabulary of `docs/system_overview.html`. It adds these terms:
 | Intake | The daemon taking a new email from an owned account's inbox into a job (REQ-006). |
 | Triage job | The job intake creates for a new email. Its first lead decides what the email is (REQ-008). |
 | Triage role | The role of a triage job's first lead, set per owned account; the shipped `triage` role by default (REQ-008, REQ-019). |
-| Request mark | A flag on a job that came by email, set by its triage agent when the email asks The Intern for something. It decides whether a result reply goes out (REQ-008, REQ-015). |
+| Request mark | A flag on a job that came by email, set by its lead when the email asks The Intern for something. It decides whether a result reply goes out (REQ-008, REQ-015). |
+| Mail text | The text a lead writes for the person an email goes to, apart from the Blocked reason or justification it writes for the team. Only mail text is mailed (REQ-014, REQ-015). |
 | Job thread | The emails linked to a job: the one that started it, the replies it received and every email The Intern sent from it (REQ-009). |
 | Allowlist | The recipient addresses and domains an owned account may send to. Empty means anyone (REQ-012). |
 | Notice address | The one address The Intern writes to about its own work: held-back mail and blocked questions that have no email sender to ask (REQ-013). |
-| Mail tools | The agent tools of REQ-011, offered to a role whose tool set names `mail`. |
+| Mail tools | The agent tools of REQ-011, offered to a role whose tool set names `mail`. The mark request tool is a job tool, not a mail tool (REQ-008). |
 | Account status | `ready`, `needs_sign_in` or `failing`, with the last error and its time (REQ-005). |
 | Check interval | How often the daemon looks for new mail in an owned account when the server can't tell it at once; 60 seconds by default (REQ-023). |
 
@@ -93,8 +94,9 @@ Journeys, in priority order:
   server.**
 - **A shared OAuth app shipped with The Intern, and Google's app verification.** Each team registers its own app with
   Google or Microsoft.
-- **Mail to the front desk and mail starting jobs by event.** S-001 and S-007 stay as they are: mail reaches jobs only
-  through intake and job threads.
+- **Mail to the front desk and mail starting jobs by event.** Mail never reaches the front desk (S-001). An email to an
+  owned account is a team member's request through the `email` way in, not an event (REQ-006), so S-007 REQ-014 keeps
+  its rule with one sentence that says so. Mail in a monitored account starts nothing.
 - **Two instances sharing one owned account.**
 - **Notices in other channels.** The notice address is the only one.
 - **Deleting saved mail on its own.** Saved mail lives as long as its job, as the rest of the job record does.
@@ -180,8 +182,9 @@ secret.
 | `mail.notices.set` | control | `to`, `from`, or neither to clear them | the notice settings; `invalid_input` | REQ-013 |
 
 `jobs.get` gains a job's email details: the account, the sender, the subject, the saved message and attachments, the
-job thread, and the request mark (REQ-007, REQ-008, REQ-009). `jobs.list` gains a filter by account. A team member's or
-an agent's `jobs.create` still can't name an email origin (S-002 AC-012.5).
+job thread, and the request mark (REQ-007, REQ-008, REQ-009). `jobs.list` gains a filter by account. `jobs.complete`
+gains an optional `mailText`, the result reply for a job with the request mark (REQ-015). A team member's or an agent's
+`jobs.create` still can't name an email origin (S-002 AC-012.5).
 
 ### Exposed: feed events
 
@@ -215,8 +218,9 @@ secret is read from the terminal without echo, or from standard input with `--se
 
 ### Exposed: the Mail page and the Job page
 
-A new page in S-006's sidebar at `/ui/#/mail` (REQ-018). S-006's Users row lets later specs add pages, so S-006's
-requirements don't change. The page calls only these:
+A new page in S-006's sidebar at `/ui/#/mail` (REQ-018). S-006's Users row lets later specs add pages, so adding the
+page changes no S-006 requirement; the email section of the Job page amends S-006 REQ-003, which lists the Job page's
+contents. The page calls only these:
 
 | Page | Reads and feed | Actions |
 |---|---|---|
@@ -239,7 +243,14 @@ A role whose tool set names `mail` is offered the mail tools (REQ-011). Every ma
 | set flags | yes | yes | sets or clears seen, flagged and answered |
 | save draft | yes | yes | a plain-text draft with recipients, subject, attachments and an optional message it replies to, in the account's Drafts folder |
 | send | yes, allowlist checked | refused | sends a plain-text email with recipients, subject, attachments and an optional message it replies to |
-| mark request | the lead of a job that came by email | — | sets or clears the job's request mark |
+
+S-004's job tools change for jobs that came by email, whatever the role's tool set (REQ-008, REQ-014, REQ-015):
+
+| Job tool | Change |
+|---|---|
+| mark request | new; offered to the lead of a job that came by email; sets or clears the request mark |
+| block job | gains `mailText`, the question as the person asked by email reads it; required whenever the question will be mailed (REQ-014) |
+| complete job | gains `mailText`, the result reply; required for a job with the request mark (REQ-015) |
 
 Tool names and parameter layouts are not contract; the tasks fix them, as in S-004.
 
@@ -247,12 +258,12 @@ Tool names and parameter layouts are not contract; the tasks fix them, as in S-0
 
 | Mail | To | When | Body | Requirement |
 |---|---|---|---|---|
-| Blocked question | the job's sender, in the job thread, when the job came by email and the sender is allowed; otherwise the notice address, in a thread of its own for the job | each time the job blocks | the Blocked reason | REQ-014 |
-| Result reply | the job's sender, in the job thread | a job with the request mark is completed | the completion justification | REQ-015 |
-| Held-back notice | the notice address | the allowlist holds back an email | what was held back and for whom | REQ-012 |
+| Blocked question | the job's sender, in the job thread, when the job came by email and the sender is allowed; otherwise the notice address, in a thread of its own for the job | the lead blocks the job with a mail text that differs from the last one mailed for the job | the lead's mail text | REQ-014 |
+| Result reply | the job's sender, in the job thread | a job with the request mark is completed with a mail text | the mail text | REQ-015 |
+| Held-back notice | the notice address | the allowlist holds back an email | what was held back and for whom, in the daemon's own words | REQ-012 |
 
-Each is plain text from the account that the job came through, or from the notice account, and shows no internals
-(REQ-016).
+Each is plain text from the account that the job came through, or from the notice account. A Blocked reason or
+completion justification is never mailed (REQ-016).
 
 ### Consumed
 
@@ -287,10 +298,12 @@ Triage agent decides                                                            
   discard / information only → completes; nothing is sent                               REQ-008, REQ-015
   request → request mark, new title and definition of done, handoff                      REQ-008
   missing information → blocks                                                           REQ-008
-Any job blocks → question by email                                                       REQ-014
+Lead blocks a job with a mail text → question by email                                  REQ-014
   (sender allowed → in the job thread; otherwise → notice address; none → not mailed)    REQ-013, REQ-014
+  (same mail text as the last one mailed, or a block by the daemon → not mailed)         REQ-014
 Reply arrives in the thread → the job resumes                                            REQ-009
-Request job completed → result reply in the thread                                       REQ-015
+Request job completed with a mail text → result reply in the thread                     REQ-015
+  (crash after the job write, before sending began → sent after the restart)             REQ-022
   (recipient not allowed → held back, notice to the notice address)                      REQ-012
   (crash while sending → not sent again; the history says it may not have gone out)      REQ-022
 Agents in any job use the mail tools; monitored accounts refuse send and never feed jobs  REQ-010, REQ-011
@@ -351,7 +364,8 @@ REQ-021).
 Passwords, client secrets and OAuth tokens SHALL be kept in a secrets store of the instance, apart from the
 configuration file: owner-only (S-002 REQ-006), written atomically, written only by the account operations and by
 sign-in and token refresh, and never shown back. An account whose `auth` needs a secret the store doesn't hold SHALL
-start with status `needs_sign_in` (REQ-005), not stop startup. Removing an account SHALL remove its secrets.
+start with status `needs_sign_in` (REQ-005), not stop startup. Removing an account SHALL remove its secrets, and at
+startup the daemon SHALL remove the secrets of any account the configuration file no longer holds.
 
 #### AC-002.1 — A hand edit at the next restart
 
@@ -415,15 +429,18 @@ The daemon SHALL log in to each account by its `auth`:
 - `microsoft`: OAuth with the team's client ID and tenant. `mail.accounts.signin` SHALL return a code and the address
   to enter it at, which a team member uses from any device; when they finish, the account turns `ready`.
 - `google`: OAuth with the team's client ID and client secret of a Google "Desktop app" client. `mail.accounts.signin`
-  SHALL return an address to open in a browser, and Google's answer SHALL return to The Intern's machine at a loopback
-  address. A team member on another machine forwards that address, as the manual explains (REQ-025).
+  SHALL return an address to open in a browser and the loopback port Google's answer returns to. The daemon SHALL
+  listen for that answer on `127.0.0.1` only, on a free port it picks for this sign-in, for at most 10 minutes, and
+  accept nothing there but the answer; it is not an S-003 listener and carries no operations. A team member on another
+  machine forwards that port, as the manual explains (REQ-025). If no answer arrives in time, the account stays
+  `needs_sign_in`.
 - `microsoft_app`: app-only access with the team's client ID, tenant ID and client secret, granted to the mailbox by
   the organisation's Microsoft 365 administrator. No person signs in.
 
 The daemon SHALL refresh OAuth access tokens before they expire, with nobody present, and SHALL keep the newest refresh
 token each refresh returns (REQ-020). When a provider refuses the refresh token, or no sign-in has happened yet, the
-account SHALL turn `needs_sign_in` (REQ-005). `mail.accounts.signin` SHALL be refused `invalid_input` for `password`
-and `password_command` accounts.
+account SHALL turn `needs_sign_in` (REQ-005). `mail.accounts.signin` SHALL be refused `invalid_input` for `password`,
+`password_command` and `microsoft_app` accounts; `mail.accounts.test` checks a `microsoft_app` account's access.
 
 #### AC-004.1 — Device code sign-in
 
@@ -479,7 +496,8 @@ or slow another's.
 For each owned account, the daemon SHALL take in every email that arrives in its inbox after the account's first
 successful connection, or after a change that starts it afresh (REQ-003). Each such email SHALL either reach the open
 job of its thread (REQ-009) or become exactly one new triage job (REQ-007). Intake SHALL NOT filter on sender, content,
-headers or auto-reply markers.
+headers or auto-reply markers. Each such email is a team member's request through the `email` way in, since reaching the
+address makes a team member (ADR-002 decision 1); it is not an event (S-007 REQ-014).
 
 Mail already in the inbox at the first successful connection, and mail in any other folder, SHALL NOT become a job.
 Intake SHALL NOT move, flag or delete the email on the server; agents sort it with the mail tools. A monitored account
@@ -525,22 +543,23 @@ SHALL still become a job.
 
 ### REQ-008 — The triage job
 
-A triage job's definition of done SHALL be that a decision has been taken about the email. The shipped triage
-instructions (REQ-019) direct its lead to take one of these:
+The shipped triage instructions (REQ-019) SHALL direct a triage job's lead, as its first duty (S-004 REQ-008), to write
+the job's definition of done as "a decision is taken about this email", and then to take one of these decisions:
 
 - **Discard** (spam, auto-replies, delivery failures and the like): complete the job with a justification saying why.
 - **Information only:** record what matters, relate the job to others where useful, and complete it.
 - **Request:** set the request mark, rewrite the title, description and definition of done (S-004 REQ-004), and hand
   the job off to the role that should do the work (S-001 REQ-006). The job stays one job with one thread.
-- **Missing information:** block the job with its question (REQ-014).
+- **Missing information:** block the job with its question and a mail text for the sender (REQ-014).
 
-The request mark SHALL be settable and clearable only by the lead of a job that came by email, through the mark request
-tool, until the job is Done; `jobs.get` and the Job page show it. Team members add triage rules for their own topics as
-instructions and skills of the triage role (S-008); this spec adds no rule engine.
+The mark request tool SHALL be a job tool (amending S-004's job tools and REQ-013), offered to the lead of a job that
+came by email whatever its role's tool set, and refused for any other agent or job. It sets or clears the request mark
+until the job is Done; `jobs.get` and the Job page show the mark. Team members add triage rules for their own topics
+as instructions and skills of the triage role (S-008); this spec adds no rule engine.
 
 #### AC-008.1 — The mark only on email jobs
 
-- **Given:** a triage job `E-3` and a command-line job `C-4`, each with a lead whose role names `mail`
+- **Given:** a triage job `E-3` whose lead's role names no `mail`, and a command-line job `C-4`
 - **When:** each lead calls mark request, and then an invoked `gp` agent in `E-3` calls it
 - **Then:** `E-3` is marked, and the calls in `C-4` and from the invoked agent are refused with a reason
 
@@ -550,8 +569,9 @@ instructions and skills of the triage role (S-008); this spec adds no rule engin
 
 - **Given:** the shipped `triage` role on a real low-cost model and an owned account
 - **When:** a request, a newsletter and an out-of-office reply arrive
-- **Then:** the request is marked and handed off with a rewritten definition of done; the other two are completed with
-  a justification; only the request gets a reply, after its job is completed
+- **Then:** each job's definition of done was written by its lead; the request is marked and handed off with a
+  rewritten definition of done; the other two are completed with a justification; only the request gets a reply,
+  after its job is completed
 
 **Verification:** test — a live check over the pi agent login (`npm run test:live`).
 
@@ -562,8 +582,8 @@ every email received into it, and every email The Intern sends from it, by itsel
 arriving in an owned inbox whose `In-Reply-To` or `References` names a recorded `Message-ID` SHALL be saved as in
 REQ-007 and then:
 
-- when the job isn't Done, reach the job's lead conversation as input from the sender, with way in `email` (ADR-004),
-  which resumes a Blocked job (S-004 REQ-006)
+- when the job isn't Done, reach the job's lead conversation as a follow-up from the sender, with way in `email`
+  (S-001 REQ-020, ADR-004), which resumes a Blocked job (S-004 REQ-006)
 - when the job is Done, become a new triage job related to it (S-004 REQ-009)
 
 An email that names no recorded `Message-ID` SHALL become a new triage job. Linking SHALL use only these headers and
@@ -618,7 +638,8 @@ ruling).
 ### REQ-011 — The mail tools
 
 A role SHALL be able to name `mail` in its tool set (amending S-001 REQ-003), and an agent of such a role SHALL be
-offered the mail tools of Interfaces in a job's conversation. The front desk SHALL NOT be offered them. Every tool
+offered the mail tools of Interfaces in a job's conversation. The front desk SHALL NOT be offered them. The mark
+request tool is a job tool (REQ-008), not one of them. Every tool
 names an account and SHALL be refused with a reason for an unknown account, an account that isn't `ready`, a folder
 that doesn't exist, or a file it can't read. In addition:
 
@@ -677,7 +698,10 @@ the account, the recipients that weren't allowed and the subject (REQ-013).
 ### REQ-013 — The notice address
 
 The notice settings SHALL name one address and one owned account with an SMTP host to send from; `mail.notices.set`
-SHALL refuse any other account `invalid_input`. The notice address SHALL receive:
+SHALL refuse any other account `invalid_input`. The notice address SHALL NOT be the address of any owned account:
+`mail.notices.set`, `mail.accounts.create`, `mail.accounts.change` and loading the configuration file SHALL refuse
+that pairing `invalid_input`, because the notice mail would land in an owned inbox and feed a job. The notice address
+SHALL receive:
 
 - a held-back notice for each email the allowlist holds back (REQ-012)
 - the blocked question of any job that has no allowed email sender to ask (REQ-014), in a thread of its own for that
@@ -689,72 +713,106 @@ history, on the Job page and in `bob`.
 #### AC-013.1 — A command-line job's question
 
 - **Given:** a notice address `ops@example.com` sent from `intern`, and a job `C-7` created from the command line
-- **When:** `C-7` blocks, and `ops@example.com` replies to the question
-- **Then:** the question went to `ops@example.com` from `intern`, and the reply resumed `C-7` as input from
+- **When:** `C-7`'s lead blocks it with a mail text, and `ops@example.com` replies to the question
+- **Then:** the mail text went to `ops@example.com` from `intern`, and the reply resumed `C-7` as input from
   `ops@example.com`
 
 **Verification:** test — a service test against the fake mail server.
 
+#### AC-013.2 — A notice address that is an owned inbox
+
+- **Given:** an owned account `intern@example.com`
+- **When:** a team member sets the notice address to `intern@example.com`, and a hand edit does the same before a
+  restart
+- **Then:** the call is refused `invalid_input`, and the start stops with an error naming the key
+
+**Verification:** test — a service test of the account operations.
+
 ### REQ-014 — The blocked question by email
 
-Each time a job blocks, by its lead or by the daemon (S-004 REQ-006, REQ-008), the daemon SHALL send the Blocked
-reason as a question:
+When a lead blocks its job (S-004 REQ-006) and the question can be mailed, the block job tool SHALL require a mail
+text, and the daemon SHALL send that mail text:
 
 - to the job's sender, as a reply in the job thread, from the account the job came through, when the job came by email,
   the account can send, and the allowlist allows the sender
 - otherwise, to the notice address, from the notice account, in a thread of its own for the job, when one is set
 
-Its subject SHALL be the subject of the email that started the job, or the job's title for a job that didn't come by
-email. A reply resumes the job (REQ-009). The question SHALL wait on the Job page and in `bob` whether or not it was
-mailed.
+The question can be mailed when one of these two destinations exists. A mail text equal to the last one mailed for the
+job SHALL NOT be mailed again, so an auto-reply that resumes the job can't start a loop. A block the daemon makes
+itself (S-004 REQ-008) SHALL NOT be mailed. The subject SHALL be the subject of the email that started the job, or the
+job's title for a job that didn't come by email. A reply resumes the job (REQ-009). The Blocked reason SHALL wait on
+the Job page and in `bob` whether or not a question was mailed.
 
 #### AC-014.1 — To the sender
 
 - **Given:** a triage job from `ana@example.com` through `intern`, with `ana@example.com` allowed
-- **When:** its lead blocks it with "Which server do you mean?"
-- **Then:** Ana receives one email, a reply in her thread with that question, and the job's history records it
+- **When:** its lead blocks it with the reason "Ana's request names no server; see C-2" and the mail text "Which
+  server do you mean?"
+- **Then:** Ana receives one email, a reply in her thread with the mail text only, and the job's history records it
 
 **Verification:** test — a service test against the fake mail server.
 
+#### AC-014.2 — No loop, no daemon blocks
+
+- **Given:** the job of AC-014.1, Blocked with its question mailed
+- **When:** an out-of-office reply resumes it and the lead blocks again with the same mail text; later the reminder rule
+  blocks it (S-004 REQ-008)
+- **Then:** no further email is sent, and both blocks are in the job's history
+
+**Verification:** test — a service test against the fake mail server.
+
+#### AC-014.3 — A mail text is required
+
+- **Given:** the job of AC-014.1
+- **When:** its lead calls block job with a reason and no mail text
+- **Then:** the call is refused with a reason, and the job stays In progress
+
+**Verification:** test — a service test with the fake model.
+
 ### REQ-015 — The result reply
 
-When a job that came by email, with the request mark set, is completed (resolution `completed`, by its lead or by a
-team member), the daemon SHALL send the completion justification to the job's sender as a reply in the job thread,
-from the account the job came through, when that account can send and the allowlist allows the sender. A job without
-the mark, or a cancelled job, SHALL send nothing.
+When a job that came by email, with the request mark set, is completed (resolution `completed`), the daemon SHALL send
+the completion's mail text to the job's sender as a reply in the job thread, from the account the job came through,
+when that account can send and the allowlist allows the sender. The complete job tool SHALL require a mail text for a
+job with the mark. A team member's `jobs.complete` MAY give one; without it, no reply is sent and the history says so.
+A job without the mark, or a cancelled job, SHALL send nothing. The justification is never mailed.
 
 #### AC-015.1 — Only a completed request answers
 
-- **Given:** three triage jobs from allowed senders: one marked and completed, one unmarked and completed, one marked
-  and cancelled by a team member
+- **Given:** three triage jobs from allowed senders: one marked and completed with a mail text, one unmarked and
+  completed, one marked and cancelled by a team member
 - **When:** each reaches Done
-- **Then:** only the first sender receives a reply, in their thread, with the justification
+- **Then:** only the first sender receives a reply, in their thread, with the mail text and not the justification
 
 **Verification:** test — a service test against the fake mail server.
 
 ### REQ-016 — No internals in mail
 
-Mail The Intern composes by itself (the blocked question, the result reply and the held-back notice) SHALL contain no
-short number, job, conversation or request ID, role name, tool name or path of saved mail, in its subject, body or
-headers, and SHALL carry no header beyond the standard ones. Its `Message-ID` SHALL reveal none of them. The Blocked
-reasons the daemon itself writes (S-004 REQ-008) SHALL also be free of them.
+What the daemon itself puts in an email (the subject when it isn't the original email's, the headers, the
+`Message-ID`, the held-back notice) SHALL contain no short number, job, conversation or request ID, role name, tool
+name or path of saved mail, and the daemon SHALL add no header beyond the standard ones. The daemon SHALL never mail a
+Blocked reason or completion justification, which are written for the team; only a lead's mail text is mailed (REQ-014,
+REQ-015).
 
-The shipped common prompt and triage instructions (REQ-019) SHALL tell agents that mail they write shows none of these
-unless the person they write to asked for one.
+The shipped common prompt and triage instructions (REQ-019) SHALL tell agents that mail texts and mail they send show
+none of these unless the person they write to asked for one.
 
-#### AC-016.1 — Composed mail is clean
+#### AC-016.1 — What the daemon adds is clean
 
-- **Given:** every email the service tests of this spec cause The Intern to compose
+- **Given:** every email the service tests of this spec cause The Intern to send, with leads whose reasons and
+  justifications hold short numbers and paths
 - **When:** a check scans subjects, bodies and headers
-- **Then:** none holds a short number, a job, conversation or request ID, a role or tool name, or a saved-mail path
+- **Then:** no email holds a reason or justification, and nothing the daemon added holds a short number, an ID, a role
+  or tool name, or a saved-mail path
 
-**Verification:** test — a check run over the composed mail of the service tests.
+**Verification:** test — a check run over the sent mail of the service tests.
 
 #### AC-016.2 — Agent-written mail
 
 - **Given:** the shipped instructions on a real low-cost model
-- **When:** a request job is worked and its agent writes to the sender with the send tool
-- **Then:** the email names no job number or internal name
+- **When:** a request job is worked, blocked with a question and completed, and its agent writes to the sender with the
+  send tool
+- **Then:** no mail text or sent email names a job number or internal name
 
 **Verification:** test — a live check over the pi agent login (`npm run test:live`).
 
@@ -796,11 +854,12 @@ thread and the request mark.
 
 ### REQ-019 — The shipped `triage` role
 
-The Intern SHALL ship a `triage` role (amending S-001 REQ-001 and S-008 REQ-001), whose tool set is `read` and `mail`
-and whose instructions direct the agent to:
+The Intern SHALL ship a `triage` role (amending S-001 REQ-001 and S-008 REQ-001), whose tool set is `read` and `mail`,
+whose default skills are `about-the-intern`, and whose instructions direct the agent to:
 
-- read the saved email and its attachments
+- write the definition of done as its first duty, read the saved email and its attachments
 - take one of the decisions of REQ-008, and set the request mark only when the email asks The Intern for something
+- write mail texts for the person who will read them
 - for a request, rewrite the job so that its definition of done states the work, and hand off to a suitable role
 - show no internals in any mail it writes (REQ-016)
 - follow the team's own triage instructions and skills
@@ -841,10 +900,10 @@ The service account can read that store, as it can read every credential it acts
 ### REQ-021 — No email lost or doubled
 
 Every email that arrives in an owned inbox after the account's starting point SHALL be taken in exactly once, whatever
-crashes, restarts, server outages or sign-in pauses happen in between. The account and the email's place in the inbox
-SHALL identify it (S-002 REQ-013). The email stays on the server, so intake that was interrupted resumes at the next
-connection. If the server renumbers the inbox, so that old and new mail can no longer be told apart, the daemon SHALL
-take in none of the mail present at that moment, and the account's last error SHALL say so.
+crashes, restarts, server outages or sign-in pauses happen in between. The email stays on the server, so intake that
+was interrupted resumes at the next connection. If the server can no longer tell old mail from new, the daemon SHALL
+take in none of the mail present at that moment, and the account's last error SHALL say so. The record this needs
+amends ADR-001 decision 4 and S-004 REQ-018 (Assumptions and Dependencies).
 
 #### AC-021.1 — Kill and restart
 
@@ -857,14 +916,24 @@ take in none of the mail present at that moment, and the account's last error SH
 
 ### REQ-022 — Sending at most once
 
-Each email The Intern sends SHALL go out at most once. When a crash leaves it unknown whether an email went out, the
-daemon SHALL NOT send it again, and SHALL record in the job's history that it may not have gone out.
+Each email The Intern sends SHALL go out at most once. A blocked question or result reply SHALL be recorded as owed in
+the same step as the job change that causes it, so a crash between the two leaves neither. After a restart, an owed
+email whose sending never began SHALL be sent. When a crash leaves it unknown whether an email that began sending went
+out, the daemon SHALL NOT send it again, and SHALL record in the job's history that it may not have gone out.
 
 #### AC-022.1 — A crash while sending
 
 - **Given:** a request job being completed, its result reply in flight
 - **When:** the daemon is killed before the server's answer is recorded, and restarted
 - **Then:** the fake server received the reply at most once, and the job's history says it may not have gone out
+
+**Verification:** test — a service test that kills the daemon.
+
+#### AC-022.2 — A crash before sending began
+
+- **Given:** a request job whose completion is written
+- **When:** the daemon is killed before it begins sending the result reply, and restarted
+- **Then:** the fake server receives the reply exactly once
 
 **Verification:** test — a service test that kills the daemon.
 
@@ -883,14 +952,14 @@ account's check interval of its arrival, or within 10 seconds when the server an
 
 ### REQ-024 — Saved mail travels with the export
 
-`jobs.export` SHALL include every saved message and attachment, and `bob import` SHALL restore them with their jobs,
-amending S-004 REQ-016. The configuration file and the secrets store stay out of the export, so after an import on
-another machine the accounts must be set up and signed in again.
+The export SHALL stay the one file S-004 REQ-016 and S-003 REQ-016 define, and SHALL carry every saved message and
+attachment; `bob import` SHALL restore them with their jobs (S-004 REQ-017). The configuration file and the secrets
+store stay out of the export, so after an import on another machine the accounts must be set up and signed in again.
 
 #### AC-024.1 — Export and import
 
 - **Given:** an instance with a triage job and its saved PDF
-- **When:** it is exported and imported into an empty instance
+- **When:** it is exported to one file and imported into an empty instance
 - **Then:** the job's lead in the imported instance reads the PDF, identical
 
 **Verification:** test — a service test.
@@ -951,17 +1020,40 @@ The command reference SHALL match `bob mail --help`.
   states; the rules of REQ-010 bind The Intern's own paths, and a role with `bash` acts with the service account's
   access.
 - **Amendments this planning branch carries,** to be approved with this spec at Gate 1:
-  - S-000 v0.8: Email may read, sort and draft in monitored mailboxes, in place of "does not read or triage team
-    members' own mailboxes"; the notice address and the triage job; use case 6 and the Test harness question on email.
-  - S-001: the shipped `triage` role (REQ-001, REQ-002) and `mail` in a role's tool set (REQ-003).
-  - S-002 REQ-018 and ADR-002 decision 5: the instance keeps mail secrets in its owner-only secrets store (REQ-020).
-  - S-004: the email origin names the account (REQ-003); the request mark and the email details in `jobs.get`; the
-    account filter of `jobs.list`; the history entries for email (REQ-011); the export carries saved mail (REQ-016).
-  - S-005: `mail` leaves the reserved groups.
-  - S-006: the Mail page and the email section of the Job page.
-  - S-008 REQ-001: the shipped `triage` instructions.
-  - ADR-004: how an email in a job thread is placed as input with its sender.
-  - `docs/system_overview.html`: Email in the spec map.
+  - S-000 v0.9: Users ("its email address" becomes any number of owned addresses); Email's Responsibility (any number
+    of owned accounts and monitored ones, in place of "The Intern's own mailbox"), Boundary (it may read, sort and
+    draft in monitored mailboxes, in place of "does not read or triage team members' own mailboxes") and Works with
+    (Command line, Web interface, Skills and instructions); Command line's and Web interface's Responsibility and
+    Works with (managing mail accounts, Email); use case 6, the notice address and the triage job.
+  - S-001: the shipped `triage` role (REQ-001, REQ-002, AC-001.1's "exactly `bob`, `gp` and `desk`"); `mail` in a
+    role's tool set (REQ-003); removing a role refused while an owned account names it as its triage role (REQ-003).
+  - S-002: REQ-018 and AC-018.1 (the instance keeps mail secrets in its owner-only secrets store); REQ-006 (the
+    directory that holds that store); REQ-021 and Configuration Requirements (`[mail]` and `[[mail_account]]`);
+    REQ-012 (the email origin names the account); REQ-002 step 8 (mail starts with the listeners and the scheduler);
+    the operation catalogue (the nine `mail.*` operations); the instance feed (`mail_account_status`); the status
+    operation (account status).
+  - S-003 REQ-007: `email` is a way in no listener stamps; no change to the export route, which REQ-024 keeps as one
+    file.
+  - S-004: the job fields (the request mark and the email details) and REQ-003 (the email origin names the account);
+    the job tools table and REQ-013 (mark request; `mailText` on block job and complete job); `jobs.complete`'s
+    `mailText`; the History definition and history entries (email received, sent, held back, may not have gone out);
+    `jobs.list`'s account filter; REQ-016 and REQ-017 (the export and import carry saved mail); REQ-018 (owed mail and
+    the intake record).
+  - S-005: `mail` leaves the reserved groups (Definitions, Users, Exclusions "Commands for later components", the
+    conventions' reserved groups); Interfaces rows for `bob mail` and `bob jobs list --mail`; `bob jobs show` prints a
+    job's email details and request mark.
+  - S-006: REQ-003, the Job page's email section; the Users row of later specs adds Email.
+  - S-007 REQ-014: an email to an owned account is a team member's request through the `email` way in, not an event.
+  - S-008 REQ-001: the shipped `triage` instructions and default skills; the common prompt covers mail texts and
+    mail without internals; `bob-command-line` teaches `bob mail` (AC-001.2).
+  - ADR-001 decision 4: the intake record, retries, job threads, owed mail and sends are new kinds of facts and a new
+    pairing of a job write.
+  - ADR-002: decision 1 (owned addresses only are a way in), decision 5, Consequences and Alternatives (the instance
+    keeps mail secrets); `docs/development/coding_guidelines.md` ("No credentials in the repository, state directory,
+    database or logs").
+  - ADR-004: the request id of an email follow-up (decision 3) and its place in decision 5's list.
+  - `docs/system_overview.html`: the spec map, the Ways in line, the Email boxes, the `email` value of Way in, and the
+    terms owned account, monitored account, triage job, request mark, mail text and notice address.
 
 ## Success Criteria
 
@@ -1000,9 +1092,9 @@ The command reference SHALL match `bob mail --help`.
   has no `References` header, push moved to a separate tool still at version 0, every call opens a new connection,
   and the project's earlier use of v1.2.0 met five defects in it (B-034, B-050 to B-053, before the TypeScript
   rework). Owner: the Architect. Resolution: decided in Feature Architecture.
-- **Where saved mail and the secrets store live**, so that saved mail is in the export (REQ-024) and secrets are not
-  (REQ-020). Owner: the Architect. Resolution: decided in Feature Architecture.
-- **How an email in a job thread is placed as input**: an `intern.steer` follow-up with way in `email` or a new entry
-  kind (ADR-004 decision 5). Owner: the Architect. Resolution: decided in Feature Architecture, with ADR-004 amended.
+- **How saved mail is kept inside the one-file export (REQ-024), and where the secrets store lives (REQ-020).** Owner:
+  the Architect. Resolution: decided in Feature Architecture.
+- **The request id of an email follow-up** (ADR-004 decisions 3 and 5). Owner: the Architect. Resolution: decided in
+  Feature Architecture, with ADR-004 amended.
 
 ## Amendment Log
