@@ -2,7 +2,7 @@
 id: S-009
 title: Email
 version: '0.1'
-status: review  # draft | review | approved | superseded
+status: approved  # draft | review | approved | superseded
 created: '2026-11-17'
 author: planner
 ---
