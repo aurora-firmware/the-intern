@@ -1,7 +1,7 @@
 ---
 id: S-003
 title: Control endpoint
-version: '0.8'
+version: '0.9'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-01'
 author: planner
@@ -159,7 +159,8 @@ A client that closes the connection is unsubscribed; no `end` event can reach it
 subscription with a fresh snapshot; the listener ignores `Last-Event-ID` (S-002 REQ-014).
 
 **Contract** (way-in values recorded by S-001 attribution, REQ-007): `command line` for the local socket and
-`web interface` for the network listener. Later ways in (Email) add their own values.
+`web interface` for the network listener. No listener stamps the way in `email`: the daemon's own mail intake passes
+it in-process (S-009 REQ-006, REQ-009).
 
 ### Exposed: the client library
 
@@ -456,7 +457,9 @@ listener, so any program calling through it is recorded with that value. With th
 the caller details it observes: the network listener the remote address and port of the TCP peer, never taken from
 a header such as `X-Forwarded-For`, and the local socket none beyond the way in. Nothing in the request can change the
 caller or these details, and a job created through a listener (`jobs.create`) records a request with that way in and
-those details as its origin (S-002 AC-012.5; S-004 REQ-003).
+those details as its origin (S-002 AC-012.5; S-004 REQ-003). The way in `email` belongs to no listener: no listener
+stamps it, and nothing in a request through a listener can claim it. The daemon's own mail intake passes it
+in-process, with the details Email observes (S-009 REQ-006, REQ-007, REQ-009).
 
 #### AC-007.1 — Attribution per listener
 
@@ -868,3 +871,4 @@ None affect the specified behaviour.
 | 2026-11-07 | v0.7. Users: triggers leave the wording. No behaviour change. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
 | 2026-11-16 | v0.8. AC-011.1 drops its timing clause, "the run finishes in the same time bound as with no subscriber": its client never reads, and the run finishes while that client still has read nothing, with the same entries as a run with no subscriber. New AC-011.2, verified by inspection (design review): no run waits on a client's connection; deltas a client has not read wait in the feed without holding the run, at most 1000 per stream as REQ-011 counts them (S-002 REQ-015), and past that the stream is ended with `lagging`. Its review covers the commit observation, the observation feed, the HTTP front and the listener's feed stream. New AC-011.3, verified by test: with a client that never reads, a run of fewer than 1000 deltas that fills the connection's socket buffers finishes while the stream is still open and unread, so "no delay" is tested without timing. REQ-011 is unchanged. Success Criteria 1 counts the scenarios verified by test, since AC-009.3, AC-011.2, AC-013.1 and AC-014.2 are inspections. No identifier retired. | Product owner decision of 2026-11-16: the timing clause can't be tested reliably, because the test compares two wall-clock measurements taken at different moments on a shared machine (B-042), and tests must be deterministic. S-003 v0.8 architecture consistency review: the first wording of AC-011.2 placed the unread deltas in a listener buffer, which conversation and instance streams don't have. | B-042, whose fix implements the tests of AC-011.1 and AC-011.3 |
 | 2026-11-16 | spec-truth reconciliation — PASS | v0.8 REQ-011 confirmed: AC-011.1 and AC-011.3 tested without timing (B-042, 2a6f036e); AC-011.2 inspection passed: commit observation and feed only queue, the listener pulls after drain, lagging past 1000 per stream and across a shared stream | none |
+| 2026-11-18 | v0.9. Email (S-009). REQ-007 and the way-in Contract in Interfaces: `email` is a way in that no listener stamps and no request through a listener can claim; the daemon's own mail intake passes it in-process, in place of "Later ways in (Email) add their own values". The export route (REQ-016) is unchanged: S-009 REQ-024 keeps the export one file. No identifier added or retired. | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18 | S-009's tasks |

@@ -1,6 +1,6 @@
 ---
 title: Daemon and host runtime
-version: '0.16'
+version: '0.17'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-16'
 author: planner
@@ -30,7 +30,7 @@ This spec uses S-001's Definitions. It adds these terms:
 | Instance | One daemon together with its state directory. Two instances share nothing. A second instance with its own state directory is the only hard wall between sets of conversations. |
 | Service layer | The set of service operations. It is the only way for clients and job sources to read or change the daemon's state. |
 | Service operation | One named capability of the daemon, such as "submit input" or "reset a conversation". It is either a **read** operation (it observes) or a **control** operation (it changes state or starts work). |
-| Caller | Whatever invokes a service operation: a client through a listener, a job source (a schedule fire, email) or an agent tool. The caller states the actor that S-001 attribution records. |
+| Caller | Whatever invokes a service operation: a client through a listener, a job source (a schedule fire), Email's intake passing a team member's request through the `email` way in (S-009), or an agent tool. The caller states the actor that S-001 attribution records. |
 | Listener | A transport that exposes service operations to clients. Listeners belong to S-000's Intern service and are defined in the control-endpoint spec (S-003), not here. |
 | Client | A separate program that uses the daemon through a listener: the `bob` commands and the web interface in a team member's browser. A client holds no work. |
 | Observation feed | The stream of changes the daemon publishes for a scope (the whole instance or one conversation). A subscription gets a snapshot, then deltas. |
@@ -70,7 +70,8 @@ Journeys, in priority order:
    Delivered by REQ-014, REQ-015.
 6. **The team changes settings while it runs.** Role and workspace settings change through operations, are written to
    the file and apply at once. Delivered by REQ-022.
-7. **The service account's credentials are used in place.** Delivered by REQ-018, REQ-019, REQ-020.
+7. **The service account's credentials are used in place,** except the mail secrets the instance keeps for S-009.
+   Delivered by REQ-018, REQ-019, REQ-020.
 
 ## Exclusions
 
@@ -123,7 +124,7 @@ failed (REQ-013). **Contract** (operation names and kinds):
 
 | Operation | Kind | Purpose |
 |---|---|---|
-| `daemon.status` | read | Phase, versions, start time, instance directories, worker threads in use and waiting (REQ-003, REQ-011, REQ-020) |
+| `daemon.status` | read | Phase, versions, start time, instance directories, worker threads in use and waiting, and each mail account's status (REQ-003, REQ-011, REQ-020; S-009 REQ-005) |
 | `conversations.list`, `conversations.get` | read | Conversations with seat, enabled set, origin, status, depth and invocation links; the list marks the front desk (REQ-012; S-001 REQ-016, REQ-021; S-008 REQ-006) |
 | `desk.get` | read | The front desk's conversation id and seat (REQ-012; S-001 REQ-021) |
 | `conversations.invocations` | read | The conversations a conversation invoked, recursively (S-001 REQ-016) |
@@ -158,6 +159,11 @@ failed (REQ-013). **Contract** (operation names and kinds):
 | `instructions.restore` | control | Restore the common prompt or a shipped role's instructions (S-008 REQ-003) |
 | `files.read` | read | The text of a skill file or an instruction file, with a version token (S-008 REQ-010) |
 | `files.write` | control | Replace the text of a skill file or an instruction file (S-008 REQ-010) |
+| `mail.accounts.list`, `mail.accounts.get` | read | Mail accounts with their settings, status, last error and last check (S-009 REQ-005) |
+| `mail.accounts.create`, `mail.accounts.change`, `mail.accounts.remove` | control | Mail account settings (S-009 REQ-001, REQ-003; REQ-022) |
+| `mail.accounts.signin`, `mail.accounts.test` | control | Sign in a mail account, or test its connections (S-009 REQ-003, REQ-004) |
+| `mail.notices.get` | read | The notice address and its sending account (S-009 REQ-013) |
+| `mail.notices.set` | control | The notice settings (S-009 REQ-013; REQ-022) |
 
 The tests register `test.createConversation` and `test.failStorage` (`test/support/test_operations.ts`); they are not
 part of the product's catalogue.
@@ -168,11 +174,11 @@ A subscription names the scope `instance` or one conversation. Each delivers a s
 sequence numbers in commit order, and ends with a reason (`lagging`, `unsubscribed`, `stopped`) (REQ-014, REQ-015). The
 instance scope carries every conversation with its job, lead flag, seat, status and the worker threads, and the
 deltas `conversation_created`, `run_started`, `run_finished`, `seat_changed`, `status_changed`, `admission_changed`,
-`settings_changed`, and S-008's `skills_changed` and `files_changed`; its snapshot gives each conversation's enabled
-set beside its seat (S-008 Interfaces). A seat change is followed by a `skills_changed` delta with the new role's
-defaults (S-008 REQ-006). It also carries S-007's schedule fire skipped delta, the jobs that aren't Done
-and S-004's job deltas, each published after its job store commit and numbered in the same sequence (S-004 REQ-015).
-The conversation scope carries its live view and entries.
+`settings_changed`, S-008's `skills_changed` and `files_changed`, and S-009's `mail_account_status`; its snapshot
+gives each conversation's enabled set beside its seat (S-008 Interfaces). A seat change is followed by a
+`skills_changed` delta with the new role's defaults (S-008 REQ-006). It also carries S-007's schedule fire skipped
+delta, the jobs that aren't Done and S-004's job deltas, each published after its job store commit and numbered in
+the same sequence (S-004 REQ-015). The conversation scope carries its live view and entries.
 
 ### Consumed
 
@@ -213,7 +219,8 @@ Restore admission order, apply the job repair rules (S-004 REQ-018), resume     
   unfinished work (held worker threads first, then the queue), then submit the
   input those rules owe (S-004 REQ-018)
   ↓
-Start listeners and scheduler → status "ready"                                  REQ-003
+Remove the mail secrets of accounts the file no longer holds; start listeners,  REQ-003,
+  scheduler and mail intake → status "ready"                                    S-009 REQ-002
 ```
 
 Input from any caller, through to the observation feed:
@@ -274,7 +281,8 @@ cause:
 6. ensure the per-role default workspaces (S-001 REQ-003) and the front desk (S-001 REQ-021)
 7. restore admission (REQ-010), apply the job repair rules (S-004 REQ-018), resume unfinished work, then submit the
    input those rules owe (S-004 REQ-018)
-8. start the components that start after work resumes (listeners, scheduler), then report ready
+8. remove the mail secrets of every account the configuration file no longer holds (S-009 REQ-002), start the
+   components that start after work resumes (listeners, scheduler, mail intake), then report ready
 
 #### AC-002.1 — The steps run in order
 
@@ -402,7 +410,9 @@ The daemon SHALL use four directories, resolved from the XDG base directories, e
 
 Each can be overridden by a command-line flag (REQ-021). A missing directory is created owner-only (mode 0700). An
 existing one that isn't a directory, isn't owned by the service account, or is accessible to the group or others
-stops startup with an error naming the path and the reason. The database file is owner-only.
+stops startup with an error naming the path and the reason. The database file is owner-only. The instance
+directories also hold the mail secrets store (S-009 REQ-002): its directory is owner-only like the others, and its
+files are owner-only like the database file.
 
 #### AC-006.1 — Resolution
 
@@ -526,6 +536,9 @@ names):
 - Skills and instructions: the `skills.*`, `instructions.*` and `files.*` operations of S-008, read and control as
   Interfaces marks them. Those that change the configuration file (a role's default skills, the skill search paths)
   follow REQ-022.
+- Mail: the `mail.*` operations of S-009, read and control as Interfaces marks them. Those that change the
+  configuration file (mail accounts, the notice settings) follow REQ-022, and none returns a secret (S-009 REQ-020).
+  The status operation reports each mail account's status (S-009 REQ-005).
 
 A submit to a conversation parked for reports holds the message until the conversation continues (S-001 REQ-020),
 whatever its busy mode, and returns `{ held: true }` with no submission id. A submit to a job's lead conversation
@@ -549,10 +562,9 @@ agent: a team member's call records a request with the caller's way in, an agent
 records a follow-up of the agent's own conversation, the front desk's call records a request with the way in of the
 team member's input it answers and the front desk in its origin details (S-004 REQ-021), and only a job source (a
 schedule fire, or a run on demand, S-007 REQ-008) states its own origin details. A team member's request records the
-details its way in
-observes, which the caller carries: the remote address and port for the network listener, the message ID and sender
-for Email. A call from a team member or an agent whose input names an origin is refused as `invalid_input` (S-004
-Interfaces, `jobs.create`).
+details its way in observes, which the caller carries: the remote address and port for the network listener, and the
+message ID, the sender and the account name, which Email observes (S-009 REQ-007). A call from a team member or an
+agent whose input names an origin is refused as `invalid_input` (S-004 Interfaces, `jobs.create`).
 
 #### AC-012.1 — Every operation is callable in-process
 
@@ -666,10 +678,10 @@ operation test in `test/service/`.
 
 A subscription SHALL name a scope: the instance (conversations with seat, enabled set, status and admission state,
 plus started and finished events, S-007's schedule fire skipped delta, S-008's `skills_changed` and `files_changed`
-deltas, and S-004's jobs and job deltas, each published after its job store commit and numbered in the same
-sequence), or one conversation (its live view, events and queued input). It first gets a snapshot, then deltas
-in commit order. A new subscription never replays earlier deltas. A subscriber that reconnects starts from a
-fresh snapshot.
+deltas, S-009's `mail_account_status` delta, and S-004's jobs and job deltas, each published after its job store
+commit and numbered in the same sequence), or one conversation (its live view, events and queued input). It first
+gets a snapshot, then deltas in commit order. A new subscription never replays earlier deltas. A subscriber that
+reconnects starts from a fresh snapshot.
 
 #### AC-014.1 — Conversation scope
 
@@ -758,9 +770,10 @@ Each setting SHALL have one source:
 
 - the configuration file in the config directory holds the settings of S-001 (the team's roles, the changes to
   the shipped roles' settings other than their instructions, and the registered workspaces) and the sections later
-  specs add, such as S-003's `[network]`, S-007's `[[schedule]]` and S-008's `[skills]`. A role's instructions are
-  its instruction file in the internal folder, not a key of this file (S-008 REQ-007); the older `instructions` key
-  and skill paths are read as S-008 REQ-011 states
+  specs add, such as S-003's `[network]`, S-007's `[[schedule]]`, S-008's `[skills]`, and S-009's `[mail]` and
+  `[[mail_account]]`. A role's instructions are its instruction file in the internal folder, not a key of this file
+  (S-008 REQ-007); the older `instructions` key and skill paths are read as S-008 REQ-011 states. Mail secrets are
+  never keys of this file (S-009 REQ-002)
 - command-line flags set the instance directories (REQ-006)
 - the environment sets the pi agent folder, as for pi agent itself
 
@@ -933,14 +946,17 @@ Models and their credentials MUST come from the service account's pi agent login
 The daemon writes nothing into pi agent's agent folder except token refreshes made by the login itself, under pi
 agent's own lock, so a person's pi under the same account and the daemon never log each other out. Every other
 credential the-intern acts with (mail, wiki, repositories, other hosts) is the service account's, in that account's
-usual places. No credential is copied into the instance's directories or the database.
+usual places, with one exception: the instance keeps the mail passwords and client secrets a team member gives it,
+and the OAuth tokens it obtains, in its owner-only mail secrets store (S-009 REQ-002, REQ-020). No other credential
+is copied into the instance's directories, and no credential is kept in the database or anywhere else.
 
 #### AC-018.1 — The pi agent folder is untouched
 
 - **Given:** an isolated pi agent folder with credentials
 - **When:** a daemon runs and is stopped
 - **Then:** every file in the folder is byte-identical apart from the login's own token file, no `auth.json` is created
-  where there was none, and no credential string appears in the instance directories or the database
+  where there was none, and no credential string appears in the database, or in the instance directories outside
+  the mail secrets store (S-009 REQ-020)
 
 **Verification:** test — `test/service/credentials.test.ts`, `test/unit/model_runtime.test.ts`.
 
@@ -949,8 +965,8 @@ usual places. No credential is copied into the instance's directories or the dat
 - **Configuration file.**
   - **What:** the S-001 settings: the team's roles, the changes to the shipped roles' settings other than their
     instructions, and the registered workspaces. Later specs add their sections and say which of their settings
-    change at runtime, such as S-008's `[skills]`. Role instructions are files in the internal folder (S-008
-    REQ-002, REQ-007).
+    change at runtime, such as S-008's `[skills]`, and S-009's `[mail]` and `[[mail_account]]`, which hold no
+    secret (S-009 REQ-002). Role instructions are files in the internal folder (S-008 REQ-002, REQ-007).
   - **Where:** a TOML file in the config directory (REQ-006). Written by hand, or by the settings operations
     (REQ-022).
   - **Constraints:** a trusted, owner-only input. Unknown keys are refused.
@@ -1059,3 +1075,4 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-07 | v0.15. Triggers leave the job sources (Purpose, Definitions, Users, Exclusions, REQ-012, AC-012.5). REQ-021: the configuration file holds S-007's schedule entries. Interfaces and REQ-012: the `schedules.*` operations. Interfaces and REQ-014: the schedule fire skipped delta. REQ-002, Workflow, AC-002.2 and Configuration: the startup model check covers roles, and an entry's model is checked at a fire. REQ-022: unregistering a workspace an entry names is refused. REQ-012: a run on demand states its origin. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
 | 2026-11-13 | v0.16. Skills and instructions (S-008). REQ-006: the data directory also holds the internal folder of instruction files and shipped skills. REQ-021 and Configuration Requirements, Configuration file: the file holds the shipped roles' changed settings other than their instructions, and S-008's `[skills]` section; instructions are files, and the older `instructions` key and skill paths are read as S-008 REQ-011 states. REQ-002, AC-002.1, AC-002.2 and Workflow: step 1 checks the `[skills]` table, its search paths and the older keys; step 3, after single ownership, seeds and upgrades the internal folder and converts the older keys; the step numbers stay. Interfaces and REQ-012: the catalogue adds `skills.list`, `skills.enable`, `skills.disable`, `skills.paths.list`, `skills.paths.add`, `skills.paths.remove`, `skills.restore`, `instructions.list`, `instructions.restore`, `files.read` and `files.write`; `roles.list` returns instructions with a version token and default skills as names; `conversations.get` and `conversations.list` return the enabled set. Interfaces, the feed, REQ-014 and AC-014.2: the instance snapshot carries each enabled set, and the new deltas `skills_changed` and `files_changed`. REQ-022 and AC-022.3: a role's tools, default skills, model, thinking level and workspace still apply only to agents seated afterwards, while an instructions edit reaches running agents from their next model request, and a role's instruction file is guarded by its version token. Assumptions name S-008. No identifier added or retired. The feed: a seat change is followed by a `skills_changed` delta with the new defaults. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, findings B1, B3 to B5, C1 and C2. S-002 owns the catalogue, the feed and startup. | S-008's tasks |
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.16 confirmed: startup steps 1 and 3, the eleven S-008 operations, enabled sets in reads and the snapshot, skills_changed and files_changed (T-331 to T-335, T-355 to T-364) | none |
+| 2026-11-18 | v0.17. Email (S-009). REQ-018 and AC-018.1: credentials are used in place, except that the instance keeps the mail passwords and client secrets a team member gives it, and the OAuth tokens it obtains, in its owner-only mail secrets store, never in the database or anywhere else; AC-018.1 allows credential strings in that store only. REQ-006: the instance directories hold the secrets store, in an owner-only directory, with owner-only files. REQ-021 and Configuration Requirements, Configuration file: the file holds S-009's `[mail]` and `[[mail_account]]` sections, and no mail secret. REQ-012: the email origin holds the message ID, the sender and the account name, which Email observes. REQ-002 and Workflow: step 8 removes the mail secrets of accounts the file no longer holds, then starts the listeners, the scheduler and mail intake; the step numbers stay. Interfaces and REQ-012: the catalogue adds `mail.accounts.list`, `mail.accounts.get`, `mail.accounts.create`, `mail.accounts.change`, `mail.accounts.remove`, `mail.accounts.signin`, `mail.accounts.test`, `mail.notices.get` and `mail.notices.set`. Interfaces, the feed, and REQ-014: the instance feed adds the `mail_account_status` delta. Interfaces, `daemon.status`, and REQ-012: the status operation reports each mail account's status. No identifier added or retired. | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18 | S-009's tasks |

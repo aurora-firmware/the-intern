@@ -1,6 +1,6 @@
 ---
 title: Agent roles and conversations
-version: '0.18'
+version: '0.19'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-15'
 author: planner
@@ -123,16 +123,18 @@ What this specification explicitly does NOT cover:
   work is a new job, which a team member or an agent creates and may relate to the first (S-004 REQ-009).
 - **Approval rules for actions.** S-000 excludes per-action rules: what an agent can do is bounded by the account
   the-intern runs as and the tools its role is offered.
-- **The mailbox and schedules themselves.** Reading the-intern's own mailbox belongs to the Email spec. When schedules
-  fire, what an entry holds, its run history and when a fire is skipped belong to S-007. This spec defines only the
-  lead conversation a fire starts (REQ-013).
+- **Mail and schedules themselves.** Mail accounts, intake, the triage job and what the mail tools do belong to S-009.
+  When schedules fire, what an entry holds, its run history and when a fire is skipped belong to S-007. This spec
+  defines only the lead conversation a fire starts (REQ-013), the shipped `triage` role (REQ-001, REQ-002) and `mail`
+  as a tool a role's tool set can name (REQ-003).
 - **Command-line views and the job abort operation.** This spec delivers the read operations that monitoring needs
   (REQ-016). The command-line views built on them belong to the command-line spec. It delivers the capability that
   aborts every conversation of a job (REQ-008); the operation that aborts a job belongs to the Jobs spec.
 - **Chat beyond the front desk.** There is no root conversation and no chat per team member, per way in or per job.
   An instance has one front desk (REQ-021), with no "new chat": a reset is how a team member starts clean (REQ-024).
   Team members also follow, answer and steer jobs directly through the command line, the web interface and email.
-- **Email to the front desk.** Mail doesn't reach the front desk; the Email spec sorts mail into jobs and answers.
+- **Email to the front desk.** Mail doesn't reach the front desk; S-009 sorts mail into jobs and answers, and the
+  front desk is never offered the mail tools (REQ-022).
 - **Work in the front desk.** The front desk invokes no agents, hands off to no role, edits no files itself and is
   offered no workspace tools (REQ-022); its schedule tools act as the operations do, and its `skill` tool only reads
   its enabled skills (S-008 REQ-008). Real work always becomes a job. A team member who reseats the front desk with a
@@ -190,8 +192,9 @@ front-desk tools instead (REQ-022).
 Every agent, in a job's conversation or in the front desk, is also offered the `skill` tool, whatever its role's tool
 set names (S-008 REQ-008, which owns its contract).
 
-The tools the-intern ships for a role's tool set are `read`, `write`, `edit` and `bash`; a tool set naming anything
-else is refused (REQ-003).
+The tools the-intern ships for a role's tool set are `read`, `write`, `edit`, `bash` and `mail`; a tool set naming
+anything else is refused (REQ-003). `mail` stands for the mail tools, which S-009 REQ-011 defines and which are offered
+only in a job's conversations, never in the front desk (REQ-022).
 
 The front-desk tools (REQ-022), offered only in the front desk, except read schedule runs, which S-004 REQ-013 also
 offers in a job's conversations:
@@ -340,20 +343,21 @@ the transcript.
 
 ### REQ-001 — Shipped roles
 
-The-intern SHALL ship three roles, `bob`, `gp` and `desk`, and `bob` SHALL be the default lead role. `desk` is the
-role the front desk is created with (REQ-021). Every role, shipped or created by a team member, MUST have a name,
+The-intern SHALL ship four roles, `bob`, `gp`, `desk` and `triage`, and `bob` SHALL be the default lead role. `desk`
+is the role the front desk is created with (REQ-021), and `triage` is the default triage role of an owned mail account
+(S-009 REQ-008, REQ-019). Every role, shipped or created by a team member, MUST have a name,
 instructions, a tool set (possibly empty), default skills (possibly none, S-008 REQ-005), a default model, a default
 thinking level and a default workspace.
 
-#### AC-001.1 — The shipped roles are bob, gp and desk
+#### AC-001.1 — The shipped roles are bob, gp, desk and triage
 
 - **Given:** a daemon with no configuration file
 - **When:** the roles are listed
-- **Then:** exactly `bob`, `gp` and `desk` are listed, each valid with non-empty instructions, and `bob` is the
-  default lead
+- **Then:** exactly `bob`, `gp`, `desk` and `triage` are listed, each valid with non-empty instructions, and `bob` is
+  the default lead
 
 **Verification:** test — `test/unit/shipped_roles.test.ts`, `test/service/agents_startup.test.ts`,
-`test/service/role_operations.test.ts` ("lists the shipped roles bob, gp and desk through roles.list").
+`test/service/role_operations.test.ts` ("lists the shipped roles bob, gp, desk and triage through roles.list").
 
 ### REQ-002 — What the shipped roles are for
 
@@ -371,6 +375,13 @@ The shipped roles' instructions MUST satisfy these descriptions:
   steering to a job's conversations when a team
   member asks. Its tool set names none of the tools the-intern ships, so in the front desk it is offered only the
   front-desk tools and `skill` (REQ-022; S-008 REQ-008).
+- **`triage`** leads the triage job of an email that arrives in an owned mail account (S-009 REQ-008, REQ-019). Its
+  instructions direct the agent to write the job's definition of done as its first duty, to read the saved email and
+  its attachments, to take one of the four decisions of S-009 REQ-008 (discard, information only, request, missing
+  information), and to set the request mark only when the email asks the-intern for something. For a request, it
+  rewrites the job so that its definition of done states the work and hands the job off to a suitable role. It writes
+  mail texts for the person who will read them, showing none of the-intern's internals (S-009 REQ-016), and it follows
+  the team's own triage instructions and skills. Its tool set is `read` and `mail`.
 
 The shipped text of the instructions, the tool lists and the shipped skills' content are set during implementation and
 may change in later versions without amending this spec. S-008 REQ-001 names the shipped skills and the roles that
@@ -378,17 +389,17 @@ enable each by default.
 
 #### AC-002.1 — The shipped instructions match the descriptions
 
-- **Given:** the shipped `bob`, `gp` and `desk` instruction files and the `carry-out-a-part` skill
+- **Given:** the shipped `bob`, `gp`, `desk` and `triage` instruction files and the `carry-out-a-part` skill
 - **When:** a reviewer reads them against this requirement
 - **Then:** `bob`'s text covers defining, asking, doing, delegating and verifying; `gp`'s text and `carry-out-a-part`
   cover carrying out a part to completion and reporting back; and `desk`'s text covers answering about the work,
   turning requests for work into jobs with their number, setting up and running schedules, and passing answers and
-  steering on
+  steering on; and `triage`'s text covers what S-009 AC-019.1 lists
 
 **Verification:** inspection — the shipped instruction files and skills as the package carries them (S-008 REQ-001);
 `test/unit/shipped_roles.test.ts` checks that each shipped role's default skills are those S-008 REQ-001 names
-(`bob`: `about-the-intern` and `bob-command-line`; `gp`: `carry-out-a-part` and `bob-command-line`; `desk`:
-`about-the-intern`), and that `desk`'s tool set is empty.
+(`bob`: `about-the-intern` and `bob-command-line`; `gp`: `carry-out-a-part` and `bob-command-line`; `desk` and
+`triage`: `about-the-intern`), that `desk`'s tool set is empty, and that `triage`'s tool set is `read` and `mail`.
 
 ### REQ-003 — Role settings
 
@@ -403,8 +414,9 @@ The-intern SHALL let a team member, in its configuration or while the daemon run
   shipped text back (S-008 REQ-003, REQ-005).
 - **remove** a role the team created. Removing a shipped role, `desk` included, is refused. Removing a role that a
   schedule entry names, or whose per-role default workspace (REQ-018) an entry names, is refused, with an error naming
-  them. Removing a role while an open conversation has an agent seated with it is refused `conflict`, naming the
-  conversations (S-008 REQ-007).
+  them. Removing a role that an owned mail account names as its triage role is refused `conflict`, naming the account
+  (S-009 REQ-001). Removing a role while an open conversation has an agent seated with it is refused `conflict`, naming
+  the conversations (S-008 REQ-007).
 - **register and unregister** workspaces (REQ-018)
 
 Defaults and changes MUST follow these rules:
@@ -590,8 +602,8 @@ After a seat is applied, every model turn in that conversation MUST:
 - see the common prompt and its role's instructions as their files hold them at that model request, and the listing of
   the agent's enabled skills (S-008 REQ-006, REQ-007)
 - be offered exactly the role's tools, the coordination capabilities and the job tools (S-004 REQ-013) in a job's
-  conversation, or exactly the role's tools and the front-desk tools in the front desk (REQ-022), and in both the
-  `skill` tool (S-008 REQ-008)
+  conversation, or exactly the role's tools other than the mail tools and the front-desk tools in the front desk
+  (REQ-022), and in both the `skill` tool (S-008 REQ-008)
 - run its tools in the seat's workspace
 - see that workspace's instructions and skills
 
@@ -1261,7 +1273,8 @@ only fact the daemon adds for it is its conversation id.
 
 In the front desk, every model turn SHALL be offered exactly the tools of its seat's role, the front-desk tools and
 `skill` (S-008 REQ-008). It SHALL NOT be offered the coordination tools (`handoff`, `invoke`, `steer`) or the job
-tools that act on a conversation's own job (S-004 REQ-013), `block_job` and `complete_job` included. The front-desk
+tools that act on a conversation's own job (S-004 REQ-013), `block_job` and `complete_job` included, nor the mail
+tools, even when its seat's role names `mail` (S-009 REQ-011). The front-desk
 tools are offered in no other conversation, except read schedule runs, which S-004 REQ-013 also offers in a job's
 conversations. They are:
 
@@ -1676,9 +1689,10 @@ the file stops the daemon at startup, an invalid runtime change is refused with 
 - **S-004 (Jobs).** Creates jobs and starts their lead conversations, in-process only, from `jobs.create` (REQ-012);
   decides when a job is blocked and delivers its answer (REQ-014); completes and cancels jobs, and its complete and
   cancel actions call this spec's abort capability (REQ-008); adds the job tools to every role (REQ-003, REQ-005).
-- **S-007, the Email spec (not yet written), and S-005.** They own the fire
-  behaviour (REQ-013), the monitoring views (REQ-016) and the mailbox. This spec's live acceptance test 1 moved to S-007
-  (product owner ruling, 2026-10-31).
+- **S-007, S-009 (Email) and S-005.** They own the fire behaviour (REQ-013), the monitoring views (REQ-016) and mail:
+  S-009 defines the mail tools that `mail` names, the triage job the `triage` role leads, and the owned mail accounts
+  that name a triage role, which this spec's REQ-001 to REQ-003 refer to. This spec's live acceptance test 1 moved to
+  S-007 (product owner ruling, 2026-10-31).
 - **pi-durable** (the pinned version in `README.md`). Provides the durable conversations, inbox, reset, compaction,
   fork and task-owned abort that seating, handoff, invocation and steering use. The-intern's own facts about a
   conversation live in its own document, with redelivery as the only recovery (ADR-001 decision 4); host writes during
@@ -1707,9 +1721,9 @@ the file stops the daemon at startup, an invalid runtime change is refused with 
 
 ## Success Criteria
 
-1. With no configuration file, the daemon starts with exactly the roles `bob`, `gp` and `desk`, and a team member can
-   create, change, restore and remove roles and register and unregister workspaces through the service operations, each
-   change surviving a restart (REQ-001, REQ-003, REQ-018). Measured by `npm test`.
+1. With no configuration file, the daemon starts with exactly the roles `bob`, `gp`, `desk` and `triage`, and a team
+   member can create, change, restore and remove roles and register and unregister workspaces through the service
+   operations, each change surviving a restart (REQ-001, REQ-003, REQ-018). Measured by `npm test`.
 2. Live acceptance test 2: through `conversations.seat`, the seat of a job's lead conversation changes from `bob` to
    `gp`; the next answer is attributed to `gp`, and `gp`'s tools run in `gp`'s workspace (REQ-004, REQ-005, REQ-007).
    Measured by `npm run test:live:agents` (`test/live/live_agents.ts`) against a real model.
@@ -1790,3 +1804,4 @@ behaviour. Deciding it is a scope amendment of this spec.
 | 2026-11-07 | v0.17. REQ-003: removing a role is refused when a schedule entry names its per-role default workspace, because that path stops being registered and the next start would stop on the entry. | S-007 Feature Architecture finding. | S-007's tasks |
 | 2026-11-13 | v0.18. Skills and instructions (S-008). A role's instructions live in its instruction file in the internal folder, not in the configuration file, and its skills are default skill names resolved through the skill catalog (Definitions, Role and Skills; Interfaces, Consumed; Configuration Requirements, Roles; REQ-001; REQ-002; AC-002.1, which no longer names `src/roles/shipped/` and checks S-008 REQ-001's default skills; REQ-003, create and change; AC-003.1; AC-003.2). The account's own pi agent skill folders are not loaded unless the team adds them as skill search paths (Definitions, Skills; Alternatives Considered; AC-005.2). Each agent has an enabled set, separate from its seat, that a seat change resets in the same durable step (Definitions, Seat; REQ-005; AC-005.1; REQ-016 and AC-016.1 list it; REQ-017 keeps it across a crash). REQ-003's last rule splits by field: an edit to instructions reaches running agents from their next model request, while tools, default skills, model, thinking level and workspace still apply only to agents seated afterwards (AC-003.7, REQ-025, AC-005.4). `skill` is offered to every agent, the front desk included (Interfaces, agent tools; Definitions, Extension; Exclusions, Work in the front desk; REQ-002; REQ-003; REQ-005; AC-005.2; REQ-022; AC-022.1; AC-022.6). Removing a team role is refused `conflict` while an open conversation has an agent seated with it (REQ-003, AC-003.7). A team role whose instruction file is missing or empty can't be seated (REQ-003, REQ-012, Workflow, Configuration Requirements). Assumptions name S-008. No identifier added or retired. Interfaces, transcript entries: the new `intern.skills` entry records a change to an agent's enabled set. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, findings B1, B3 to B6. | S-008's tasks |
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.18 confirmed: instruction files, default skill names, the enabled set reset with each seat write, skill offered to every seat, role removal refused while seated, a team role with a missing file not seated (T-336 to T-351, T-357) | none |
+| 2026-11-18 | v0.19. Email (S-009). REQ-001, AC-001.1 and Success Criterion 1: the-intern ships four roles, `bob`, `gp`, `desk` and the new `triage`, and `bob` is still the default lead; AC-001.1's test name follows. REQ-002: the `triage` description (definition of done as its first duty, reading the saved email, the four decisions, the request mark only for requests, rewriting and handing off, mail texts without internals, the team's own triage instructions and skills; tool set `read` and `mail`); AC-002.1 covers its instruction file, default skills and tool set. REQ-003 and Interfaces, agent tools: `mail` is a tool the-intern ships for a role's tool set, standing for S-009 REQ-011's mail tools; removing a role an owned mail account names as its triage role is refused `conflict`, naming the account. REQ-005 and REQ-022: the front desk is never offered the mail tools, whatever its seat's role names. Exclusions and Assumptions name S-009 in place of the Email spec not yet written. No identifier added or retired. | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18. | S-009's tasks |

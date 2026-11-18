@@ -1,7 +1,7 @@
 ---
 id: S-007
 title: Schedules
-version: '0.5'
+version: '0.6'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-07'
 author: planner
@@ -45,7 +45,7 @@ role, seat, workspace, front desk, service operation, observation feed, page, wa
 | Team member | Sets up recurring work, runs it on demand, and checks what ran and what was skipped. |
 | Agent in a scheduled job | Knows it is working on a scheduled run and looks at earlier scheduled runs when that helps. |
 | Front desk | Sets up and runs schedule entries when a team member asks in chat. |
-| Email spec (downstream, optional) | A schedule entry can ask an agent to check mail. Neither depends on the other, and Email reports no events to this spec. |
+| Email, S-009 (downstream, optional) | A schedule entry can ask an agent to check mail. Neither depends on the other, and Email reports no events to this spec. |
 | Developer | Tests every fire and skip against a controllable clock and the fake model. |
 
 Journeys, in priority order:
@@ -82,7 +82,7 @@ Journeys, in priority order:
 - **Tools that change schedules for agents other than the front desk.** Every agent of a job can read schedule runs
   (REQ-010). A lead can still run `bob schedules` from its shell, because the service account is the boundary (ADR-002).
 - **Deleting old run history.** Retention of old jobs is an open item across specs, and run history follows it.
-- **What Email does with mail.** The Email spec owns it.
+- **What Email does with mail.** S-009 owns it.
 
 ## Alternatives Considered
 
@@ -683,9 +683,11 @@ its origin the way in of the team member's input and the front desk, with no add
 ### REQ-014 — No triggers
 
 No event SHALL start a job. A job ending, mail arriving or any other happening SHALL create no job unless an agent or a
-team member creates one. The origin letter `T`, the trigger origin and the reserved group `triggers` SHALL NOT exist:
-`jobs.create` refuses a trigger origin from any caller, `bob triggers` is an unknown command, and the manual and the web
-interface don't mention triggers. The "job done" delta stays for clients that follow the feed.
+team member creates one. An email to an owned account is a team member's request through the `email` way in, not an
+event (S-009 REQ-006); mail in a monitored account starts nothing. The origin letter `T`, the trigger origin and the
+reserved group `triggers` SHALL NOT exist: `jobs.create` refuses a trigger origin from any caller, `bob triggers` is an
+unknown command, and the manual and the web interface don't mention triggers. The "job done" delta stays for clients
+that follow the feed.
 
 #### AC-014.1 — A job ending starts nothing
 
@@ -778,7 +780,8 @@ This spec adds no other setting. One minute (REQ-015, REQ-007) is built in.
 - **Skipped fires travel with the database,** because `bob export` copies the whole database (S-005).
 - **S-001 v0.17, S-002 v0.15, S-003 v0.7, S-004 v0.15, S-005 v0.6 and S-006 v0.6**, as amended on this planning branch,
   and S-000 v0.7. If any amendment is refused at Gate 1, this spec changes with it.
-- **The Email spec (not yet written)** treats mail as an input an agent triages, as S-000 v0.7 states. No event passes
+- **S-009 Email** treats mail as an input an agent triages, as S-000 v0.7 states: an email to an owned account is a
+  team member's request through the `email` way in, and mail in a monitored account starts nothing. No event passes
   from Email to this spec.
 
 ## Success Criteria
@@ -823,3 +826,4 @@ None. Feature Architecture settled the scheduling library question (`docs/develo
 | 2026-11-13 | spec-truth reconciliation — PASS | v0.4 confirmed: the Schedules page row lists the roles.list, models.list and workspaces.list reads the built page makes (D1 of 2026-11-12 resolved); Success Criterion 5 still waits for T-311 and AC-014.3 for T-325 | none |
 | 2026-11-13 | v0.5. REQ-006: a fire is skipped when the entry's role is a team role whose instruction file is missing or empty, with a reason naming the file; new AC-006.5. REQ-008: run now is refused `invalid_input` for a team role whose instruction file is missing; new AC-008.4. Interfaces, the Schedules page: from an entry the page opens S-008's Skills panel for the entry's role, and the table names the panel's calls. No identifier changed or retired. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, findings B8 and C4. | S-008's tasks |
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.5 confirmed: Success Criterion 5 met by T-311's live run, AC-014.3 by T-325 and a fresh trigger grep, AC-006.5 and AC-008.4 by schedule_fires tests, and the Schedules page's Skills panel for the entry's role or bob (T-376) | none |
+| 2026-11-18 | v0.6. REQ-014: an email to an owned account is a team member's request through the `email` way in, not an event (S-009 REQ-006), and mail in a monitored account starts nothing. Users, Exclusions ("What Email does with mail") and Assumptions and Dependencies: the Email spec is S-009, no longer "not yet written". No identifier added or retired. | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18. | S-009's tasks |
