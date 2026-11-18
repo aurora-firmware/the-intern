@@ -698,10 +698,10 @@ the account, the recipients that weren't allowed and the subject (REQ-013).
 ### REQ-013 — The notice address
 
 The notice settings SHALL name one address and one owned account with an SMTP host to send from; `mail.notices.set`
-SHALL refuse any other account `invalid_input`. The notice address SHALL NOT be the address of any owned account:
-`mail.notices.set`, `mail.accounts.create`, `mail.accounts.change` and loading the configuration file SHALL refuse
-that pairing `invalid_input`, because the notice mail would land in an owned inbox and feed a job. The notice address
-SHALL receive:
+SHALL refuse any other account `invalid_input`. The notice address SHALL NOT be the address of any owned account,
+compared without regard to letter case as in REQ-012: `mail.notices.set`, `mail.accounts.create`, `mail.accounts.change`
+and loading the configuration file SHALL refuse that pairing `invalid_input`, because the notice mail would land in an
+owned inbox and feed a job. The notice address SHALL receive:
 
 - a held-back notice for each email the allowlist holds back (REQ-012)
 - the blocked question of any job that has no allowed email sender to ask (REQ-014), in a thread of its own for that
@@ -738,10 +738,10 @@ text, and the daemon SHALL send that mail text:
 - otherwise, to the notice address, from the notice account, in a thread of its own for the job, when one is set
 
 The question can be mailed when one of these two destinations exists. A mail text equal to the last one mailed for the
-job SHALL NOT be mailed again, so an auto-reply that resumes the job can't start a loop. A block the daemon makes
-itself (S-004 REQ-008) SHALL NOT be mailed. The subject SHALL be the subject of the email that started the job, or the
-job's title for a job that didn't come by email. A reply resumes the job (REQ-009). The Blocked reason SHALL wait on
-the Job page and in `bob` whether or not a question was mailed.
+job SHALL NOT be mailed again, so an auto-reply that resumes the job can't start a loop. A block the daemon makes itself
+(S-004 REQ-008) SHALL NOT be mailed. The subject SHALL be the subject of the email that started the job, or, for a job
+that didn't come by email, the first line of the mail text, never the job's title. A reply resumes the job (REQ-009).
+The Blocked reason SHALL wait on the Job page and in `bob` whether or not a question was mailed.
 
 #### AC-014.1 — To the sender
 
@@ -774,7 +774,8 @@ the Job page and in `bob` whether or not a question was mailed.
 When a job that came by email, with the request mark set, is completed (resolution `completed`), the daemon SHALL send
 the completion's mail text to the job's sender as a reply in the job thread, from the account the job came through,
 when that account can send and the allowlist allows the sender. The complete job tool SHALL require a mail text for a
-job with the mark. A team member's `jobs.complete` MAY give one; without it, no reply is sent and the history says so.
+job with the mark. A team member's `jobs.complete` MAY give one, through `bob jobs complete --mail-text` or the Job
+page's complete action; without it, no reply is sent and the history records "result reply not sent: no mail text".
 A job without the mark, or a cancelled job, SHALL send nothing. The justification is never mailed.
 
 #### AC-015.1 — Only a completed request answers
@@ -788,11 +789,10 @@ A job without the mark, or a cancelled job, SHALL send nothing. The justificatio
 
 ### REQ-016 — No internals in mail
 
-What the daemon itself puts in an email (the subject when it isn't the original email's, the headers, the
-`Message-ID`, the held-back notice) SHALL contain no short number, job, conversation or request ID, role name, tool
-name or path of saved mail, and the daemon SHALL add no header beyond the standard ones. The daemon SHALL never mail a
-Blocked reason or completion justification, which are written for the team; only a lead's mail text is mailed (REQ-014,
-REQ-015).
+What the daemon itself puts in an email (the headers, the `Message-ID`, the held-back notice) SHALL contain no short
+number, job, conversation or request ID, role name, tool name or path of saved mail, and the daemon SHALL add no header
+beyond the standard ones. The daemon SHALL never mail a Blocked reason or completion justification, which are written
+for the team; only a lead's mail text is mailed (REQ-014, REQ-015).
 
 The shipped common prompt and triage instructions (REQ-019) SHALL tell agents that mail texts and mail they send show
 none of these unless the person they write to asked for one.
@@ -800,10 +800,11 @@ none of these unless the person they write to asked for one.
 #### AC-016.1 — What the daemon adds is clean
 
 - **Given:** every email the service tests of this spec cause The Intern to send, with leads whose reasons and
-  justifications hold short numbers and paths
+  justifications hold short numbers and paths, and a command-line job titled "Fix the C-7 regression" whose question
+  goes to the notice address
 - **When:** a check scans subjects, bodies and headers
-- **Then:** no email holds a reason or justification, and nothing the daemon added holds a short number, an ID, a role
-  or tool name, or a saved-mail path
+- **Then:** no email holds a reason, a justification or a job title, and nothing the daemon added holds a short
+  number, an ID, a role or tool name, or a saved-mail path
 
 **Verification:** test — a check run over the sent mail of the service tests.
 
@@ -1029,20 +1030,23 @@ The command reference SHALL match `bob mail --help`.
     role's tool set (REQ-003); removing a role refused while an owned account names it as its triage role (REQ-003).
   - S-002: REQ-018 and AC-018.1 (the instance keeps mail secrets in its owner-only secrets store); REQ-006 (the
     directory that holds that store); REQ-021 and Configuration Requirements (`[mail]` and `[[mail_account]]`);
-    REQ-012 (the email origin names the account); REQ-002 step 8 (mail starts with the listeners and the scheduler);
+    REQ-012 (the email origin names the account); REQ-002 step 8 (mail starts with the listeners and the scheduler,
+    after removing the secrets of accounts the file no longer holds);
     the operation catalogue (the nine `mail.*` operations); the instance feed (`mail_account_status`); the status
     operation (account status).
   - S-003 REQ-007: `email` is a way in no listener stamps; no change to the export route, which REQ-024 keeps as one
     file.
   - S-004: the job fields (the request mark and the email details) and REQ-003 (the email origin names the account);
     the job tools table and REQ-013 (mark request; `mailText` on block job and complete job); `jobs.complete`'s
-    `mailText`; the History definition and history entries (email received, sent, held back, may not have gone out);
+    `mailText`; the History definition and history entries (email received, sent, held back, may not have gone out,
+    result reply not sent: no mail text);
     `jobs.list`'s account filter; REQ-016 and REQ-017 (the export and import carry saved mail); REQ-018 (owed mail and
     the intake record).
   - S-005: `mail` leaves the reserved groups (Definitions, Users, Exclusions "Commands for later components", the
-    conventions' reserved groups); Interfaces rows for `bob mail` and `bob jobs list --mail`; `bob jobs show` prints a
-    job's email details and request mark.
-  - S-006: REQ-003, the Job page's email section; the Users row of later specs adds Email.
+    conventions' reserved groups); Interfaces rows for `bob mail` and `bob jobs list --mail`; `bob jobs complete`
+    gains `--mail-text`; `bob jobs show` prints a job's email details and request mark.
+  - S-006: REQ-003, the Job page's email section; REQ-004, the complete action takes an optional mail text; the Users
+    row of later specs adds Email.
   - S-007 REQ-014: an email to an owned account is a team member's request through the `email` way in, not an event.
   - S-008 REQ-001: the shipped `triage` instructions and default skills; the common prompt covers mail texts and
     mail without internals; `bob-command-line` teaches `bob mail` (AC-001.2).
