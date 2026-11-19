@@ -22,8 +22,6 @@ export type ImapOptions = {
     credential: Credential;
     /** How long a quiet connection waits before it restarts IDLE, or polls on a server without IDLE. */
     idleSeconds: number;
-    /** The limit on connecting, the greeting and each answer. Defaults to 30 seconds; a test shortens it. */
-    timeoutMs?: number;
 };
 
 export type ImapConnection = {
@@ -36,7 +34,7 @@ export type ImapConnection = {
     logout(): Promise<void>;
 };
 
-const DEFAULT_TIMEOUT_MS = 30_000;
+const TIMEOUT_MS = 30_000;
 const INBOX = "INBOX";
 const CERTIFICATE_CODES =
     /^(CERT_|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_|ERR_TLS_CERT|HOSTNAME_MISMATCH)/;
@@ -98,7 +96,6 @@ function authOf(credential: Credential): { user: string; pass: string } | { user
  * EXPUNGE or CLOSE: IMAP CLOSE expunges messages a person marked deleted.
  */
 export async function openImap(options: ImapOptions): Promise<ImapConnection> {
-    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const client = new ImapFlow({
         host: options.host,
         port: options.port,
@@ -106,9 +103,9 @@ export async function openImap(options: ImapOptions): Promise<ImapConnection> {
         doSTARTTLS: options.security === "starttls",
         auth: authOf(options.credential),
         logger: false,
-        connectionTimeout: timeoutMs,
-        greetingTimeout: timeoutMs,
-        socketTimeout: timeoutMs,
+        connectionTimeout: TIMEOUT_MS,
+        greetingTimeout: TIMEOUT_MS,
+        socketTimeout: TIMEOUT_MS,
         maxIdleTime: options.idleSeconds * 1000,
     });
     // imapflow emits `error` for a lost connection and throws when nobody listens. The command that was running

@@ -16,7 +16,6 @@ const ACCOUNT = { address: ADDRESS, login: "ada", password: "ada-password-s3cret
 const TOKEN = "ya29.token-s3cret";
 const MESSAGE = "From: Grace <grace@example.test>\r\nTo: Ada <ada@example.test>\r\nSubject: Hello\r\n\r\nHi Ada.\r\n";
 const WAIT_MS = scaled(10_000);
-const SHORT_LIMIT_MS = scaled(500);
 const PASSWORD_CREDENTIAL = { user: ACCOUNT.login, password: ACCOUNT.password };
 const TOKEN_CREDENTIAL = { user: ACCOUNT.login, accessToken: TOKEN };
 
@@ -134,12 +133,14 @@ describe("imap client", () => {
             assert.equal(failure.kind, "unreachable");
         });
 
-        it("fails with kind unreachable when the server does not answer within the time limit", async () => {
+        // The 30 second limit is the product's own and imapflow enforces it on the socket, so no clock can be
+        // moved: the test waits it out.
+        it("fails with kind unreachable when the server does not answer within 30 seconds", async () => {
             const server = await start();
             server.pause();
             cleanups.push(() => server.resume());
 
-            const failure = await failureOf(openImap(optionsFor(server, "none", { timeoutMs: SHORT_LIMIT_MS })));
+            const failure = await failureOf(openImap(optionsFor(server, "none")));
 
             assert.equal(failure.kind, "unreachable");
         });
