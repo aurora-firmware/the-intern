@@ -379,4 +379,153 @@ describe("fake mail server", () => {
             await assert.rejects(distrusting.verify(), (error: { code?: string }) => error.code === "ESOCKET");
         });
     });
+
+    describe("sign-in with a token", () => {
+        const xoauth2 = (token: string) =>
+            Buffer.from(`user=${ACCOUNT.login}\x01auth=Bearer ${token}\x01\x01`).toString("base64");
+
+        it("accepts the token over IMAP XOAUTH2 and refuses another", async () => {
+            const server = await start();
+            server.acceptToken(ACCOUNT.login, "token-1");
+            const client = await RawClient.connect(server.imapPort);
+            cleanups.push(() => client.close());
+            await client.until(/^\* OK .*\r\n/);
+
+            client.send(`a1 AUTHENTICATE XOAUTH2 ${xoauth2("token-2")}`);
+            await client.until(/^\+ .*\r\n/m);
+            client.send("");
+            await client.until(/^a1 NO .*\r\n/m);
+            client.send(`a2 AUTHENTICATE XOAUTH2 ${xoauth2("token-1")}`);
+            await client.until(/^a2 OK .*\r\n/m);
+        });
+
+        it("accepts the token over SMTP XOAUTH2 and refuses another", async () => {
+            const server = await start();
+            server.acceptToken(ACCOUNT.login, "token-1");
+            const withToken = (accessToken: string) =>
+                nodemailer.createTransport({
+                    host: "127.0.0.1",
+                    port: server.smtpPort,
+                    ignoreTLS: true,
+                    auth: { type: "OAuth2", user: ACCOUNT.login, accessToken },
+                });
+            const good = withToken("token-1");
+            const bad = withToken("token-2");
+            cleanups.push(
+                () => good.close(),
+                () => bad.close(),
+            );
+
+            assert.equal(await good.verify(), true);
+            await assert.rejects(bad.verify(), (error: { responseCode?: number }) => error.responseCode === 535);
+        });
+    });
+
+    describe("mailbox state", () => {
+        it("lists the folders with their special use and the messages with UID, flags and bytes", async () => {
+            const server = await start();
+            const client = await signedIn(server);
+            client.send('a2 LIST "" "*"');
+            const listing = await client.until(/^a2 OK .*\r\n/m);
+            for (const [folder, attribute] of [
+                ["Drafts", "\\Drafts"],
+                ["Sent", "\\Sent"],
+                ["Trash", "\\Trash"],
+            ]) {
+                assert.match(
+                    listing,
+                    new RegExp(`\\(.*${attribute.replace("\\", "\\\\")}.*\\) "/" "?${folder}"?`),
+                    listing,
+                );
+            }
+            assert.match(listing, /"?INBOX"?\r\n/);
+
+            server.deliver(ADDRESS, MESSAGE);
+
+            const [message] = server.mailbox(ADDRESS, "INBOX");
+            assert.deepEqual(message?.flags, []);
+            assert.equal(message?.raw.toString("utf8"), MESSAGE);
+        });
+
+        it("serves the UIDVALIDITY a test sets", async () => {
+            const server = await start();
+            server.setUidValidity(ADDRESS, 4242);
+            const client = await signedIn(server);
+            client.send("a2 SELECT INBOX");
+            const selected = await client.until(/^a2 OK .*\r\n/m);
+            assert.match(selected, /\[UIDVALIDITY 4242\]/);
+        });
+
+        it("leaves MOVE out of the capabilities when started with move false", async () => {
+            const server = await start({ move: false });
+            const client = await signedIn(server);
+            client.send("a2 CAPABILITY");
+            const capabilities = await client.until(/^a2 OK .*\r\n/m);
+            assert.ok(!/\bMOVE\b/.test(capabilities), capabilities);
+            assert.ok(/\bIDLE\b/.test(capabilities), capabilities);
+        });
+
+        it("refuses a second address on one server", async () => {
+            const server = await start();
+            assert.throws(
+                () => server.addAccount({ address: "grace@example.test", login: "grace", password: "x" }),
+                /one address/,
+            );
+        });
+
+        it("refuses a delivery to an address that has no account", async () => {
+            const server = await start();
+            assert.throws(() => server.deliver("nobody@example.test", MESSAGE), /no account/);
+        });
+    });
+
+    describe("slow answers", () => {
+        const SLOW_MS = 300;
+
+        async function greetingDelayMs(port: number): Promise<number> {
+            const started = performance.now();
+            const client = await RawClient.connect(port);
+            cleanups.push(() => client.close());
+            await client.until(/^(\* OK|220) .*\r\n/);
+            return performance.now() - started;
+        }
+
+        it("holds back every answer by at least the time set, on both protocols", async () => {
+            const server = await start();
+            server.setSlow(SLOW_MS);
+
+            assert.ok((await greetingDelayMs(server.imapPort)) >= SLOW_MS - 5);
+            assert.ok((await greetingDelayMs(server.smtpPort)) >= SLOW_MS - 5);
+        });
+
+        it("holds back the answer to a command", async () => {
+            const server = await start();
+            const client = await signedIn(server);
+            server.setSlow(SLOW_MS);
+
+            const started = performance.now();
+            client.send("a2 NOOP");
+            await client.until(/^a2 OK .*\r\n/m);
+
+            assert.ok(performance.now() - started >= SLOW_MS - 5);
+        });
+    });
+
+    describe("a connection dropped after the message data", () => {
+        it("closes the connection before the final answer and still records the message", async () => {
+            const server = await start();
+            server.dropAfterData(true);
+            const transport = transportTo(server);
+
+            await assert.rejects(
+                transport.sendMail({ envelope: { from: ADDRESS, to: ["grace@example.test"] }, raw: MESSAGE }),
+                (error: { response?: string }) => error.response === undefined,
+            );
+
+            assert.equal(server.received().length, 1);
+            server.dropAfterData(false);
+            await transport.sendMail({ envelope: { from: ADDRESS, to: ["grace@example.test"] }, raw: MESSAGE });
+            assert.equal(server.received().length, 2);
+        });
+    });
 });
