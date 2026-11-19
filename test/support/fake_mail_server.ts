@@ -22,6 +22,7 @@ export type FakeMailServer = {
     received(): ReceivedMail[];
     pause(): void;
     resume(): void;
+    refuseRecipient(address: string, answer: string): void;
     stop(): Promise<void>;
 };
 
@@ -45,6 +46,7 @@ const SPECIAL_USE_FOLDERS: SpecialUse[] = [
 export async function startFakeMailServer(options: FakeMailOptions = {}): Promise<FakeMailServer> {
     const accounts = new Map<string, FakeMailAccount>();
     const mails: ReceivedMail[] = [];
+    const refused = new Map<string, string>();
     const held = new Set<net.Socket>();
     let isPaused = false;
     let owner: string | undefined;
@@ -76,6 +78,11 @@ export async function startFakeMailServer(options: FakeMailOptions = {}): Promis
             const account = auth.username === undefined ? undefined : accounts.get(auth.username);
             if (account !== undefined && auth.password === account.password) done(null, { user: account.address });
             else done(new Error("Invalid credentials"));
+        },
+        onRcptTo: (address, _session, done) => {
+            const answer = refused.get(address.address.toLowerCase());
+            if (answer === undefined) return done();
+            done(Object.assign(new Error(answer.slice(4)), { responseCode: Number(answer.slice(0, 3)) }));
         },
         onData: (stream, session, done) => {
             const chunks: Buffer[] = [];
@@ -147,6 +154,12 @@ export async function startFakeMailServer(options: FakeMailOptions = {}): Promis
             isPaused = false;
             for (const socket of [...held, ...sockets()]) socket.resume();
             held.clear();
+        },
+        refuseRecipient(address, answer) {
+            if (!/^5\d\d /.test(answer)) {
+                throw new Error(`a refusal is a permanent 5xx answer such as "550 no such user", not "${answer}"`);
+            }
+            refused.set(address.toLowerCase(), answer);
         },
         async stop() {
             for (const connection of smtp.connections) connection._socket.destroy();

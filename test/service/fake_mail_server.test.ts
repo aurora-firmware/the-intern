@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import net from "node:net";
 import { afterEach, describe, it } from "node:test";
-import nodemailer from "nodemailer";
+import nodemailer, { type Transporter } from "nodemailer";
 import { type FakeMailServer, startFakeMailServer } from "../support/fake_mail_server.ts";
 import { scaled } from "../support/time_scale.ts";
 
@@ -165,16 +165,21 @@ describe("fake mail server", () => {
         });
     });
 
+    function transportTo(server: FakeMailServer): Transporter {
+        const transport = nodemailer.createTransport({
+            host: "127.0.0.1",
+            port: server.smtpPort,
+            ignoreTLS: true,
+            auth: { user: ACCOUNT.login, pass: ACCOUNT.password },
+        });
+        cleanups.push(() => transport.close());
+        return transport;
+    }
+
     describe("submission", () => {
         it("records the envelope and the raw bytes of a message submitted over SMTP", async () => {
             const server = await start();
-            const transport = nodemailer.createTransport({
-                host: "127.0.0.1",
-                port: server.smtpPort,
-                ignoreTLS: true,
-                auth: { user: ACCOUNT.login, pass: ACCOUNT.password },
-            });
-            cleanups.push(() => transport.close());
+            const transport = transportTo(server);
 
             await transport.sendMail({
                 envelope: { from: ADDRESS, to: ["grace@example.test", "linus@example.test"] },
@@ -233,6 +238,45 @@ describe("fake mail server", () => {
             assert.equal(client.unread, "");
             server.resume();
             await client.until(/^a1 OK .*\r\n/m);
+        });
+    });
+
+    describe("refused recipients", () => {
+        it("answers a refused recipient with the given 5xx and records nothing for it", async () => {
+            const server = await start();
+            server.refuseRecipient("nobody@example.test", "550 5.1.1 no such user");
+            const transport = transportTo(server);
+
+            const result = await transport.sendMail({
+                envelope: { from: ADDRESS, to: ["nobody@example.test", "grace@example.test"] },
+                raw: MESSAGE,
+            });
+
+            assert.deepEqual(result.rejected, ["nobody@example.test"]);
+            assert.equal(result.rejectedErrors?.[0]?.responseCode, 550);
+            assert.match(result.rejectedErrors?.[0]?.response ?? "", /5\.1\.1 no such user/);
+            assert.deepEqual(
+                server.received().map((mail) => mail.envelope.to),
+                [["grace@example.test"]],
+            );
+        });
+
+        it("records no message when every recipient is refused", async () => {
+            const server = await start();
+            server.refuseRecipient("Nobody@Example.test", "550 no such user");
+            const transport = transportTo(server);
+
+            await assert.rejects(
+                transport.sendMail({ envelope: { from: ADDRESS, to: ["nobody@example.test"] }, raw: MESSAGE }),
+                (error: { responseCode?: number }) => error.responseCode === 550,
+            );
+
+            assert.deepEqual(server.received(), []);
+        });
+
+        it("refuses a refusal that is not a permanent answer", async () => {
+            const server = await start();
+            assert.throws(() => server.refuseRecipient("nobody@example.test", "450 try later"), /permanent 5xx/);
         });
     });
 });
