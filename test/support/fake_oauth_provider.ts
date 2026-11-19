@@ -19,13 +19,19 @@ export type FakeOAuthEndpoints = {
 export type FakeOAuthProvider = {
     endpoints: FakeOAuthEndpoints;
     enterCode(userCode: string): void;
+    revoke(refreshToken: string): void;
     isValidAccessToken(token: string): boolean;
     stop(): Promise<void>;
 };
 
 type Answer = { status: number; body: Record<string, string | number> };
 
+type RefreshTokenState = { isUsed: boolean; revokedMessage?: string };
+
 type DeviceGrant = { userCode: string; isEntered: boolean };
+
+/** The client secret the provider accepts, for the client credentials and the Google token requests. */
+export const FAKE_OAUTH_CLIENT_SECRET = "fake-oauth-client-secret";
 
 const LOOPBACK = "127.0.0.1";
 const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
@@ -33,8 +39,15 @@ const MICROSOFT_PREFIX = "/microsoft";
 const DEVICE_CODE_PATH = /^\/[^/]+\/oauth2\/v2\.0\/devicecode$/;
 const TOKEN_PATH = /^\/[^/]+\/oauth2\/v2\.0\/token$/;
 
+const REVOKED_MESSAGE = "The refresh token was revoked.";
+const USED_MESSAGE = "The refresh token was already used; a newer one replaced it.";
+
 function newSecret(): string {
     return randomBytes(16).toString("hex");
+}
+
+function invalidGrant(message: string): Answer {
+    return { status: 400, body: { error: "invalid_grant", error_description: message } };
 }
 
 async function readForm(request: http.IncomingMessage): Promise<Record<string, string>> {
@@ -47,6 +60,41 @@ async function readForm(request: http.IncomingMessage): Promise<Record<string, s
 export async function startFakeOAuthProvider(options: FakeOAuthOptions): Promise<FakeOAuthProvider> {
     const accessTokens = new Map<string, number>();
     const deviceGrants = new Map<string, DeviceGrant>();
+    const refreshTokens = new Map<string, RefreshTokenState>();
+
+    function issueRefreshToken(): string {
+        const token = newSecret();
+        refreshTokens.set(token, { isUsed: false });
+        return token;
+    }
+
+    function tokenBody(): Answer["body"] {
+        return {
+            token_type: "Bearer",
+            access_token: issueAccessToken(),
+            refresh_token: issueRefreshToken(),
+            expires_in: options.accessTokenSeconds,
+        };
+    }
+
+    function answerRefresh(form: Record<string, string>): Answer {
+        const state = refreshTokens.get(form.refresh_token ?? "");
+        if (!state) return invalidGrant("The refresh token is unknown.");
+        if (state.revokedMessage) return invalidGrant(state.revokedMessage);
+        if (state.isUsed) return invalidGrant(USED_MESSAGE);
+        state.isUsed = true;
+        return { status: 200, body: tokenBody() };
+    }
+
+    function answerClientCredentials(form: Record<string, string>): Answer {
+        if (form.client_secret !== FAKE_OAUTH_CLIENT_SECRET) {
+            return { status: 401, body: { error: "invalid_client", error_description: "The client secret is wrong." } };
+        }
+        return {
+            status: 200,
+            body: { token_type: "Bearer", access_token: issueAccessToken(), expires_in: options.accessTokenSeconds },
+        };
+    }
 
     function issueAccessToken(): string {
         const token = newSecret();
@@ -71,20 +119,12 @@ export async function startFakeOAuthProvider(options: FakeOAuthOptions): Promise
     }
 
     function answerToken(form: Record<string, string>): Answer {
+        if (form.grant_type === "refresh_token") return answerRefresh(form);
+        if (form.grant_type === "client_credentials") return answerClientCredentials(form);
         const grant = deviceGrants.get(form.device_code ?? "");
-        if (form.grant_type !== DEVICE_CODE_GRANT || !grant) {
-            return { status: 400, body: { error: "invalid_grant" } };
-        }
+        if (form.grant_type !== DEVICE_CODE_GRANT || !grant) return invalidGrant("The device code is unknown.");
         if (!grant.isEntered) return { status: 400, body: { error: "authorization_pending" } };
-        return {
-            status: 200,
-            body: {
-                token_type: "Bearer",
-                access_token: issueAccessToken(),
-                refresh_token: newSecret(),
-                expires_in: options.accessTokenSeconds,
-            },
-        };
+        return { status: 200, body: tokenBody() };
     }
 
     async function route(request: http.IncomingMessage): Promise<Answer> {
@@ -115,6 +155,11 @@ export async function startFakeOAuthProvider(options: FakeOAuthOptions): Promise
             const grant = [...deviceGrants.values()].find((candidate) => candidate.userCode === userCode);
             if (!grant) throw new Error(`The fake OAuth provider issued no user code ${userCode}.`);
             grant.isEntered = true;
+        },
+        revoke(refreshToken) {
+            const state = refreshTokens.get(refreshToken);
+            if (!state) throw new Error("The fake OAuth provider issued no such refresh token.");
+            state.revokedMessage = REVOKED_MESSAGE;
         },
         isValidAccessToken(token) {
             const expiresAt = accessTokens.get(token);
