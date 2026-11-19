@@ -51,7 +51,13 @@ accepted ADRs win over this document; when they disagree, fix this document. The
 - **One source of truth per fact.** Runtime state lives in the one database file. Conversations, memos and the
   daemon's own facts about a conversation are pi-durable documents. Jobs live in the job store's `intern_` tables,
   never in pi-durable documents, and the job store never reads or writes pi-durable's tables (ADR-001 decision 1).
-  Team-edited inputs (configuration, skills, instructions) stay files. Never copy a fact between these places.
+  Team-edited inputs (configuration, skills, instructions) stay files. Never copy a fact between these places. Saved
+  mail lives in the database; the files under `<state dir>/mail/` are a copy written from it for agents to read, and
+  the daemon never reads them back (ADR-011). Account secrets live only in the secrets store (ADR-010).
+- **Accounts know no protocol, and protocols know no secrets store.** `src/accounts/` holds sign-in, token refresh,
+  the secrets store and account status, and imports no mail library and no pi package. `src/mail/` holds the mail
+  configuration, intake, outbox and tools, and reaches the mail libraries (`imapflow`, `nodemailer`, `postal-mime`)
+  only through its own adapter modules, so a library change touches those files alone (ADR-010).
 - **The job model and the job store stay free of pi packages.** `src/jobs/job_model.ts` imports nothing, and
   `src/jobs/job_store.ts` reaches the database only through the host's `HostDatabase`. A job store write never runs
   inside a pi-durable `commit()`, and a pi-durable commit never runs inside a job store transaction.
@@ -105,7 +111,7 @@ client" changes by amending [ADR-005](../ai-team/decisions/ADR-005-commands-load
 
 - **Don't write recovery or retry code** (ADR-001). Resume, `requestId` dedup and the follow-up queue are library
   features. If you find yourself writing a retry loop or an intake table, check the library first. Decision 4 allows
-  two bounded exceptions, and nothing else:
+  three bounded exceptions, and nothing else:
   - The-intern's own facts about a conversation (held messages, awaiting links, parked state, the abort mark, the
     closed mark, the enabled set, creation keys) are pi-durable documents committed with the change they describe,
     and the only recovery is redelivering the input they show as undelivered, made safe to repeat by request ids.
@@ -115,6 +121,10 @@ client" changes by amending [ADR-005](../ai-team/decisions/ADR-005-commands-load
     blocked, read from the entry the block recorded in `blockedAfterEntry`, and always clears the park the block made,
     so the turn-end rule applies to the lead's next stop. A fifth rule, a retry of a failed job
     write or a timer that checks jobs amends ADR-001 first.
+  - Email's facts (the intake record, job threads and the outbox) are `intern_mail_` rows. Intake is made safe to
+    repeat by the saved email's row, its `mail.intake` key and its `mail:<savedId>` request id. Owed mail is written
+    in the job write that owes it, and sending is an effect sandwich whose only recovery turns a row left `sending`
+    into "may not have gone out". Connection retries to a mail server are the only retry loop.
 - **Effect sandwich.** Commit the intent, perform the effect, commit the outcome. A handler reopened in an intent phase
   must assume the effect may have happened.
 - **Never mark an effectful tool `replay: "safe"`.** Effects are checkpointed, not exactly-once.
@@ -142,9 +152,15 @@ client" changes by amending [ADR-005](../ai-team/decisions/ADR-005-commands-load
 - Owner-only files: create state and runtime directories `0700` and every file accessible only to the service account.
   An existing directory that is accessible to the group or others, or not owned by the service account, stops startup.
   Don't add checks that can't reject anyone behind them (such as a uid allow-list behind a `0700` directory).
-- No credentials in the repository, state directory, database or logs. Models and every other credential are the
-  service account's, used in place: models authenticate through the service account's pi agent login, and nothing is
-  copied into the instance's directories.
+- No credentials in the repository, the database, the export, logs, the feed, operation results, error messages or
+  any model context. Models and every other credential are the service account's, used in place: models
+  authenticate through the service account's pi agent login. The one exception is the instance's owner-only secrets
+  store, `<state dir>/secrets/`, which keeps the passwords and client secrets a team member gives for the accounts
+  The Intern connects to and the OAuth tokens it obtains for them (S-002 REQ-018, ADR-002 decision 5). Only the
+  accounts layer, `src/accounts/`, reads or writes it (ADR-010). Nothing else is copied into the instance's
+  directories.
+- Mail and protocol libraries log nothing of their own: pass `logger: false`, or a logger that drops protocol lines,
+  so no login or token reaches the log. An error message names the server's answer, never the command sent.
 - pi agent's context loader reads `AGENTS.md`/`CLAUDE.md` from the parent directories of a working directory; keep
   that in mind for working directories and test fixtures.
 - Validation runs the same at every way in; something accepted when added must not be denied when used.

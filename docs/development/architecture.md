@@ -307,14 +307,16 @@ small.
 | Status | Reports whether the daemon is starting, ready or stopping, its versions, start time, instance paths, and worker threads in use and waiting | A read operation and an instance-scope feed entry. The versions that last opened the database are kept in a daemon document, `intern.versions`, in that database, so a copy of the database carries them (S-002 REQ-020) |
 
 - **Durability belongs to the runtime.** Recovery, exactly-once admission of input, queued input and checkpoints come
-  from pi-durable. The daemon adds no retry loops, intake tables or recovery code of its own, except two bounded
+  from pi-durable. The daemon adds no retry loops, intake tables or recovery code of its own, except three bounded
   exceptions (ADR-001 decision 4). The first: the facts the-intern owns about a conversation (held messages, awaiting
   links, parked state, the abort mark, the stop mark, the closed mark, the enabled set and creation keys) live in its
   own documents, and the only recovery is redelivering the input those facts show as undelivered, made safe to repeat by
   pi-durable request ids. Each daemon-owned fact is committed in the same atomic commit as the change it describes,
   except for an abort. An abort's facts are written in one commit just before pi-durable's abort, not in pi-durable's
   abort commit. The second: job writes are committed before their pi-durable change, and four startup repair rules are
-  the only job recovery (S-004 REQ-018).
+  the only job recovery (S-004 REQ-018). The third: Email's intake record, job threads and outbox, with intake made
+  safe to repeat, owed mail written in the job write that owes it, and a send cut short by a crash never sent again
+  (see Email).
 - **Report delivery.** Report delivery hears the commits that set an abort mark through `watchConversationMeta` in
   `src/host/host_observation.ts` and handles them in its one serial queue, like the end of a run; the abort itself never
   calls delivery.
@@ -1133,6 +1135,275 @@ the schedules component's clock is. The crash test of AC-006.4 kills the daemon 
 one commit, as S-001's seat crash tests do. `npm run test:live:skills` runs `test/live/live_skills.ts`, as
 `test:live:desk` runs its file.
 
+## Email
+
+This is how S-009's behaviour is built. A requirement number with no spec named in this section is S-009's. The
+durable parts are decided in ADR-010 (the accounts layer and the secrets store), ADR-011 (saved mail in the
+database), ADR-001 decision 4 (the third bounded exception: the intake record, job threads, the outbox and connection
+retries), ADR-002 decisions 1 and 5 (owned addresses are a way in; the instance keeps account secrets) and ADR-004
+decisions 3 and 5 (the email follow-up). Library answers are in [tech_stack.md](tech_stack.md), Email. Everything else
+here can change inside its module.
+
+```
+ bob mail · Mail page                      owned inbox (IMAP, IDLE)
+        │ mail.* operations                       │ new UIDs, one at a time
+        ▼                                         ▼
+ config.toml [mail] [[mail_account]]    intake ──► intern_mail_messages ──► copy in <state dir>/mail/<id>/
+        │ secrets the calls carry          │ route by job thread
+        ▼                                  ├─► createJob (key mail:<id>) ──► triage job E-n
+ accounts layer (src/accounts/)            └─► follow-up to the lead (request id mail:<id>) ──► job resumes
+   secrets store <state dir>/secrets/
+   sign-in, refresh, status, retries    block or complete job write + outbox row (the lead's mail text)
+        │ a credential for each login                │ after the commit
+        ▼                                            ▼
+ IMAP and SMTP logins ◄─────────────── outbox, one sender per account ──► SMTP ──► sender or notice address
+        ▲                                            │ sent, held back, may not have gone out
+        │                                            ▼
+ agents: mail tools (intern.mail)            job history (mail entries) ──► instance feed
+```
+
+### Modules
+
+| Part | Where | Holds |
+|---|---|---|
+| Secrets store | `src/accounts/secrets_store.ts` | ADR-010 decision 2: one file per account key, the serial queue, the atomic write, the removal of keys no account holds |
+| Sign-in | `src/accounts/sign_in.ts`, `src/accounts/oauth.ts`, `src/accounts/providers.ts`, `src/accounts/loopback_answer.ts` | The credential each login asks for; the three OAuth flows and refresh; the providers' endpoints; Google's one-time listener on `127.0.0.1` |
+| Account status | `src/accounts/account_status.ts` | Status, last error and its time, last check, the retry timer, and the change hub the feed listens to |
+| Pure model | `src/mail/mail_model.ts` | The rules of REQ-001 that need no other component, allowlist matching (REQ-012), the notice pairing (REQ-013), the route of an email, the subject of a question, the request text, the header list of REQ-016 |
+| Configuration | `src/mail/mail_section.ts` | The `mail` and `mail_account` sections |
+| Adapters | `src/mail/imap_client.ts`, `src/mail/smtp_client.ts`, `src/mail/mime.ts`, `src/mail/html_text.ts` | The only importers of `imapflow`, `nodemailer` and `postal-mime`; HTML to text |
+| Mail store | `src/mail/mail_store.ts`, called by `src/jobs/job_store.ts` | The `intern_mail_` tables, written in the job store's transactions with its history writer |
+| Intake | `src/mail/intake.ts` | The intake connection, the check, and taking in one email |
+| Outbox | `src/mail/outbox.ts` | The policy the jobs component asks, the sender of each account, the Sent folder copy |
+| Saved copy | `src/mail/saved_copy.ts` | Writing a saved email out, and the paths `jobs.get` returns |
+| Tools | `src/mail/mail_tools_extension.ts`, `src/mail/tool_connection.ts` | The pi-durable extension `intern.mail`, and the tools' connection per account |
+| Component | `src/mail/mail_component.ts` | The daemon hooks, the holds on roles, the test switches |
+| Operations | `src/service/mail_operations.ts` | `mail.*` |
+| Commands | `src/cli/mail_commands.ts`, `src/cli/mail_text.ts`, `src/cli/secret_prompt.ts` | S-005's conventions, on the client library |
+| Pages | `web/ui/pages/mail.ts`, `web/ui/model/mail.ts`, `web/ui/components/job_email.ts` | The Mail page, its pure model, the Job page's email section |
+| Shipped text | `src/shipped/instructions/roles/triage.md` | The `triage` role's instructions (REQ-019) |
+
+`serve.ts` places the mail component after the desk component and before the schedules component and the listeners,
+and adds its sections to `sections`, so its `start` hook removes the secrets of removed accounts before any other
+component starts at step 8 (S-002 REQ-002). It needs the agents component, for the role catalog, and the jobs
+component's options, for `createJob` and the job actions.
+
+### Startup and stop
+
+- **Step 1.** Two sections, `mail` and `mail_account`, each parse what needs only its own table: keys, names and
+  their uniqueness, kinds, ports, security, `auth` and its companions, the check interval and the allowlist entries
+  (REQ-001). A failure is a `ConfigError` naming the file, the account and the key (REQ-002). `mail_account` is a
+  top-level array, written back as `[[mail_account]]` sections, as `[[schedule]]` is.
+- **Step 5.** The component registers the mail policy with the jobs component (`setMailPolicy`), as
+  `setJobStatusCheck` is registered, and `catalog.addReferenceSource` naming each owned account whose triage role is
+  the role, so `roles.remove` refuses it `conflict` (REQ-001).
+- **Step 6.** `ensureWorkspaces` checks what needs both sections or the catalog: each owned account's triage role
+  exists, `notice_from` names an owned account with an SMTP host, and `notice_to` is no owned account's address
+  (REQ-013), each failure a `ConfigError` naming the key. The operations make the same checks inside
+  `ConfigStore.update`, where they read both sections.
+- **Step 7, `repair`.** Before `host.resume()`: each outbox row left `sending` turns `may_not_have_gone_out` with its
+  history entry; the intake rows of accounts the file no longer holds are removed and their `owed` rows turn
+  `stopped`; each saved email whose copy folder is missing is written out (ADR-011 decision 2).
+- **Step 8, `start`.** The accounts layer removes the secret files of accounts the file no longer holds, then each
+  account starts: an owned one connects for intake, a monitored one makes a login check, and each sender drains its
+  owed rows once the account is ready.
+- **Stop.** Each account closes its connections and its sign-in listener, and the sender waits for a send in flight
+  within the 10-second stop bound. A send cut off by the stop is a row left `sending`, which the next start settles.
+
+### Accounts and sign-in
+
+The accounts layer (ADR-010) knows an account by its key, `mail/<name>`, and by its `auth` settings. Every login asks
+it for a credential:
+
+- `password`: from the store. `password_command`: the command's output, run at each login; a failure turns the
+  account `failing` with the exit status.
+- `google` and `microsoft`: the access token, refreshed first when it expires within 5 minutes. One refresh runs at a
+  time per account, so IMAP and SMTP logging in together can't spend one rotated refresh token twice.
+- `microsoft_app`: a token from the client credentials flow, kept in the store until it expires.
+
+`mail.accounts.signin` starts the account's flow and returns at once:
+
+- **`microsoft`.** It asks for a device code and returns the code and the address, then polls the token endpoint at
+  the interval the provider names until the code is entered, refused or expired. The tokens go to the store, the
+  account turns `ready` and intake starts.
+- **`google`.** It makes a PKCE verifier and a `state` value, listens on `127.0.0.1` on a port the system picks, and
+  returns the address to open and the port. The listener answers only a `GET` whose `state` matches, exchanges the
+  code, writes the tokens and closes. It closes after 10 minutes in any case, and the account stays `needs_sign_in`.
+
+A second sign-in of one account replaces the first. A pending sign-in lives in memory, so a restart ends it and the
+account stays `needs_sign_in`.
+
+**Status.** Each connection reports its outcome to the accounts layer: a refused login turns the account `failing`,
+or `needs_sign_in` when the provider refused its token; an unreachable server, a certificate that doesn't verify and
+an SMTP failure turn it `failing`. The layer's timer tries a `failing` account again after its check interval, then at
+doubling pauses of at most 30 minutes (REQ-005). Connections set a 30-second limit on connecting, the greeting and
+each answer, so a server that hangs fails its own account only.
+
+**Writes.** `mail.accounts.create`, `mail.accounts.change`, `mail.accounts.remove` and `mail.notices.set` use
+`ConfigStore.update`, so the checks and the write are one step in the store's queue (REQ-003). Inside it: the
+fingerprint check and the rules, then the secret a call carries goes to the store, then the file is written. A crash
+after the secret and before the file leaves a secret no account holds, which step 8 removes. A remove writes the file,
+then removes the secret, then stops the account. The intake row records the account's identity (`imap_host`, `login`
+and `address`), so an account whose identity changed, by an operation or a hand edit, starts afresh at its next
+connection (REQ-003, REQ-006).
+
+### Intake
+
+Each `ready` owned account holds one IMAP connection with `INBOX` selected, apart from the tools' connection, so a
+tool's folder never breaks the inbox's IDLE. When the server offers IDLE, an `exists` event runs a check at once; a
+check also runs at every check interval, and imapflow's `maxIdleTime` is set to it (REQ-023).
+
+A check reads `INBOX`'s UIDVALIDITY and UIDNEXT:
+
+- No intake row, or one whose identity differs: the row records UIDVALIDITY, UIDNEXT as the next UID to take, and the
+  identity. Nothing is taken (REQ-006).
+- UIDVALIDITY differs from the row's: the row moves to the new UIDVALIDITY and UIDNEXT, nothing is taken, and the
+  account's last error says the server could no longer tell old mail from new (REQ-021).
+- Otherwise each UID from the next UID on is taken in, in ascending order, one at a time, read with `BODY.PEEK[]` so
+  nothing is flagged on the server.
+
+Taking in one email:
+
+1. **Save.** One transaction inserts the `intern_mail_messages` row, unique by account, UIDVALIDITY and UID, with the
+   parsed headers and the route: the newest `Message-ID` of `In-Reply-To`, then `References`, that `intern_mail_thread`
+   holds names the job. A job that isn't Done gives `input`, a Done one `related`, and none gives `new` (REQ-009). An
+   existing row is kept with its route, so a repeat follows the first decision.
+2. **Copy.** The copy is written out (ADR-011 decision 2).
+3. **Route.** `new` and `related` call `createJob` in-process with the caller `{ kind: "team_member", wayIn: "email",
+   observed: { account, messageId, sender } }`, the account's triage role, the request text from `mail_model.ts`, the
+   idempotency key `mail:<savedId>` in the `mail.intake` key space, the saved row as the job's email, and for `related`
+   the Related link (S-004 REQ-009). The job, its key and its thread rows are one commit. `input` calls
+   `steerConversation` on the lead with an `intern.steer` follow-up, the same actor and the request id `mail:<savedId>`
+   (ADR-004); the existing `resumeAfterLeadInput` resumes a Blocked job. A `ConversationClosedError` or `JobDoneError`
+   turns the route to `related` and repeats this step.
+4. **Record.** One transaction writes what the email became, its `received` history entry, its thread row and the
+   next UID.
+
+No listener can stamp the way in `email` (S-003 REQ-007), so only this in-process path creates an `E` job, and a team
+member's or agent's `jobs.create` naming an origin stays refused (S-002 AC-012.5).
+
+### Job threads and email details
+
+Job schema version 6 adds, as one migration:
+
+- `intern_mail_intake (account, uidvalidity, next_uid, identity)`.
+- `intern_mail_messages (id, account, uidvalidity, uid, message_id, in_reply_to, refs, sender, subject, date, raw,
+  size, attachments, route, job, outcome)`, unique on `(account, uidvalidity, uid)`.
+- `intern_mail_thread (message_id, job, direction)`, indexed on `message_id`.
+- `intern_mail_outbox (id, key, job, account, kind, recipients, subject, mail_text, in_reply_to, refs, message_id, raw,
+  state, server_answer, copied)`, unique on `key`.
+- `intern_jobs.mail_account`, `intern_jobs.mail_message` and `intern_jobs.request_mark`, with an index on
+  `mail_account` for `jobs.list`'s filter. No backfill: no job has come by email.
+
+`jobs.get` builds a job's email details from these: the account, sender and subject of its first email, the copy's
+paths computed at the read, the thread with each email's direction, sender, recipients, subject and date, and the
+request mark. Nothing in it is a secret.
+
+### Owed mail and the outbox
+
+The jobs component asks the mail policy, never a mail module. Without a mail component nothing is required or owed.
+
+- **Block.** For a block by the lead, the policy names the destination: the sender, in the job thread, from the
+  account the job came through, when the job came by email, that account has an SMTP host and its allowlist allows the
+  sender; otherwise the notice address from the notice account, in a thread of its own for the job, when one is set;
+  otherwise none, and then the tool needs no mail text (REQ-014). A question to the notice address replies to the
+  job's first one there, so the job keeps one notice thread. The subject is the starting email's, or the mail text's
+  first line. A mail text equal to the job's newest question row that wasn't held back owes nothing, and a block by
+  the daemon owes nothing. The owed row's key is `question:<jobId>:<n>`, with `n` the job's block count.
+- **Complete.** A job that came by email through an account with an SMTP host, with the request mark, completed with
+  a mail text, owes a result reply to its sender in the job thread, key `result:<jobId>`. Completed by a team member
+  without a mail text, the same transaction writes the `not_sent` history entry instead (REQ-015). The allowlist is
+  the sender's to check (REQ-012).
+- **One transaction.** `blockJob` and `finishJob` pass the row to the job store's write, which inserts it in the
+  transaction of the job write (ADR-001 decision 4).
+
+Each account has one sender, which takes its `owed` rows oldest first after each commit that adds one and whenever
+the account turns `ready`:
+
+1. The allowlist is checked again for every recipient; the notice address is always allowed. A recipient that isn't
+   allowed turns the row `held_back` with its history entry, and owes one held-back notice, key `notice:<rowId>`, in
+   the same transaction (REQ-012).
+2. One transaction composes the message, turns the row `sending` and adds its thread row. The composer writes only
+   the headers `mail_model.ts` lists (`From`, `To`, `Subject`, `Date`, `Message-ID`, `In-Reply-To`, `References`,
+   `MIME-Version` and the MIME part headers), and the `Message-ID` is a random UUID at the account address's domain,
+   so nothing the daemon adds names an internal (REQ-016).
+3. The SMTP client sends the bytes as `raw`, with the envelope of the row's recipients.
+4. One transaction turns the row `sent` with its `sent` history entry.
+
+An SMTP failure before the server accepted the message, such as a refused connection, login or a `4xx` answer, puts
+the row back to `owed` and turns the account `failing`, so the row goes out once the account is ready again. A
+connection lost after the message's data was sent, before the final answer, leaves it unknown: the row turns
+`may_not_have_gone_out` with its history entry. A permanent refusal (`5xx`) turns the row `stopped` with the
+server's answer, and removing an account turns its `owed` rows `stopped`, in the transaction after the file write, so
+an account added again under the name never sends them. A `stopped` row is never sent. What the job's history and
+the team see for it is open: S-009 doesn't say, and the Planner takes it to the product owner.
+
+**The send tool** checks the account and its SMTP host first, then the allowlist: a recipient that isn't allowed
+writes a `held_back` row with its history entry and its notice, as in step 1, and the agent gets an error result
+naming the recipients (AC-012.1). Otherwise the tool writes its row as `sending`, key
+`tool:<conversationId>:<toolCallId>`, with the composed bytes and its thread row in one transaction, and sends. A row
+with that key already there returns its outcome, so the same tool call id acts once (REQ-011). A failure before the
+server accepted the message turns the row `failed` and the agent gets an error result; no history entry is written.
+After the send, the tool's message gets one copy in the account's Sent folder: by IMAP APPEND, unless the account's
+IMAP host is `imap.gmail.com` or `outlook.office365.com`, whose servers file SMTP submissions themselves, or the folder
+already holds that `Message-ID`. The row's `copied` mark records the copy, and a sent row without it gets it when its
+account is next ready.
+
+### Mail tools
+
+The mail component installs the pi-durable extension `intern.mail` with eight tools: `mail_list_folders`,
+`mail_search`, `mail_read`, `mail_save_attachments`, `mail_move`, `mail_set_flags`, `mail_save_draft` and `mail_send`.
+`mail` in a role's tools is a tool-set entry: `isKnownTool` accepts it, and `resolveSeat` turns it into the eight
+names for a job's conversation and into none for the front desk (REQ-011; S-001 REQ-003).
+
+- **Connection.** One tools' connection per account, opened at the first call and closed after 5 idle minutes. Calls
+  on one account wait in imapflow's mailbox lock. Read-only calls open a folder with EXAMINE.
+- **Messages** are named by folder, UIDVALIDITY and UID, and a call whose UIDVALIDITY no longer matches is refused.
+- **Replay.** `mail_list_folders`, `mail_search` and `mail_read` are `replay: "safe"`; the others aren't.
+- **Acting once.** `mail_send` keys its outbox row by the tool call. `mail_save_draft` takes a `Message-ID` hashed from
+  `<conversationId>:<toolCallId>`, which names nothing internal, and appends nothing when Drafts already holds it.
+  `mail_move` and `mail_set_flags` leave the same end state when repeated, and `mail_save_attachments` treats an
+  existing file with the same bytes as written.
+- **No permanent deletion.** `mail_move` needs the MOVE capability and refuses without it. `mail_set_flags` sets only
+  `\Seen`, `\Flagged` and `\Answered`. No code path sends EXPUNGE or CLOSE (tech_stack.md, Email).
+- **Folders.** Drafts, Sent and Trash are found by their SPECIAL-USE attribute, then by their usual names.
+- **Monitored accounts.** `mail_send` is refused before any connection (REQ-010).
+- **Files.** `mail_save_attachments` resolves a relative folder against the conversation's workspace, writes each file
+  with the `wx` flag and refuses a folder that doesn't exist.
+
+`mark_request` joins `JOB_TOOL_NAMES`, offered and refused as `block_job` and `complete_job` are, and is also refused
+for a job without an email. It writes `request_mark` through the job store's update, so the history records it.
+`block_job` and `complete_job` take `mailText`, and refuse a call without one when the policy says it is required.
+
+### Operations, feed and status
+
+- **Operations.** `src/service/mail_operations.ts` holds the nine `mail.*` operations. Results are built from a type
+  with no secret field. `mail.accounts.test` opens fresh IMAP and SMTP connections, logs in and logs out, and reports
+  each server's answer.
+- **Feed.** The accounts layer's change hub sits in the `ServiceContext` as `accountStatus`, and `createInstanceFeed`
+  publishes `mail_account_status` from it, as it publishes `files_changed`. Configuration changes arrive as
+  `settings_changed` from the existing listener. Mail history entries arrive as the existing job deltas.
+- **Status.** `daemon.status` adds `mailAccounts`, each with its name, status, last error and its time, and last check.
+
+### Commands and pages
+
+- **Commands.** `mail` leaves `RESERVED_GROUPS`. `bob mail signin` follows the instance feed until the account's
+  `mail_account_status` is `ready` or the sign-in ends, as `followFeed` follows it for `bob follow`.
+- **Mail page.** It reads `mail.accounts.list` and `mail.notices.get`, again after a `settings_changed` delta, and
+  applies `mail_account_status` deltas. A secret field starts empty and is cleared after the call.
+- **Job page.** `job_email.ts` shows the email details from `jobs.get`. How a browser opens a saved attachment is open:
+  S-009 names no route or operation that returns its bytes.
+
+### Tests
+
+The fakes are in [tech_stack.md](tech_stack.md), Email. `MailComponentOptions` takes the test-only `clock`,
+`oauthEndpoints` and `afterWrite`, and `daemon_child.ts` takes a switch for each, as for the schedules component. The
+write points `mail-saved`, `mail-routed`, `mail-sending` and `mail-sent` mark the steps above, so the kill tests of
+AC-021.1, AC-022.1 and AC-022.2 stop the daemon between them. AC-020.1 searches the database file's bytes, the export,
+the logs, the recorded feed, command output and every request the fake model received for each secret.
+`npm run test:live:mail` runs `test/live/live_mail.ts`, a real low-cost model against the fake mail server, for
+AC-008.2 and AC-016.2.
+
 ## Rejected approaches
 
 Implementation approaches weighed and rejected. ADR-001, Alternatives Considered, gives the full reasoning for the ones
@@ -1162,7 +1433,20 @@ it records.
   Rejected: pi-durable allows one owner per storage. Worker threads stay a logical capacity unit
   (S-002 REQ-009).
 - **A retry loop, intake table or recovery code of the daemon's own.** Rejected: durability belongs to pi-durable,
-  with the two bounded exceptions under Daemon internals (ADR-001 decision 4).
+  with the three bounded exceptions under Daemon internals (ADR-001 decision 4).
+- **himalaya as the mail engine, or `bob mail` commands that agents call from `bash`.** See
+  [tech_stack.md](tech_stack.md), Email, and S-009, Alternatives Considered.
+- **The providers' sign-in libraries, the secrets in the database or the keyring, or encrypted secret files.** See
+  ADR-010, Alternatives Considered.
+- **Saved mail as files exported in an archive, or each attachment stored twice.** See ADR-011, Alternatives
+  Considered.
+- **One connection per account for intake and the tools together.** The tools select other folders and would break
+  the inbox's IDLE, so a new email could wait for a tool call to end.
+- **Sending the owed mail inside the job write.** No network call may run inside a transaction, and the job write
+  must not wait for a mail server; the outbox row is the intent, sent after the commit.
+- **Deciding at send time whether a blocked question goes to the sender or the notice address.** The choice belongs
+  to the block, so it is made in the block's job write; the allowlist is checked again before sending, because the
+  account may have changed in between.
 - **pi-durable document families as the tables.** Atomic with conversation changes and watchable with no extra code,
   so no repair rules would be needed. Rejected by the product owner on 2026-11-02: the job record would be stored in
   pi-durable's format, which has no compatibility promise across versions, it can't be indexed or read with standard
@@ -1183,7 +1467,7 @@ that defines it.
 | Agents and roles | Roles, seats, the lead and handoff, invoking specialist agents, monitoring of who works on what, the front desk, closed conversations | S-001 (the front desk's tools and job operations also S-004) |
 | Jobs | The job record and the life of a job, blocked jobs and answers, history, export and import | S-004 |
 | Schedules | Starts jobs at set times, with run history and on-demand runs | S-007 |
-| Email | The Intern's own mailbox as a way in and out | No spec yet |
+| Email | Owned mail accounts as a way in and out, monitored ones that agents read, sort and draft in, the mail tools, and the accounts layer that signs in and keeps account secrets | S-009 |
 | Web interface | The team's browser view and configuration, built only on service operations | S-006 for jobs, conversations, roles, workspaces, status and the export download; later specs add their own pages |
 | Command line | The `bob` commands, built only on service operations | S-005 |
 | Skills and instructions | The common prompt, the roles' instruction files and the shipped skills in the internal folder, the skill catalog and its search paths, each agent's enabled set, and the `skill` tool | S-008 |
@@ -1207,6 +1491,12 @@ are not described here.
 - **Skills and instructions.** `src/skills/skill_resolution.ts` and `src/prompt/role_prompt.ts` import nothing with
   I/O. Only `src/host/skill_set.ts` and `src/host/seating.ts` write the enabled set, and only the skills component's
   file store writes an instruction or skill file (ADR-009 decision 5).
+- **Accounts and mail.** `src/accounts/` imports no mail library and no pi package, and only it reads or writes the
+  secrets store (ADR-010). `src/mail/mail_model.ts` imports nothing with I/O, so the rules of S-009 REQ-001, REQ-012,
+  REQ-013 and REQ-016 are tested without a server. Only the adapters `src/mail/imap_client.ts`, `smtp_client.ts` and
+  `mime.ts` import the mail libraries. `src/mail/mail_store.ts` imports no pi package and writes only through the
+  job store's transaction, and `src/mail/mail_tools_extension.ts` is one of the-intern's own pi-durable extensions.
+  The jobs component imports no mail module: it asks the policy the mail component registers.
 - **Every job source ends in the same service operation.** Every way in and job source submits through the service layer.
 - **The command table imports no daemon module besides the path layout.** A `bob` command reaches the daemon only
   through the client library, except `serve` and `import`, which load the daemon's code by a dynamic import inside
