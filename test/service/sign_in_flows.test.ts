@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import net from "node:net";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import {
@@ -11,8 +12,12 @@ import {
 } from "../../src/accounts/account_status.ts";
 import type { AccountAuth, ProviderEndpoints } from "../../src/accounts/providers.ts";
 import { createSecretsStore, type SecretsStore } from "../../src/accounts/secrets_store.ts";
-import { type AccountsLayer, createAccountsLayer } from "../../src/accounts/sign_in.ts";
-import { type FakeOAuthProvider, startFakeOAuthProvider } from "../support/fake_oauth_provider.ts";
+import { type AccountsLayer, CredentialFailure, createAccountsLayer } from "../../src/accounts/sign_in.ts";
+import {
+    FAKE_OAUTH_CLIENT_SECRET,
+    type FakeOAuthProvider,
+    startFakeOAuthProvider,
+} from "../support/fake_oauth_provider.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { scaled } from "../support/time_scale.ts";
 
@@ -22,6 +27,8 @@ const KEY = `${OWNER}/${NAME}`;
 const SCOPES = ["offline_access"];
 const START = new Date("2026-11-19T10:00:00Z");
 const SECOND_MS = 1000;
+const TEN_MINUTES_MS = 600 * SECOND_MS;
+const LOOPBACK = "127.0.0.1";
 const WAIT_LIMIT_MS = scaled(10_000);
 const STEP_MS = 5;
 
@@ -95,6 +102,19 @@ async function startRefusingProvider(): Promise<{ endpoints: ProviderEndpoints; 
         endpoints: { microsoftBase: base, googleAuthorize: `${base}/auth`, googleToken: `${base}/token` },
         stop: () => new Promise<void>((resolve) => server.close(() => resolve())),
     };
+}
+
+const googleAuth: AccountAuth = { key: KEY, kind: "google", login: "bob@gmail.test", clientId: "client-1" };
+
+function isRefused(host: string, port: number): Promise<boolean> {
+    return new Promise((resolve) => {
+        const socket = net.connect({ host, port });
+        socket.once("connect", () => {
+            socket.destroy();
+            resolve(false);
+        });
+        socket.once("error", () => resolve(true));
+    });
 }
 
 describe("Signing in with a device code or a loopback answer", () => {
@@ -216,6 +236,96 @@ describe("Signing in with a device code or a loopback answer", () => {
             assert.deepEqual(signedIn, ["second"]);
             const polled = fake.requests().filter((r) => r.body.grant_type?.endsWith("device_code"));
             assert.equal(new Set(polled.map((r) => r.body.device_code)).size, 1, "only one device code is polled");
+        });
+    });
+
+    describe("with Google", () => {
+        let signedIn: number;
+        const onSignedIn = () => {
+            signedIn += 1;
+        };
+
+        async function startGoogle(): Promise<{ address: string; port: number }> {
+            const start = await layer.startSignIn(googleAuth, SCOPES, onSignedIn);
+            assert.equal(start.kind, "browser");
+            if (start.kind !== "browser") throw new Error("unreachable");
+            return start;
+        }
+
+        function exchanges(): number {
+            return fake.requests().filter((r) => r.body.grant_type === "authorization_code").length;
+        }
+
+        beforeEach(async () => {
+            signedIn = 0;
+            await layer.setSecret(KEY, { clientSecret: FAKE_OAUTH_CLIENT_SECRET });
+        });
+
+        it("returns the address to open and the port, listening on 127.0.0.1 only", async () => {
+            const { address, port } = await startGoogle();
+            const query = new URL(address).searchParams;
+            assert.ok(address.startsWith(fake.endpoints.googleAuthorize));
+            assert.equal(query.get("redirect_uri"), `http://${LOOPBACK}:${port}`);
+            assert.equal(query.get("code_challenge_method"), "S256");
+            assert.equal(query.get("client_id"), "client-1");
+            assert.equal(await isRefused(LOOPBACK, port), false, "127.0.0.1 accepts");
+            assert.equal(await isRefused("127.0.0.2", port), true, "another loopback address is refused");
+        });
+
+        it("exchanges the code with the verifier and the client secret, stores the tokens, answers and closes", async () => {
+            const { address, port } = await startGoogle();
+            await fake.answerGoogle(address);
+
+            const stored = await secrets.read(KEY);
+            assert.ok(stored?.refreshToken, "the refresh token is stored");
+            assert.equal(stored.clientSecret, FAKE_OAUTH_CLIENT_SECRET, "the client secret stays");
+            assert.equal(signedIn, 1);
+            const exchange = fake.requests().find((r) => r.body.grant_type === "authorization_code");
+            assert.equal(exchange?.body.client_secret, FAKE_OAUTH_CLIENT_SECRET);
+            assert.equal(exchange?.body.redirect_uri, `http://${LOOPBACK}:${port}`);
+            assert.equal(await isRefused(LOOPBACK, port), true, "the listener is closed");
+        });
+
+        it("answers a request with another state or another method with an error and exchanges nothing", async () => {
+            const { address, port } = await startGoogle();
+            const base = `http://${LOOPBACK}:${port}/?code=abc`;
+            const wrongState = await fetch(`${base}&state=wrong`);
+            const noState = await fetch(base);
+            const posted = await fetch(`${base}&state=${new URL(address).searchParams.get("state")}`, {
+                method: "POST",
+            });
+            assert.deepEqual([wrongState.status, noState.status, posted.status], [400, 400, 400]);
+            assert.equal(exchanges(), 0);
+            assert.equal(signedIn, 0);
+
+            await fake.answerGoogle(address);
+            assert.equal(signedIn, 1, "the right answer still works after the others");
+        });
+
+        it("closes the listener, writes nothing and leaves the account needing sign-in after 10 minutes", async () => {
+            const { port } = await startGoogle();
+            await until(
+                () => failures.length > 0,
+                "the failure",
+                () => clock.advance(TEN_MINUTES_MS),
+            );
+            assert.equal(failures[0]?.status, "needs_sign_in");
+            assert.equal(await isRefused(LOOPBACK, port), true, "the listener is closed");
+            assert.equal((await secrets.read(KEY))?.refreshToken, undefined);
+            assert.equal(signedIn, 0);
+        });
+
+        it("ends the first sign-in of an account when a second starts", async () => {
+            const first = await startGoogle();
+            const second = await startGoogle();
+            assert.equal(await isRefused(LOOPBACK, first.port), true, "the first listener is closed");
+            await fake.answerGoogle(second.address);
+            assert.equal(signedIn, 1);
+        });
+
+        it("refuses to start when the account has no client secret", async () => {
+            await secrets.remove(KEY);
+            await assert.rejects(layer.startSignIn(googleAuth, SCOPES, onSignedIn), CredentialFailure);
         });
     });
 });
