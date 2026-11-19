@@ -52,6 +52,12 @@ describe("validateMailAccount refusals", () => {
         ["a fractional check interval", validOwned({ check_interval_seconds: 10.5 }), "check_interval_seconds"],
         ["an IMAP port of 0", validOwned({ imap_port: 0 }), "imap_port"],
         ["an SMTP port of 65536", validOwned({ smtp_port: 65536 }), "smtp_port"],
+        ["an SMTP port of 0 without an SMTP host", validOwned({ smtp_host: undefined, smtp_port: 0 }), "smtp_port"],
+        [
+            "a non-number SMTP port without an SMTP host",
+            validOwned({ smtp_host: undefined, smtp_port: "465" }),
+            "smtp_port",
+        ],
         ["an unknown security", validOwned({ imap_security: "ssl" }), "imap_security"],
         ["an allow entry without an at sign", validOwned({ allow: ["example"] }), "allow"],
         ["allow on a monitored account", validOwned({ kind: "monitored", smtp_host: undefined, allow: [] }), "allow"],
