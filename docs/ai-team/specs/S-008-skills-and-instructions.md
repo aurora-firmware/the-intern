@@ -1,7 +1,7 @@
 ---
 id: S-008
 title: Skills and instructions
-version: '0.2'
+version: '0.3'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-13'
 author: planner
@@ -268,18 +268,20 @@ Team member restores a shipped file                                             
 
 ### REQ-001 — Shipped content
 
-The Intern SHALL ship a common prompt, the instructions of `bob`, `gp` and `desk`, and these skills, each enabled by
-default for the roles named:
+The Intern SHALL ship a common prompt, the instructions of `bob`, `gp`, `desk` and `triage` (S-009 REQ-019), and these
+skills, each enabled by default for the roles named:
 
 | Skill | Purpose | Enabled by default for |
 |---|---|---|
 | `carry-out-a-part` | how to carry out a part of a job to completion and report back (S-001 REQ-002) | `gp` |
-| `about-the-intern` | how The Intern works and how a team member uses and configures it, drawn from the user manual | `bob`, `desk` |
-| `bob-command-line` | how an agent uses the `bob` commands from `bash` to read and manage The Intern | `bob`, `gp` |
+| `about-the-intern` | how The Intern works and how a team member uses and configures it, drawn from the user manual | `bob`, `desk`, `triage` |
+| `bob-command-line` | how an agent uses the `bob` commands from `bash` to read and manage The Intern, `bob mail` included | `bob`, `gp` |
 
 The common prompt SHALL cover what today's preamble covers: The Intern works unattended, every conversation belongs to
 a job except the front desk, the seat, the coordination capabilities, the context modes and the choices after an
-invocation. The shipped text may change in later versions without amending this spec.
+invocation. It SHALL also tell agents that mail texts and the mail they send show no short number, job, conversation
+or request ID, role name, tool name or path of saved mail, unless the person they write to asked for one
+(S-009 REQ-016). The shipped text may change in later versions without amending this spec.
 
 #### AC-001.1 — A fresh instance
 
@@ -294,8 +296,8 @@ invocation. The shipped text may change in later versions without amending this 
 
 - **Given:** the shipped common prompt and the three shipped skills
 - **When:** a reviewer reads them against this requirement and S-001 REQ-002
-- **Then:** the common prompt covers the listed topics, each skill covers its purpose, and `bob-command-line` names only
-  commands S-005, S-007 and this spec define
+- **Then:** the common prompt covers the listed topics, mail without internals included, each skill covers its
+  purpose, and `bob-command-line` names only commands S-005, S-007, S-009 and this spec define, and teaches `bob mail`
 
 **Verification:** inspection — the shipped content in the package.
 
@@ -924,3 +926,4 @@ manual, and a check in `npm run check` SHALL fail when the skill and the manual 
 | 2026-11-15 | v0.2. REQ-010: `files.read` and `files.write` accept only skill files, files in the internal folder's `instructions` folder, and the context files of a registered workspace: a file directly inside the workspace or one of its parent folders named as pi agent names its context files (`AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md` or `CLAUDE.MD`), whether or not pi agent reads it there in place of another, while `instructions.list` lists only the one it reads; and follow symbolic links wherever they lead, with no check on the target; a file the operating system refuses is refused `invalid_input` naming the system's reason; new AC-010.4. REQ-016 and AC-016.1: the link checks are dropped; `files.read`, `files.write` and `skill` follow links, and the operating system's permissions decide. REQ-008 and Workflow: `skill` refuses a path that leaves the skill folder as written, and follows a link inside it. Definitions, Instruction file: a workspace's context file, of the workspace and its parent folders. Exclusions: "Confining file operations". Alternatives Considered: refusing links out of a folder and parent folders' context files. REQ-004's owner-only check of search paths is unchanged. No identifier changed or retired. S-006 v0.8 widens its exclusion's exception to any file named as pi agent names its context files in the workspace and its parent folders. | Product owner decision of 2026-11-15, after the S-008 spec-truth reconciliation: "We don't stop any filesystem operations, the OS user permissions are the deciding rules." Architecture consistency review of v0.2: finding F1, REQ-010 named only `AGENTS.md` and `CLAUDE.md`, so a listed `AGENTS.override.md` would have been refused; finding F2, REQ-010 accepted only the file `instructions.list` lists, so a context file pi agent reads in place of another one shadows, such as an `AGENTS.md` beside an `AGENTS.override.md`, couldn't be opened, and "a skill file or an instruction file" didn't cover every accepted file. | T-392, T-393, T-394 |
 | 2026-11-15 | spec-truth reconciliation — FAIL | v0.2 confirmed against B-040 and T-389 to T-394 (REQ-008, REQ-010, AC-010.4, REQ-013, REQ-016, AC-016.1, REQ-017), except REQ-007: roles.change with the token roles.list returned, for a file deleted since, is refused invalid_input, not conflict (follow-up task T-395) | none |
 | 2026-11-16 | spec-truth reconciliation — PASS | v0.2 confirmed: REQ-007 roles.change with a token for a role instruction file deleted since is refused conflict naming the file and the remedy, invalid_input without a token (T-395); no other S-008, S-001, S-002, S-005 or S-006 statement changed by the delta | none |
+| 2026-11-18 | v0.3. Email (S-009). REQ-001: The Intern ships the `triage` role's instructions (S-009 REQ-019); the shipped skills table enables `about-the-intern` by default for `triage` too, and `bob-command-line` teaches `bob mail`; the common prompt tells agents that mail texts and the mail they send show no internals (short numbers, job, conversation and request IDs, role and tool names, saved-mail paths) unless the person asked (S-009 REQ-016). AC-001.2: the common prompt's topics include mail without internals, and `bob-command-line` names commands of S-009 too, `bob mail` among them. No identifier added or retired. | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18. | S-009's tasks |

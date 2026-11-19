@@ -5,8 +5,8 @@ This file records the answers to the "Decisions needed" of the development infra
 one section per component, and each answer sits under the question it settles. A question that is still open says so
 and names where it is decided.
 
-Control endpoint, Web interface, Schedules and Skills and instructions aren't among those components: they record the
-technology choices of S-003, S-006, S-007 and S-008.
+Control endpoint, Web interface, Schedules, Skills and instructions and Email aren't among those components: they
+record the technology choices of S-003, S-006, S-007, S-008 and S-009.
 
 ## Development environment
 
@@ -76,7 +76,8 @@ still fails its tests. `PLAYWRIGHT_BROWSERS_PATH` doesn't affect Edge: Playwrigh
 The fake model's reply is a pure function of the transcript.
 
 **How is email tested without a real mail server?**
-Against a local test mail server. Which one is open, to be decided in the Email spec.
+Against in-process fake servers and a fake OAuth provider, with no network beyond the loopback. S-009's Feature
+Architecture settled it; the answer is under Email below.
 
 **How are crash-and-resume tests run reliably?**
 They kill and restart a daemon child process.
@@ -246,6 +247,77 @@ includes.
 
 **How does an agent run `bob`?** pi-durable's `createBashTool` with a `prepare` hook, which adds the instance's
 runtime directory, the conversation id and a launcher folder to the command's environment (S-008 REQ-014).
+
+## Email
+
+These answers settle S-009's Open Questions on libraries, test servers and sign-in. The design is in
+[architecture.md](architecture.md), Email, and the durable parts are in
+[ADR-010](../ai-team/decisions/ADR-010-accounts-share-one-sign-in-layer-and-one-owner-only-secrets-store.md) (the
+accounts layer and the secrets store) and
+[ADR-011](../ai-team/decisions/ADR-011-saved-mail-lives-in-the-database-and-agents-read-a-written-out-copy.md) (saved
+mail).
+
+**Which libraries speak IMAP and SMTP and read messages?** Three runtime dependencies, pinned exactly, chosen with the
+product owner's preference and the research of 2026-11-17. Only the adapter modules in `src/mail/` import them
+(`docs/development/coding_guidelines.md`, Module structure).
+
+| Library | Version, licence | Used for | Points to keep |
+|---|---|---|---|
+| `imapflow` | 2.12.1, MIT | IMAP: IDLE, UIDVALIDITY and UIDNEXT, SPECIAL-USE folders, MOVE, flags, APPEND, SASL XOAUTH2, TLS and STARTTLS | Its default logger is `pino`; it always gets `logger: false`. `messageMove` falls back to COPY and EXPUNGE on a server without MOVE, so the adapter checks the MOVE capability itself and refuses. The adapter never calls `mailboxClose`, because IMAP CLOSE expunges messages a person marked deleted; it leaves a mailbox by selecting another or logging out |
+| `nodemailer` | 10.6.0, MIT-0 | SMTP (`secure`, `requireTLS`, `ignoreTLS`, OAuth2 `accessToken`), and composing messages with its `nodemailer/lib/mail-composer` export | Gets `logger: false` and `debug: false`. A message is composed once; the same bytes go to SMTP as `raw` with an explicit `envelope`, to the Sent folder and to the Drafts folder |
+| `postal-mime` | 4.2.1, MIT-0 | Reading a message: headers, text, HTML and attachments as bytes | No dependencies |
+
+One person publishes all five mail packages, and their 2026 majors were mainly TypeScript rewrites. Each is reached
+through one adapter (`imap_client.ts`, `smtp_client.ts`, `mime.ts`), so replacing one touches one file. They add no
+native addon.
+
+**Why not the himalaya command-line program?** S-009, Open Questions, records the research: its commands and JSON
+output broke in each major version, one person maintains it, its message summary has no `References` header, push is a
+separate tool at version 0, each call opens a new connection, and the project's earlier use of v1.2.0 met five defects
+(B-034, B-050 to B-053). A library in the daemon keeps one connection per account and gives the headers job threads
+need.
+
+**How does sign-in work without the providers' libraries?** With Node's `fetch` against the providers' documented
+OAuth 2.0 endpoints, in `src/accounts/` (ADR-010 decision 3). `@azure/msal-node` and `google-auth-library` are not
+used.
+
+| `auth` | Flow | Endpoints | Scopes |
+|---|---|---|---|
+| `microsoft` | Device code, public client | `https://login.microsoftonline.com/<tenant>/oauth2/v2.0/devicecode` and `/token` | `offline_access https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send` |
+| `google` | Authorization code with PKCE (S256) and the client secret of a "Desktop app" client, answer to `http://127.0.0.1:<port>` | `https://accounts.google.com/o/oauth2/v2/auth` with `access_type=offline` and `prompt=consent`, then `https://oauth2.googleapis.com/token` | `https://mail.google.com/` |
+| `microsoft_app` | Client credentials | `https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token` | `https://outlook.office365.com/.default` |
+
+IMAP and SMTP log in with SASL XOAUTH2, the mailbox address as user. The scopes are the mail code's; the endpoints
+are the accounts layer's. The task that writes the manual's sign-in steps (S-009 REQ-025) checks each value against
+the providers' documentation of that day. Tests replace the endpoints with the fake provider's.
+
+**How is the HTML part turned into text?** `src/mail/html_text.ts`, a pure function of our own: it drops `script` and
+`style`, turns block ends and `br` into line breaks, removes the tags and decodes entities. A converter library would
+pull in an HTML parser for a fallback that the model only reads.
+
+**How is the password command run?** `execFile` from `node:child_process`, with no shell, the list from
+`password_command` as the program and its arguments, a 30-second limit and at most 64 KiB of standard output, whose
+trailing line end is removed (S-009 REQ-004). Its output is never logged; a failure reports the exit status only.
+
+**How does `bob` read a secret?** `src/cli/secret_prompt.ts` sets standard input to raw mode on a terminal and echoes
+nothing; `--secret-stdin` reads standard input to its end and removes one trailing line end. No flag or environment
+variable carries a secret (S-009 REQ-017).
+
+**How is email tested without a real mail server?** In-process fakes, as dev dependencies pinned exactly:
+
+- `imapkit` 5.3.2 (MIT) serves IMAP and `smtp-server` 3.21.6 (MIT-0) receives SMTP, on loopback ports, both behind
+  one helper, `test/support/fake_mail_server.ts`. `imapkit` first shipped in October 2026, so no test imports it
+  directly and a replacement changes that file alone. The helper holds mailboxes in memory, delivers a message to an
+  inbox, records every message its SMTP side receives (S-009 AC-016.1 scans them), can stop answering and answer
+  again, can answer slowly (AC-005.2), can refuse a recipient permanently (AC-022.3), and can leave IDLE out of its
+  capabilities (AC-023.1).
+- `test/support/fake_oauth_provider.ts`, on `node:http`, answers the device code, authorization code, refresh and
+  client credentials requests, rotates refresh tokens, and revokes one on request (AC-004.1 to AC-004.3).
+- A test-only certificate authority and a `localhost` certificate, valid for 100 years, live in
+  `test/fixtures/tls/`. They grant access to nothing; a test trusts them by `NODE_EXTRA_CA_CERTS` in the daemon child,
+  and leaves them untrusted where a certificate must fail to verify (S-009 REQ-001).
+- The mail component takes a test-only clock, as the schedules component does, so retries and check intervals run
+  under test time (AC-005.1, AC-023.1).
 
 ## Local runs and diagnostics
 

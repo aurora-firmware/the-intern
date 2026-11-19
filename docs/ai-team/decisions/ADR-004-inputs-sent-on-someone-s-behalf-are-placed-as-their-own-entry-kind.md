@@ -33,7 +33,9 @@ kind, whose data names the sender and carries the text.
    `report:<invokedId>:<entryId>`; an "aborted" report is an `intern.report` with the id ADR-001 decision 4 fixes. A
    job's inputs carry `resume:<jobId>:<n>` for `jobs.resume` and `reminder:<jobId>:<n>` for the reminder, where `n`
    counts the job's blocks and resumes. A front-desk steering input carries `steer:<frontDeskId>:<toolCallId>` (S-001
-   REQ-022). A repeat is placed once, which ADR-001 decision 4's redelivery relies on.
+   REQ-022). An email that reaches a job's lead carries `mail:<savedId>`, where `savedId` is the email's row in the
+   intake record (ADR-001 decision 4, ADR-011), so the same email taken in again after a crash is placed once. A repeat
+   is placed once, which ADR-001 decision 4's redelivery and intake rely on.
 4. **Held messages keep their kind.** A held steer is delivered as `intern.steer` and a held report as `intern.report`,
    with its sender. The hold commit's own `intern.steer` record has no `content`, so the text shows once.
 5. **Other inputs stay `pi.user`.** A conversation's first input and an input submitted with `whenBusy: "reject"` stay
@@ -41,8 +43,11 @@ kind, whose data names the sender and carries the text.
    `intern.steer` follow-up (S-001 REQ-020). These are `intern.steer` follow-ups in a lead conversation: the text or
    default note of `jobs.resume`, with the team member as actor (S-004 REQ-006), and the reminder of S-004 REQ-008,
    with the daemon as actor. A team member's input to a Blocked lead, and every input a team member sends the front
-   desk, is an `intern.steer` with its sender and way in (S-001 REQ-023); no agent's input reaches the front desk. Any
-   other input sent on someone's behalf gets its kind by amending this record.
+   desk, is an `intern.steer` with its sender and way in (S-001 REQ-023); no agent's input reaches the front desk. An
+   email in a job's thread that reaches its lead is an `intern.steer` follow-up, with the team member who sent it as
+   actor, the way in `email` and the sender's address (S-009 REQ-009), whether the lead is Blocked, idle or running,
+   and it is held like any other message while the lead is parked for reports. Any other input sent on someone's
+   behalf gets its kind by amending this record.
 
 ## Consequences
 

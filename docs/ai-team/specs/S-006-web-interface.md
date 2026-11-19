@@ -1,7 +1,7 @@
 ---
 id: S-006
 title: Web interface
-version: '0.8'
+version: '0.9'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-06'
 author: planner
@@ -49,7 +49,7 @@ and the shared vocabulary of `docs/system_overview.html`. It adds these terms:
 | Team member at a desktop browser | Watches and steers work from any computer that reaches the service, with no terminal and no account. |
 | Second team member | Opens a link to a job from a colleague and sees the same job, or acts on it at the same time. |
 | Developer | Tests the main journeys in a real browser against a real daemon on the fake model. |
-| Later specs (downstream) | S-007, Skills and instructions, and Team knowledge add their pages to the sidebar. |
+| Later specs (downstream) | S-007, Skills and instructions, Team knowledge and Email add their pages to the sidebar; Email adds the Mail page at `/ui/#/mail` (S-009 REQ-018). |
 
 Journeys, in priority order:
 
@@ -292,7 +292,9 @@ change.
 
 The Job page SHALL show a job's short number, title, description, definition of done, status, Blocked reason while
 Blocked, origin (way in and network address where the origin has them, and the front desk for a job it created),
-resolution and justification once Done, worklog and history, and SHALL keep them current without a reload.
+resolution and justification once Done, worklog and history, and SHALL keep them current without a reload. For a job
+that came by email, the Job page SHALL also show the mail account, the sender, the subject, the saved message, the name
+and size of each attachment with no download, the job thread and the request mark (S-009 REQ-018).
 
 #### AC-003.1 — A finished job
 
@@ -308,6 +310,8 @@ The Job page SHALL let a team member answer a Blocked job (S-004 REQ-006), edit 
 of done (S-004 REQ-004), complete it or cancel it with a justification (S-004 REQ-005), and relate it to another job or
 remove a relation (S-004 REQ-009). The Job page SHALL show the job's related jobs, with links. An answer SHALL go
 through `jobs.resume` with its text, so a second answer, once the job is no longer Blocked, is refused `conflict`.
+The complete action SHALL take an optional mail text, passed as `jobs.complete`'s `mailText`, which the daemon sends
+as the result reply for a job with the request mark (S-009 REQ-015).
 
 #### AC-004.1 — Answer a blocked job
 
@@ -917,3 +921,4 @@ Both were for the Architect, and Feature Architecture resolved them. Neither cha
 | 2026-11-15 | v0.8. Exclusions, "Workspace file browsing and editing": S-008's exception names the context files of a registered workspace and of its parent folders, any file there named as pi agent names its context files, `AGENTS.md`, `CLAUDE.md` and their variants, which S-008 v0.2 REQ-010 lets `files.read` and `files.write` reach whether or not pi agent reads that file in place of another. No identifier added, changed or retired. | Cross-spec amendment carried by S-008 v0.2, after the product owner's decision of 2026-11-15: The Intern doesn't stop file operations, and the operating system's permissions decide. S-008 architecture consistency review of v0.2, finding F2: the exception named only the file pi agent reads, not every context file name S-008 REQ-010 accepts. | S-008's tasks T-392 and T-394 |
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.8 confirmed: Skills panel and file editor layout meets REQ-016 and AC-016.1 (B-040, Job and Roles pages seen in Chrome); the Exclusions exception for context files matches files.read and files.write (T-392) | none |
 | 2026-11-16 | spec-truth reconciliation — PASS | v0.8 confirmed after B-041, B-045, B-046, B-048: Roles, Workspaces, Schedules, Front desk and Status (per read kind) show only the read that started last; reads after deltas and reconnects still apply; AC-006.6 test waits for the held thread; no drift | none |
+| 2026-11-18 | v0.9. Users: the Later specs row adds Email, whose Mail page sits at `/ui/#/mail` (S-009 REQ-018). REQ-003: the Job page of a job that came by email shows the mail account, the sender, the subject, the saved message with links to its attachments, the job thread and the request mark. REQ-004: the complete action takes an optional mail text, sent as the result reply for a job with the request mark (S-009 REQ-015). No identifier added or retired. Revised 2026-11-19 on the same branch: the Job page shows each attachment's name and size with no download, in place of links (S-009 v0.3). | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18. | S-009's tasks |

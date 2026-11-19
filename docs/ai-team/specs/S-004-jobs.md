@@ -1,7 +1,7 @@
 ---
 id: S-004
 title: Jobs
-version: '0.17'
+version: '0.18'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-02'
 author: planner
@@ -39,9 +39,11 @@ source, origin, front desk, way in, caller, service operation, observation feed)
 | Resolution | How a Done job ended: `completed` or `cancelled`, with a short justification. |
 | Action | One of the five named moves of a job's status: start, block, resume, complete, cancel (REQ-005). |
 | Worklog | The notes agents and team members write on a job: what was tried, what was done, what is left. It lets another agent take over without the conversation history (REQ-010). |
-| History | The automatic, append-only record of every change to a job's fields, status and resolution, and of every repair (REQ-011, REQ-018). |
+| History | The automatic, append-only record of every change to a job's fields, status and resolution, of every repair, and of the mail a job receives and sends (REQ-011, REQ-018). |
 | Related | An undirected link between two jobs (REQ-009). |
 | Follow-up job | A job an agent creates while it works on another job; its origin letter is `A`. |
+| Request mark | A flag on a job that came by email, set by its lead when the email asks The Intern for something; it decides whether a result reply goes out (S-009 REQ-008, REQ-015). |
+| Mail text | The text a lead writes for the person an email goes to, apart from the Blocked reason or justification it writes for the team. Only mail text is mailed (S-009 REQ-014, REQ-015). |
 | Repair rule | One of the four startup checks that bring a job and its lead conversation back in step after a crash (REQ-018). |
 
 ## Users and Journeys
@@ -52,7 +54,7 @@ source, origin, front desk, way in, caller, service operation, observation feed)
 | Front desk agent | Creates jobs for team members, lists and reads jobs, edits them, adds to their worklog and relates them, naming each job (REQ-021). |
 | Lead agent | Writes the definition of done, keeps the description and the worklog, blocks the job when it lacks something and completes it. |
 | Specialist agent | Reads the job it works on, adds to its worklog and creates new jobs it finds. |
-| Job sources and Email (downstream systems) | Schedules create jobs in-process with their own origin details; Email, a way in, passes a team member's request with the message ID and sender it observes. |
+| Job sources and Email (downstream systems) | Schedules create jobs in-process with their own origin details; Email (S-009), a way in, passes a team member's request with the account, the message ID and the sender it observes, and sends the mail a job owes. |
 | Later specs (downstream systems) | The Command line and Web interface specs present jobs; all call this spec's operations and follow its feed events. |
 | Developer | Tests the job lifecycle on the fake model, including crashes in the middle of a job change. |
 
@@ -85,7 +87,8 @@ What this specification explicitly does NOT cover:
 - **Priorities, due dates, estimates and time tracking.** Admission is first in, first out (S-002 REQ-010), and no
   field orders or schedules jobs.
 - **Assigning jobs to people, watchers, votes, labels and attachments.** All team members are equal (ADR-002), and the
-  lead conversation is the only owner a job has.
+  lead conversation is the only owner a job has. The saved attachments of a job that came by email are part of its
+  email details (S-009 REQ-007), not attachments a team member adds.
 - **Reopening a Done job.** Done is final, and the job's conversations are closed for good (S-001 REQ-026); more
   work becomes a new job, which may be Related to the old one.
 - **Sub-jobs and dependencies between jobs.** Related is the only link. Invoked agents take the place of sub-jobs
@@ -98,8 +101,9 @@ What this specification explicitly does NOT cover:
   Converting pi-durable's stored format is not part of this spec.
 - **How jobs are presented.** The `bob` commands, the web board and the import command's name belong to the Command
   line and Web interface specs.
-- **Reading mail, sending notices about blocked jobs, and when schedules fire.** The Email spec and S-007 own them.
-  This spec records the origin details they pass and publishes job events on the feed.
+- **Reading mail, sending notices about blocked jobs, and when schedules fire.** S-009 (Email) and S-007 own them.
+  This spec records the origin details they pass, a job's email details, request mark and mail history, and the mail
+  text a lead or team member gives, and publishes job events on the feed.
 - **How agents work, hand off and invoke one another.** S-001 owns it.
 - **The front desk itself.** S-001 owns the front desk. It has no job record, so it is never on the board, has no
   definition of done, and the reminder rule, the actions and the repair rules don't apply to it (REQ-022).
@@ -145,16 +149,33 @@ What this specification explicitly does NOT cover:
 | `blockedReason` | the block action | no | Present only while `status` is `blocked` |
 | `resolution` | the complete and cancel actions | no | `{ "kind": "completed" \| "cancelled", "justification": <text> }`, present only when `status` is `done` |
 | `related` | relate and unrelate | through those operations | The short numbers of the Related jobs |
+| `requestMark` | the lead agent, through the mark request tool | through that tool only | Present only for a job that came by email: whether its email asks The Intern for something (S-009 REQ-008) |
+| `email` | the job store, from Email | no | Present only for a job that came by email: the account, the sender, the subject, the saved message and attachments, and the job thread (S-009 REQ-007, REQ-009) |
 
 Worklog and history entries are returned by `jobs.get` and paged by `jobs.worklog.list` and `jobs.history.list`.
 
 **Contract** (worklog entry): `at`, `author`, `text`. **History entry:** `at`, `author`, `field` (a field name,
-`status`, `resolution`, or `repair` for a repair of REQ-018), `old`, `new`. A `repair` entry has `old` null and `new`
-naming the rule and what it did, as `{ "rule": <1 to 4>, "did": <text> }`.
+`status`, `resolution`, `repair` for a repair of REQ-018, or `mail` for an email of S-009), `old`, `new`. A `repair`
+entry has `old` null and `new` naming the rule and what it did, as `{ "rule": <1 to 4>, "did": <text> }`. A `mail`
+entry has `old` null and `new` naming what happened to one email, as `{ "mail": <kind>, "from": <address>, "to":
+<addresses>, "subject": <text> }`, where the kind is one of:
+
+- `received`: an email received into the job (S-009 REQ-007, REQ-009)
+- `sent`: an email sent from the job, by the daemon or through the send tool (S-009 REQ-009, REQ-014, REQ-015)
+- `held_back`: an email the allowlist held back; the entry also names the recipients that weren't allowed (S-009
+  REQ-012)
+- `may_not_have_gone_out`: an email whose sending began before a crash and is not sent again (S-009 REQ-022)
+- `refused`: an email the mail server permanently refused; the entry also carries the server's message, and its `new`
+  says "refused by the server" (S-009 REQ-022)
+- `account_removed`: an owed email never sent because its account was removed; its `new` says "not sent: account
+  removed" (S-009 REQ-003)
+- `not_sent`: a result reply not sent because a team member completed a job with the request mark without a mail
+  text; its `new` also says "result reply not sent: no mail text" (S-009 REQ-015)
 
 **Contract** (author of a worklog or history entry): an agent, with its conversation and seated role; a team member,
 with the way in and the observed details of REQ-003; or the daemon, for automatic changes (start, a resume on input to
-the lead, the reminder rule and its blocks, a cancel after a refused start, and repair).
+the lead, the reminder rule and its blocks, a cancel after a refused start, repair, and every `mail` entry but an email
+an agent sent through the send tool, whose author is that agent).
 
 ### Exposed: job operations
 
@@ -164,14 +185,14 @@ job accepts its job ID or its short number in any letter case (REQ-002).
 | Operation | Kind | Input | Result | Requirement |
 |---|---|---|---|---|
 | `jobs.create` | control | `text` (required), `title`, `statedBy`, `idempotencyKey` (S-002 REQ-013), the role, model, thinking level and registered workspace a team member or schedule entry may name (S-001 REQ-012), and `origin`: job sources only (a schedule's entry and fire time, and for a run on demand what REQ-003 lists); refused from any other caller (S-002 AC-012.5) | the new job | REQ-003, REQ-007 |
-| `jobs.get` | read | job | the job with its worklog and history, newest last | REQ-014 |
-| `jobs.list` | read | optional `status`, `letter`, `relatedTo`, `schedule` (a schedule entry's name, S-007 REQ-009), `limit`, `cursor` | jobs without worklog and history, newest first, and a cursor | REQ-014 |
+| `jobs.get` | read | job | the job with its worklog and history, newest last, and, for a job that came by email, its email details and request mark | REQ-014 |
+| `jobs.list` | read | optional `status`, `letter`, `relatedTo`, `schedule` (a schedule entry's name, S-007 REQ-009), `mailAccount` (a mail account's name, S-009), `limit`, `cursor` | jobs without worklog and history, newest first, and a cursor | REQ-014 |
 | `jobs.update` | control | job and any of `title`, `description`, `definitionOfDone` | the job | REQ-004 |
 | `jobs.worklog.add` | control | job, `text` | the entry | REQ-010 |
 | `jobs.worklog.list`, `jobs.history.list` | read | job, `limit`, `cursor` | entries, oldest first, and a cursor | REQ-010, REQ-011 |
 | `jobs.relate`, `jobs.unrelate` | control | two jobs | both jobs' `related` | REQ-009 |
 | `jobs.resume` | control | job, optional `text` delivered to the lead | the job | REQ-005, REQ-006 |
-| `jobs.complete` | control | job, `justification` | the job | REQ-005, REQ-007 |
+| `jobs.complete` | control | job, `justification`, optional `mailText`: the result reply for a job with the request mark (S-009 REQ-015) | the job | REQ-005, REQ-007 |
 | `jobs.cancel` | control | job, `justification` | the job | REQ-005, REQ-007 |
 | `jobs.export` | control | `path`: an absolute file path on the machine that doesn't exist yet | the path and size written | REQ-016 |
 
@@ -197,8 +218,9 @@ states.
 | add to worklog | every agent of the job | adds an entry (REQ-010) |
 | create job | every agent of the job | creates a follow-up job, keyed by its tool call id; an optional `related` flag, when true, relates it to this job (REQ-003, REQ-007, REQ-009) |
 | relate jobs | every agent of the job | relates or unrelates this job and another (REQ-009) |
-| block job | the lead agent | blocks with a Blocked reason (REQ-005, REQ-006) |
-| complete job | the lead agent | completes with a justification and ends the lead's run; must be the only tool call of its model turn (REQ-005, REQ-007) |
+| block job | the lead agent | blocks with a Blocked reason, and a `mailText`, the question as the person asked by email reads it, required whenever the question will be mailed (REQ-005, REQ-006; S-009 REQ-014) |
+| complete job | the lead agent | completes with a justification and ends the lead's run; must be the only tool call of its model turn; takes a `mailText`, the result reply, required for a job with the request mark (REQ-005, REQ-007; S-009 REQ-015) |
+| mark request | the lead agent of a job that came by email, whatever its role's tool set | sets or clears the request mark (REQ-013; S-009 REQ-008) |
 
 In the front desk, which belongs to no job, the seat carries other job tools instead, each naming the job it acts
 on (REQ-021; S-001 REQ-022):
@@ -209,7 +231,7 @@ on (REQ-021; S-001 REQ-022):
 | create job | creates a job whose origin is the way in of the team member's input being answered, `C` or `W`, with the front desk in its origin details, keyed by its tool call id |
 | list jobs | lists jobs as `jobs.list` does, filtered by status and origin letter |
 
-Block job and complete job are never offered there.
+Block job, complete job and mark request are never offered there.
 
 A refused tool call returns an error result to the agent and its run goes on. Tool names and parameter layouts are
 not contract; the tasks fix them.
@@ -372,8 +394,8 @@ Creating a job SHALL record its Request: the text exactly as received and an ori
 everything known about it. The origin MUST be built from the caller (S-002 AC-012.5):
 
 - a team member's request records its way in and the details that way in observes: none beyond the way in on the
-  local socket, the remote address and port on the network listener, and the message ID and sender for Email, which
-  Email observes and passes with the caller
+  local socket, the remote address and port on the network listener, and the account, the message ID and the sender
+  for Email, which Email observes and passes with the caller (S-009 REQ-007)
 - an in-process job source states its own details: a schedule its entry and fire time, and for a
   run on demand that fact, the way in and what that way in observes, and the front desk when it started the run
   (S-007 REQ-008, REQ-013)
@@ -801,11 +823,14 @@ correction is a new entry. Each entry records its time and author (Interfaces).
 
 ### REQ-011 — The history
 
-The daemon SHALL write one history entry for every change to a job's editable fields, status, Blocked reason,
-resolution and Related links, as one change with it, with the old value, the new value, the author and the
-time. Each repair of REQ-018 writes one `repair` entry (Interfaces); the changes it makes to the status, the Blocked
-reason or the resolution are recorded as any change is. The history is append-only and separate from the worklog.
-Creating a job writes no history entry; its creation time and Request are on the job.
+The daemon SHALL write one history entry for every change to a job's editable fields, status, Blocked reason, resolution
+and Related links, as one change with it, with the old value, the new value, the author and the time. Each repair of
+REQ-018 writes one `repair` entry (Interfaces); the changes it makes to the status, the Blocked reason or the resolution
+are recorded as any change is. The daemon SHALL also write one `mail` entry (Interfaces) for each email a job receives,
+each email sent from it, each email the allowlist holds back, each email that may not have gone out, each result reply
+not sent for lack of a mail text, each email the mail server permanently refused, and each owed email not sent because
+its account was removed (S-009 REQ-003, REQ-009, REQ-012, REQ-015, REQ-022). The history is append-only and separate
+from the worklog. Creating a job writes no history entry; its creation time and Request are on the job.
 
 #### AC-011.1 — Every change, nothing else
 
@@ -840,6 +865,12 @@ conversation it runs in, except that create job makes a new job, relate jobs nam
 any job to read it and changes nothing, and read schedule runs names a schedule entry. The block and
 complete tools SHALL be refused for any agent but the lead agent.
 
+The mark request tool SHALL be offered to the lead agent of a job that came by email, whatever its role's tool set, and
+refused with an error result for any other agent and in any other job (S-009 REQ-008). It sets or clears the request
+mark until the job is Done. The block tool SHALL refuse a call without a mail text whenever the question will be
+mailed (S-009 REQ-014), and the complete tool SHALL refuse a call without a mail text for a job with the request mark
+(S-009 REQ-015); each refusal returns an error result and leaves the job's status unchanged.
+
 #### AC-013.1 — A tool set can't remove them
 
 - **Given:** a team role whose tool set names only `read`
@@ -856,12 +887,30 @@ complete tools SHALL be refused for any agent but the lead agent.
 
 **Verification:** test — a service test.
 
+#### AC-013.3 — Mark request only for the lead of an email job
+
+- **Given:** a job `E-3` that came by email, whose lead's role names no `mail`, and a command-line job `C-4`
+- **When:** each lead calls mark request, and then an agent invoked in `E-3` calls it
+- **Then:** `E-3` has the request mark and `jobs.get` shows it; the calls in `C-4` and from the invoked agent return an
+  error result with a reason, and neither job changes
+
+**Verification:** test — a service test on the fake model.
+
+#### AC-013.4 — A marked job needs a mail text to complete
+
+- **Given:** a job `E-5` In progress with the request mark and a definition of done
+- **When:** its lead calls complete job with a justification and no mail text, and then with a mail text
+- **Then:** the first call returns an error result naming the mail text and `E-5` stays In progress; the second
+  completes it
+
+**Verification:** test — a service test on the fake model.
+
 ### REQ-014 — Reading and listing jobs
 
-`jobs.get` SHALL return one job with its worklog and history. `jobs.list` SHALL return jobs newest first, filtered by
-status, origin letter, Related job and schedule entry when given, in pages of at most `limit` (default 50, at most 500)
-with a cursor
-for the next page. An unknown status or letter is refused `invalid_input`.
+`jobs.get` SHALL return one job with its worklog and history, and, for a job that came by email, its email details and
+request mark (S-009 REQ-007 to REQ-009). `jobs.list` SHALL return jobs newest first, filtered by status, origin letter,
+Related job, schedule entry and mail account when given, in pages of at most `limit` (default 50, at most 500) with a
+cursor for the next page. An unknown status or letter is refused `invalid_input`.
 
 #### AC-014.1 — Filtering and paging
 
@@ -899,12 +948,14 @@ publish one "related changed" delta with both short numbers, and one that change
 
 ### REQ-016 — Export
 
-`jobs.export` SHALL write a consistent copy of the instance's whole database (the job record and the conversations) to
-the given absolute path while the daemon keeps working, and refuse a relative path or an existing file with
-`invalid_input`. It refuses `busy` when the database stays in a transaction. Work in progress SHALL go on during the
-export. The copy SHALL be created owner-only (S-002 REQ-006; ADR-002 decision 6). It holds the database only; the
-configuration file (roles, registered workspaces, `[network]`, schedule entries, `[skills]`) and the internal folder of
-instruction files and shipped skills (S-008 REQ-002) aren't in it.
+`jobs.export` SHALL write a consistent copy of the instance's whole database (the job record and the conversations),
+with every saved email message and attachment of the jobs that came by email (S-009 REQ-024), to the given absolute
+path while the daemon keeps working, and refuse a relative path or an existing file with `invalid_input`. The export
+SHALL stay one file. It refuses `busy` when the database stays in a transaction. Work in progress SHALL go on during the
+export. The copy SHALL be created owner-only (S-002 REQ-006; ADR-002 decision 6). It holds the database and the saved
+mail only; the configuration file (roles, registered workspaces, `[network]`, schedule entries, `[skills]`, mail
+accounts and the notice settings), the secrets store (S-009 REQ-002) and the internal folder of instruction files
+and shipped skills (S-008 REQ-002) aren't in it.
 
 #### AC-016.1 — A copy while working
 
@@ -918,13 +969,14 @@ instruction files and shipped skills (S-008 REQ-002) aren't in it.
 ### REQ-017 — Import
 
 The package SHALL offer an import step, run by the command line while the instance's daemon is stopped, that places an
-exported file as the instance's database. The import step SHALL hold single ownership of the instance while it runs
-(S-002 REQ-001), so it never replaces the database of a running daemon and no daemon starts while it runs. It SHALL
-refuse when the instance's daemon is running, when the state directory holds the database file or anything left of
-one, when the file's job schema version is newer than the running version's, and when its conversation data is newer
-than the running version can read. It SHALL create the database owner-only. An older job schema is migrated
-at the next start (REQ-001). The first start on an imported copy applies REQ-018 and resumes unfinished work (S-002
-REQ-008), so importing a copy of an instance that is still running does that work twice.
+exported file as the instance's database and restores the saved mail it carries with their jobs (S-009 REQ-024). The
+import step SHALL hold single ownership of the instance while it runs (S-002 REQ-001), so it never replaces the database
+of a running daemon and no daemon starts while it runs. It SHALL refuse when the instance's daemon is running, when the
+state directory holds the database file or anything left of one, when the file's job schema version is newer than the
+running version's, and when its conversation data is newer than the running version can read. It SHALL create the
+database owner-only. An older job schema is migrated at the next start (REQ-001). The first start on an imported copy
+applies REQ-018 and resumes unfinished work (S-002 REQ-008), so importing a copy of an instance that is still running
+does that work twice.
 
 #### AC-017.1 — Moving to another computer
 
@@ -1072,6 +1124,21 @@ Rule 3 is applied before rule 2. After the repair rules, the daemon checks REQ-0
 In progress job whose lead is idle and waits for nothing; this is REQ-008 applied to saved state, not a repair rule. A
 reminder this check owes is submitted at the same point as a rule's input.
 
+Mail follows these rules too (ADR-001 decision 4, amended with S-009). They are not repair rules: they change no job's
+fields, status or conversations, only its history.
+
+- **Owed mail** (S-009 REQ-022). A blocked question or result reply SHALL be recorded as owed in the same change as the
+  block or complete that causes it, so a crash between the two leaves neither. After a restart, owed mail whose
+  sending never began SHALL be sent. Each email SHALL go out at most once: when a crash leaves it unknown whether an
+  email that began sending went out, the daemon SHALL NOT send it again and SHALL write a `may_not_have_gone_out` entry
+  to the job's history.
+- **The intake record** (S-009 REQ-021). The daemon SHALL record which emails of an owned inbox it has taken in, with
+  the job or the input to a job's lead each one became, so that whatever crash, restart, outage or sign-in pause cuts
+  intake short, each email after the account's starting point becomes exactly one triage job or one input, and none
+  is skipped.
+
+S-009 AC-021.1, AC-022.1 and AC-022.2 verify these rules.
+
 #### AC-018.1 — One crash per rule
 
 - **Given:** for each rule, a daemon killed in the middle of the job change that rule repairs, including a lead that
@@ -1170,8 +1237,9 @@ setting changes the statuses, the actions or the letters.
   an instance that belongs to no job, its `desk` role and its tools; this spec's REQ-021 and REQ-022 define the job
   tools it carries and keep it out of the job rules. S-005 (`bob chat`) and the Web interface spec present it.
 - **Other specs.** S-005 names the import command (`bob import`), and S-006 presents the board. S-007's schedules
-  state their entry and fire time. A later spec, Email, passes the message ID and sender it observes; until it is
-  built, tests and the live checks stand in for that job source.
+  state their entry and fire time. S-009 (Email) passes the account, the message ID and the sender it observes, saves
+  each email for its job, and sends the mail a job owes; until it is built, tests and the live checks stand in for that
+  job source.
 - **Node's SQLite.** The daemon's Node 24 SQLite support provides the online backup that REQ-016 uses.
 
 ## Success Criteria
@@ -1230,3 +1298,4 @@ None.
 | 2026-11-13 | v0.16. No behaviour changes. Assumptions, Other specs: S-007's schedules state their entry and fire time, and only Email is still to come, with tests and the live checks standing in for it. No identifier is added, changed or retired. | Cross-spec amendment carried by S-007 v0.4, after the S-007 spec-truth reconciliation of 2026-11-12: S-007 is built, so "until those specs are built" no longer held for schedules. Approved by the product owner at Gate 1 with S-007 v0.4, 2026-11-13. | None; spec text only |
 | 2026-11-13 | v0.17. REQ-016: the export also leaves out the internal folder of instruction files and shipped skills and the `[skills]` section of the configuration file, as it leaves out the rest of the configuration file. No identifier added or retired. | S-008 architecture consistency review, finding C3: S-008 adds the internal folder under the data directory. | S-008's tasks |
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.17 confirmed: the export copies the database only, leaving out the internal folder and [skills] | none |
+| 2026-11-18 | v0.18. Email (S-009). Interfaces, the job fields Contract: new `requestMark` and `email` (the account, sender, subject, saved message and attachments, and job thread), returned by `jobs.get`; the history entry Contract gains `mail` entries (`received`, `sent`, `held_back`, `may_not_have_gone_out`, `not_sent` for "result reply not sent: no mail text") and their authors. Job operations: `jobs.list` gains `mailAccount`, `jobs.complete` an optional `mailText`. Job tools: new mark request, offered to the lead of a job that came by email whatever its role's tool set; block job gains `mailText`, required whenever the question will be mailed; complete job gains `mailText`, required for a job with the request mark; none of them in the front desk. REQ-003: the email origin names the account. REQ-011: `mail` history entries. REQ-013: mark request and the mail text refusals, new AC-013.3 and AC-013.4. REQ-014: the email details and the mail account filter. REQ-016: the export stays one file and carries the saved mail; mail accounts, notice settings and the secrets store stay out. REQ-017: import restores the saved mail. REQ-018: owed mail recorded with the block or complete and sent after a restart if sending never began, never sent twice, and the intake record. Definitions (History, new Request mark and Mail text), Users, Exclusions and Assumptions follow. No identifier changed or retired. Revised 2026-11-19 on the same branch: "mail secrets store" becomes "secrets store" (product owner decision). Revised 2026-11-19 on the same branch: the history kinds add `refused` and `account_removed`, and REQ-011 lists them (S-009 v0.3). | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18. | S-009's tasks |

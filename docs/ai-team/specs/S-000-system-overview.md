@@ -1,7 +1,7 @@
 ---
 id: S-000
 title: System Overview
-version: '0.8'
+version: '0.9'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-27'
 author: planner
@@ -19,9 +19,10 @@ anyone driving it step by step.
 
 ## Users
 
-- **Team members.** Anyone who can reach one of The Intern's ways in: the command line, the web interface or its email
-  address. They hand it jobs, answer its questions, follow its work and stop or redirect it, and, from the command
-  line or the web interface, configure it: its schedules, roles, skills, instructions and knowledge sources.
+- **Team members.** Anyone who can reach one of The Intern's ways in: the command line, the web interface or any of its
+  own email addresses, of which it can have any number. They hand it jobs, answer its questions, follow its work and
+  stop or redirect it, and, from the command line or the web interface, configure it: its schedules, roles, skills,
+  instructions and knowledge sources.
   Whoever installs it on the machine and gives it its accounts is a team member like any other. They need
   it to finish what it is given, to ask only when it lacks something, and to show what it did. All team members are
   equal; The Intern makes no difference between them.
@@ -58,9 +59,11 @@ anyone driving it step by step.
 5. **Keep documentation current.** The Intern updates the team's documents, whether in the team wiki, in repositories
    or in other folders the team points it to, as part of its jobs or on a schedule, and writes down what it learns
    about the team's systems in the wiki, where people can read and correct it. Removes: 4.
-6. **Email The Intern.** A team member sends a request or an answer to The Intern's own address. It sorts its inbox,
-   turns requests into jobs, attaches answers to the jobs waiting for them, and, when sending is set up, writes to the
-   people it needs. Removes: 6, 2.
+6. **Email The Intern.** A team member sends a request or an answer to one of The Intern's own addresses. Every new
+   email there becomes a triage job, whose agent decides what the email is: a request becomes the job's work, and mail
+   that needs no answer is recorded or set aside. Answers reach the jobs waiting for them. When sending is set up, The
+   Intern replies in the sender's thread, writes to the people it needs, and tells the team's notice address about
+   questions that have nobody to ask by email and about mail it held back. Removes: 6, 2.
 7. **Watch and steer.** In the web interface a team member sees every job with its definition, status, open questions
    and evidence, follows an agent working live, and stops or redirects it. Removes: 1.
 8. **Fit The Intern to the team.** A team member adds instructions, skills and specialist roles, points The Intern at
@@ -116,7 +119,7 @@ person's access.
   and over the team's network for the web interface, without checking who calls. It starts, stops and reads its
   configuration in a defined order.
 - **Boundary:** It does not define what a job is or its steps (Jobs), which roles exist (Agents and roles), what the
-  command line and the web interface present to people (Command line, Web interface), the mailbox (Email), or when
+  command line and the web interface present to people (Command line, Web interface), the mail accounts (Email), or when
   scheduled work runs (Schedules).
 - **Works with:** Jobs, Agents and roles, Skills and instructions, Command line, Web interface, Email, Schedules,
   Installation and service setup.
@@ -153,36 +156,38 @@ person's access.
 - **Name:** Command line.
 - **Responsibility:** Commands for using and running The Intern: starting the service, chatting with the front desk,
   creating jobs, listing them and reading their history, answering blocked jobs, following and stopping work,
-  managing schedules, roles, skills, instructions and knowledge sources, and exporting and importing the job
-  record.
+  managing schedules, roles, skills, instructions, knowledge sources and mail accounts, and exporting and importing
+  the job record.
 - **Boundary:** It holds no state and implements no behaviour of its own; each command calls an operation of the
   Intern service, reached on the machine, except starting the service and S-004's import step, which run while no
   daemon serves the instance.
 - **Works with:** Intern service, Jobs, Schedules, Agents and roles, Skills and instructions, Team
-  knowledge.
+  knowledge, Email.
 
 #### Web interface
 
 - **Name:** Web interface.
 - **Responsibility:** The team's browser view of The Intern: a board of all jobs with their definitions, status, open
   questions and evidence; chatting with the front desk; creating jobs and answering questions; following an agent
-  live and stopping or redirecting it; and managing schedules, roles, skills, instructions and knowledge
-  sources.
+  live and stopping or redirecting it; and managing schedules, roles, skills, instructions, knowledge sources and
+  mail accounts.
 - **Boundary:** It holds no work and no state of its own and adds no capabilities: every action calls an operation of
   the Intern service. It has no login of its own; who can reach it follows from the network setup of the machine.
 - **Works with:** Intern service, Jobs, Schedules, Agents and roles, Skills and instructions, Team
-  knowledge.
+  knowledge, Email.
 
 #### Email
 
 - **Name:** Email.
-- **Responsibility:** The Intern's own mailbox as a way in and out: it sorts incoming mail, turns requests into jobs,
-  attaches replies to the jobs waiting for them, and, when sending is set up, sends questions and reports to the people
-  a job needs.
-- **Boundary:** It does not read or triage team members' own mailboxes, and it does not decide what a job is or when
-  one is blocked (Jobs). Both parts are optional and set up separately: The Intern works without a mailbox, and a
-  mailbox can receive without sending being set up.
-- **Works with:** Intern service, Jobs, Agents and roles.
+- **Responsibility:** Any number of mail accounts, each owned or monitored. An owned account is a mailbox of The
+  Intern's own and a way in and out: every new email in its inbox becomes a triage job, whose agent decides what the
+  email is; replies reach the jobs waiting for them; and, when sending is set up, The Intern sends questions and
+  results to the people a job needs and writes about its own work to the team's notice address. A monitored account
+  is someone else's mailbox, a person's own or a shared one, where agents read, sort and draft.
+- **Boundary:** It may read, sort and draft in monitored mailboxes, but it never sends from them and no email in them
+  becomes a job. It does not decide what a job is or when one is blocked (Jobs). Every part is optional and set up
+  separately: The Intern works without a mail account, and an owned account can receive without sending being set up.
+- **Works with:** Intern service, Jobs, Agents and roles, Skills and instructions, Command line, Web interface.
 
 #### Schedules
 
@@ -203,7 +208,7 @@ person's access.
   a team member or an agent changes them while the agent works, and the one way every agent reads its skills.
 - **Boundary:** It does not define roles or seat agents (Agents and roles) and does not hold the team's knowledge
   (Team knowledge). It adds no code to The Intern.
-- **Works with:** Intern service, Agents and roles, Schedules, Team knowledge, Command line, Web interface.
+- **Works with:** Intern service, Agents and roles, Schedules, Team knowledge, Email, Command line, Web interface.
 
 #### Team knowledge
 
@@ -358,3 +363,4 @@ person's access.
 | 2026-11-03 | Wording only, no change of scope: the lead completes a job rather than closes it (Purpose, use case 1, Jobs), because a closed conversation is now the conversation of a Done job (S-001 REQ-026). Version stays 0.6. | Architecture consistency review of the closed-conversation amendment, finding F5. | None |
 | 2026-11-07 | v0.7. Triggers leave the product: use case 4 rephrased so that an agent notices what happens and creates the job; the component becomes Schedules; every run starts fresh and its agent can read earlier runs, in place of a choice per schedule; Email reports no events. Users, use case 8, Solution overview, Command line, Web interface and User manual: triggers leave the wording. Agents and roles: the front desk sets up and runs schedules, and Works with names Schedules. Email's Works with no longer names Schedules. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
 | 2026-11-13 | v0.8. Skills and instructions: it also owns where skills are found and which copy wins, the skills each role enables by default and each agent has enabled, how a team member or an agent changes them while the agent works, and the one way every agent reads its skills; its Boundary no longer leaves which role gets which skills to Agents and roles, which still owns roles and seats; Works with adds Intern service and Schedules. Agents and roles, Boundary: it doesn't keep the skills each agent has enabled. Intern service and Schedules, Works with: Skills and instructions, so both sides name each other. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, finding B9. | S-008's tasks, one of which updates `docs/system_overview.html` |
+| 2026-11-18 | v0.9. Users: team members reach The Intern at any number of its own email addresses, in place of its one email address. Email, Responsibility: any number of mail accounts, owned or monitored, in place of The Intern's own mailbox; an owned account is a way in and out where every new email becomes a triage job and The Intern writes about its own work to the team's notice address, and in a monitored account agents read, sort and draft. Email, Boundary: it may read, sort and draft in monitored mailboxes, never sends from them and makes no job from them, in place of "does not read or triage team members' own mailboxes"; it still doesn't decide what a job is. Email, Works with: adds Skills and instructions, Command line and Web interface. Command line and Web interface: Responsibility adds managing mail accounts, and Works with adds Email. Use case 6: email goes to one of The Intern's own addresses, every new email becomes a triage job, and questions with nobody to ask by email and held-back mail go to the notice address. | S-009 Email brainstorm and its architecture consistency review; approved by the product owner at Gate 1 with S-009, 2026-11-18. | S-009's tasks |

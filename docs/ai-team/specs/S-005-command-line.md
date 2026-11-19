@@ -1,7 +1,7 @@
 ---
 id: S-005
 title: Command line
-version: '0.7'
+version: '0.8'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-03'
 author: planner
@@ -29,9 +29,9 @@ of `docs/system_overview.html`. It adds these terms:
 | Term | Meaning in this spec |
 |---|---|
 | Command | One thing `bob` does: a group and a verb (`bob jobs list`), or a top-level command (`bob chat`). |
-| Group | The first word of a grouped command, one noun per S-000 component or service area: `jobs`, `conversations`, `roles`, `workspaces`, `models`, and the groups later specs add, such as `skills` and `instructions` (S-008 REQ-012). |
+| Group | The first word of a grouped command, one noun per S-000 component or service area: `jobs`, `conversations`, `roles`, `workspaces`, `models`, and the groups later specs add, such as `skills` and `instructions` (S-008 REQ-012) and `mail` (S-009 REQ-017). |
 | Top-level command | A command with no group: `chat`, `follow`, `status`, `usage`, `serve`, `export`, `import`. |
-| Reserved group | A group name kept for a later spec (`knowledge`, `mail`). It has no command yet (REQ-001). |
+| Reserved group | A group name kept for a later spec (`knowledge`). It has no command yet (REQ-001). |
 | Data command | A command that prints data from the service: every command except `serve` and `import` (REQ-003). |
 | Following command | A command that keeps printing changes until it ends or the team member stops it: `bob chat`, `bob follow`, `bob jobs follow` (REQ-015). |
 | Text output | The readable lines a data command prints by default. Its wording is not a contract. |
@@ -44,7 +44,7 @@ of `docs/system_overview.html`. It adds these terms:
 |---|---|
 | Team member on the machine | Talks to The Intern, gives and manages jobs, watches work, steers agents, shapes roles and workspaces, and runs, backs up and moves the instance, all from a shell on the machine. |
 | A script, run by hand or by cron | Calls `bob` with `--json` and acts on its JSON output and exit code. |
-| Later specs (downstream) | Team knowledge and Email add their command groups under the names and conventions this spec reserves; S-007 adds `schedules`, and S-008 adds `skills` and `instructions`. |
+| Later specs (downstream) | Team knowledge adds its command group under the name and conventions this spec reserves; S-007 adds `schedules`, S-008 adds `skills` and `instructions`, and S-009 adds `mail`. |
 | Developer | Tests every command against a test daemon on the fake model, and checks the manual's command reference against `bob --help`. |
 
 Journeys, in priority order:
@@ -75,8 +75,9 @@ What this specification explicitly does NOT cover:
   from elsewhere is the web interface's, through the network listener; `bob` has no `--host` option and no login.
 - **State or logic of its own.** `bob` keeps no configuration file, cache or local history, and resolves no short
   number itself: the service validates, resolves and refuses (REQ-016).
-- **Commands for later components.** Knowledge sources and mail get only their reserved group names here (REQ-001);
-  their specs add the commands. S-007 adds `bob schedules`, and S-008 adds `bob skills` and `bob instructions`.
+- **Commands for later components.** Knowledge sources get only their reserved group name here (REQ-001); their spec
+  adds the commands. S-007 adds `bob schedules`, S-008 adds `bob skills` and `bob instructions`, and S-009 adds
+  `bob mail`.
 - **Shell completion and colour themes.** This version prints plain output, with colour only on a terminal.
 - **A raw operation command.** There is no `bob call <operation> <json>` and no command generated from the operation
   catalogue (Alternatives Considered).
@@ -110,11 +111,11 @@ resolved by the service, S-004 REQ-002):
 | Command | Operations called | Requirement |
 |---|---|---|
 | `bob jobs create <text>` | `jobs.create`, with the title, role, model, thinking level, workspace and stated name the team member gives (S-004 REQ-007) | REQ-004 |
-| `bob jobs list` | `jobs.list`, filtered by status, origin letter, Related job and, with `--schedule`, schedule entry (S-007 REQ-011), with a limit and a cursor (S-004 REQ-014) | REQ-004 |
-| `bob jobs show <job>` | `jobs.get`, then `jobs.worklog.list` and `jobs.history.list` (S-004 REQ-010, REQ-011, REQ-014) | REQ-004 |
+| `bob jobs list` | `jobs.list`, filtered by status, origin letter, Related job, with `--schedule`, schedule entry (S-007 REQ-011) and, with `--mail`, mail account (S-009 REQ-017), with a limit and a cursor (S-004 REQ-014) | REQ-004 |
+| `bob jobs show <job>` | `jobs.get`, then `jobs.worklog.list` and `jobs.history.list` (S-004 REQ-010, REQ-011, REQ-014); `jobs.get` carries the email details and request mark of a job that came by email (S-009 Interfaces) | REQ-004 |
 | `bob jobs update <job>` | `jobs.update`: title, description, definition of done (S-004 REQ-004) | REQ-004 |
 | `bob jobs relate <job> <job>`, `bob jobs unrelate <job> <job>` | `jobs.relate`, `jobs.unrelate` (S-004 REQ-009) | REQ-004 |
-| `bob jobs complete <job> <justification>`, `bob jobs cancel <job> <justification>` | `jobs.complete`, `jobs.cancel` (S-004 REQ-005, REQ-007) | REQ-004 |
+| `bob jobs complete <job> <justification>`, `bob jobs cancel <job> <justification>` | `jobs.complete`, `jobs.cancel` (S-004 REQ-005, REQ-007); `bob jobs complete --mail-text <text>` passes `jobs.complete`'s `mailText`, the result reply (S-009 REQ-015) | REQ-004 |
 | `bob jobs answer <job> <text>` | `jobs.get` for the lead conversation, then `conversations.submit` to it (S-001 REQ-020; S-004 REQ-006) | REQ-005 |
 | `bob jobs follow <job>` | `jobs.get`, `jobs.history.list`, `conversations.list` and `conversations.get` for the job's conversations, the instance feed filtered to the job, and the conversation feed and `conversations.entries` of each of its conversations (S-002 REQ-014; S-004 REQ-015) | REQ-006 |
 | `bob follow` | the instance feed (S-002 REQ-014) | REQ-007 |
@@ -134,6 +135,7 @@ resolved by the service, S-004 REQ-002):
 | `bob workspaces list`, `register`, `unregister` | `workspaces.list`, `workspaces.register`, `workspaces.unregister` (S-001 REQ-018) | REQ-012 |
 | `bob models list` | `models.list` (S-002 REQ-012) | REQ-012 |
 | `bob skills list`, `enable`, `disable`, `paths`, `add-path`, `remove-path`, `restore`; `bob instructions list`, `restore` | the `skills.*` and `instructions.*` operations, as S-008 Interfaces lists them | S-008 REQ-012 |
+| `bob mail list`, `show`, `create`, `change`, `signin`, `test`, `remove`; `bob mail notices`, `notices set`, `notices clear` | the `mail.accounts.*` and `mail.notices.*` operations, as S-009 Interfaces lists them | S-009 REQ-017 |
 | `bob export <file>` | `jobs.export`, with the file made absolute against the current directory (S-004 REQ-016) | REQ-013 |
 | `bob import <file>` | none: S-004's import step, in-process (S-004 REQ-017) | REQ-013 |
 | `bob serve` | none: runs the daemon (S-002 Interfaces, the `bob serve` command) | REQ-014 |
@@ -159,7 +161,7 @@ maps to the input of the same meaning in the operation it calls.
   example `{ "jobs.get": …, "jobs.worklog.list": …, "jobs.history.list": … }`). `bob usage` prints
   `{ "total": …, "conversations": { "<id>": … } }`, each value a `usage.get` answer unchanged. A following command
   prints one JSON value per line: each feed snapshot or delta, or each answer it waits for.
-- Reserved groups: `knowledge`, `mail`.
+- Reserved groups: `knowledge`.
 
 ### Consumed
 
@@ -321,8 +323,11 @@ answer.
 of Interfaces with the arguments and options given and print the result. `bob jobs create` SHALL print the new job's
 short number and status. `bob jobs list` SHALL print one line per job with its short number, status, title and, when
 Blocked, its Blocked reason. `bob jobs show` SHALL print the job's title, status, Blocked reason or resolution,
-description, definition of done, Related jobs, latest worklog entries and history. A job created with `bob` has the
-origin letter `C`, because the local socket records way in `command line` (S-003 REQ-007; S-004 REQ-002).
+description, definition of done, Related jobs, latest worklog entries and history, and, for a job that came by email,
+its account, sender, subject, saved message with its attachments, job thread and request mark (S-009 REQ-007 to
+REQ-009). `bob jobs complete` SHALL take an optional `--mail-text`, passed as `jobs.complete`'s `mailText` (S-009
+REQ-015). A job created with `bob` has the origin letter `C`, because the local socket records way in `command line`
+(S-003 REQ-007; S-004 REQ-002).
 
 #### AC-004.1 — Create, list and show
 
@@ -718,8 +723,8 @@ sense.
   exist as specified.
 - **S-004's import step** (REQ-017) runs in-process and holds single ownership of the instance (S-002 REQ-001).
 - **Installation and service setup** puts `bob` on the `PATH`; until then the manual shows `node src/cli/bob.ts`.
-- **Later specs** (Team knowledge, Email) add their groups under the reserved names and follow the conventions of
-  Interfaces. S-007 adds `schedules`, and S-008 adds `skills` and `instructions`, following those conventions.
+- **Later specs.** Team knowledge adds its group under the reserved name and follows the conventions of Interfaces.
+  S-007 adds `schedules`, S-008 adds `skills` and `instructions`, and S-009 adds `mail`, following those conventions.
 
 ## Success Criteria
 
@@ -764,3 +769,4 @@ None.
 | 2026-11-07 | v0.6. Definitions, Users, Exclusions, Interfaces, AC-001.3 and Dependencies: `triggers` is no longer reserved, and `schedules` leaves the reserved groups because S-007 adds its commands. Interfaces: `bob jobs list` gains `--schedule` (S-007 REQ-011). | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
 | 2026-11-13 | v0.7. Definitions (Group, Reserved group), Users, Exclusions (Commands for later components), Interfaces (the conventions' reserved groups) and Dependencies: `skills` and `instructions` leave the reserved groups because S-008 adds `bob skills` and `bob instructions`; `knowledge` and `mail` stay reserved. Interfaces, the command table: one row names S-008's commands by reference to S-008 Interfaces and REQ-012, which own them; the `bob roles change` row calls `roles.list` first for the instructions' version token when the change gives instructions, because `roles.change` writes instructions only with that token (S-008 REQ-007). AC-001.3: the reserved-group example becomes `bob knowledge list`. No identifier added or retired. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, finding B7. The `bob roles change` row follows from S-008 REQ-007. | S-008's tasks |
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.7 confirmed: knowledge and mail stay reserved, bob skills and bob instructions exist, bob roles change reads the token first (T-366 to T-369) | none |
+| 2026-11-18 | v0.8. Definitions (Group, Reserved group), Users (Later specs), Exclusions (Commands for later components), Interfaces (the conventions' reserved groups) and Dependencies: `mail` leaves the reserved groups because S-009 adds `bob mail`; only `knowledge` stays reserved. Interfaces, the command table: one row names S-009's `bob mail` commands by reference to S-009 Interfaces and REQ-017, which own them; `bob jobs list` gains `--mail`, the account filter; `bob jobs show` prints the email details and request mark that `jobs.get` carries; `bob jobs complete` gains `--mail-text`, sent as `jobs.complete`'s `mailText`. REQ-004: `bob jobs show` prints a job's email details and request mark, and `bob jobs complete` takes `--mail-text`. No identifier added or retired. | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18. | S-009's tasks |
