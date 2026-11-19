@@ -201,9 +201,10 @@ export const validateMailAccount = (raw: Raw, label: string): MailAccount => {
         return account;
     }
     const smtpHost = optionalString(raw, "smtp_host", label);
+    const smtpPort = port(raw, "smtp_port", label, defaultPort(smtpSecurity, 465, 587));
     if (smtpHost) {
         account.smtpHost = smtpHost;
-        account.smtpPort = port(raw, "smtp_port", label, defaultPort(smtpSecurity, 465, 587));
+        account.smtpPort = smtpPort;
     }
     account.triageRole = optionalString(raw, "triage_role", label) ?? DEFAULT_TRIAGE_ROLE;
     account.allow = allowList(raw, label);
