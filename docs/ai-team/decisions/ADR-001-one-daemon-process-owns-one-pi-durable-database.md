@@ -18,12 +18,13 @@ Some facts belong to the-intern and have no place in pi-durable: messages held f
 conversation still awaits, creation keys and similar marks (S-001 REQ-017, REQ-019, REQ-020). The job record lives in
 the-intern's own SQL tables in the same file, by the product owner's choice of 2026-11-02 (S-004 REQ-001). pi-durable
 runs each commit in its own transaction, so a job write and the pi-durable change it goes with are two commits, and a
-crash can fall between them.
+crash can fall between them. Email (S-009) takes in and sends mail on an outside server, which no commit can include,
+and must take in each email exactly once and send each at most once (S-009 REQ-021, REQ-022).
 
 ## Decision
 
 The Intern is one daemon process that owns one SQLite file per instance, holding pi-durable's tables and the job
-store. pi-durable sits behind a narrow host, and durability comes from pi-durable, apart from the two bounded
+store. pi-durable sits behind a narrow host, and durability comes from pi-durable, apart from the three bounded
 exceptions in decision 4.
 
 1. **One process, one database per instance.** The file lives in the state directory, and nothing but the daemon reads
@@ -55,12 +56,12 @@ exceptions in decision 4.
    worker thread. Their number, 32, is built in and changes only with a release (S-002 REQ-009). Work beyond it waits
    in a stored arrival order (S-002 REQ-010). CPU-heavy work runs in child processes.
 4. **Durability belongs to the runtime.** Resume, exactly-once admission, queued input and checkpoints come from
-   pi-durable. The daemon writes no retry loop, intake table or recovery of its own, except the two bounded exceptions
-   below. The host sets `settings.restartLimit` to `Infinity`, so every start resumes every unfinished task (S-002
-   REQ-008); a finite limit needs S-002 amended first. It also sets `settings.afterFailedRun` to `"continue"`: input
-   queued during a run that fails, such as one that ends at a failed automatic compaction, is taken by the next run, as
-   a follow-up is (S-001 Definitions, REQ-020), instead of waiting for another input under pi-durable's default
-   `"keep"`. `"withdraw"` would drop that input unanswered.
+   pi-durable. The daemon writes no retry loop, intake table or recovery of its own, except the three bounded
+   exceptions below. The host sets `settings.restartLimit` to `Infinity`, so every start resumes every unfinished task
+   (S-002 REQ-008); a finite limit needs S-002 amended first. It also sets `settings.afterFailedRun` to `"continue"`:
+   input queued during a run that fails, such as one that ends at a failed automatic compaction, is taken by the next
+   run, as a follow-up is (S-001 Definitions, REQ-020), instead of waiting for another input under pi-durable's
+   default `"keep"`. `"withdraw"` would drop that input unanswered.
 
    **First bounded exception: the-intern's own facts about a conversation, and redelivery from them.**
    - The facts are held messages (`held`), awaiting links (`awaiting`), the parked state (`parked`), the abort mark
@@ -122,6 +123,36 @@ exceptions in decision 4.
      timer that checks jobs. The scheduler (S-007) is a job source, not such a timer. A fifth rule, another startup
      check, or a new pairing of a job write with a pi-durable change that the four rules don't repair amends this
      decision first.
+
+   **Third bounded exception: Email's own facts, and taking in and sending from them** (S-009 REQ-021, REQ-022; S-004
+   REQ-018).
+   - The facts are rows of the job store's `intern_mail_` tables: the intake record (each owned account's starting
+     point, the highest UID it has taken in, and each saved email with the job or input it became, ADR-011), the job
+     threads (each `Message-ID` with its job) and the outbox (each email The Intern sends, with its state: `owed`,
+     `sending`, `sent`, `held_back` or `may_not_have_gone_out`).
+   - Intake takes an owned inbox's emails one at a time, in UID order, from the account's starting point. Each is saved,
+     then becomes a job created with the idempotency key `mail:<savedId>` in the `mail.intake` key space, or a follow-up
+     to its job's lead with the request id `mail:<savedId>` (ADR-004 decision 3). The record of what it became and the
+     advance of the highest UID are one transaction after that. A crash in between leaves the email on the server
+     above the highest UID, so the next check takes it again, and the saved row, the key and the request id make it land
+     once. A repeat follows the route recorded with the saved email; a follow-up whose lead closed in between becomes a
+     new job related to the old one (S-009 REQ-009).
+   - Owed mail is a new pairing of a job write: the block or complete that owes a blocked question or result reply
+     writes its outbox row in the same job store transaction. It pairs with no pi-durable change, so the four repair
+     rules don't touch it.
+   - Sending is an effect sandwich. The row turns `sending` with its `Message-ID` fixed and joins the job thread, the
+     server is called, then the row turns `sent` in the transaction that writes the job's `sent` history entry. The
+     send tool writes its row as `sending`, keyed by its tool call, before it calls the server.
+   - The only recovery: at startup step 7, before `host.resume()`, each row left `sending` turns
+     `may_not_have_gone_out` with its history entry and is never sent again; after it, each `owed` row is sent once its
+     account is ready, and each sent row whose Sent folder copy is missing gets it, unless that folder already holds
+     its `Message-ID`. The facts of accounts the configuration file no longer holds are removed at the same step.
+   - Retries: an account whose server can't be reached or refuses it is tried again after its check interval and then
+     at doubling pauses of at most 30 minutes (S-009 REQ-005, ADR-010 decision 4), and its owed mail waits for it.
+     These retry a connection to an outside server. They hold no input for a conversation and never retry a failed job
+     store write.
+   - Nothing else: no timer that checks jobs, and no job field rebuilt from mail facts. A new mail fact, another
+     recovery path or another pairing amends this decision first.
 5. **A storage error ends the process.** When a storage error closes the harness, the daemon logs it, stops taking
    calls and exits non-zero within the 10-second stop bound, and the supervisor restarts it (S-002 REQ-004, REQ-007).
    An error from the daemon's own `commit()` or `mintId()`, and a failed job store write (S-004 REQ-020), are storage
@@ -131,8 +162,11 @@ exceptions in decision 4.
 ## Consequences
 
 - One database with one writer is the single source of truth, and one file copy backs up or moves an instance.
-- A crash is a resume. The daemon's own recovery is the redelivery, the four repair rules and the turn-end check, and
-  each is code that only a crash exercises, so each needs a kill test (S-001 REQ-017, S-004 AC-018.1, AC-008.4).
+- A crash is a resume. The daemon's own recovery is the redelivery, the four repair rules, the turn-end check and
+  Email's intake and outbox, and each is code that only a crash exercises, so each needs a kill test (S-001 REQ-017,
+  S-004 AC-018.1, AC-008.4, S-009 AC-021.1, AC-022.1, AC-022.2).
+- An email whose sending a crash cut short is never sent again, so its recipient may not get it; the job's history says
+  so.
 - A pi upgrade touches only the host module and the-intern's extensions.
 - One process runs every job: a runaway run or crashing extension pauses all of them until the restart, and blocking
   code delays every run.
