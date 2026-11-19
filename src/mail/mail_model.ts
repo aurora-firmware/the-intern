@@ -1,3 +1,5 @@
+import type { JobStatus } from "../jobs/job_model.ts";
+
 export type MailKind = "owned" | "monitored";
 export type MailSecurity = "tls" | "starttls" | "none";
 export type MailAuth = "password" | "password_command" | "google" | "microsoft" | "microsoft_app";
@@ -244,3 +246,95 @@ export const checkNotice = (notice: MailNotice, accounts: MailAccount[]): void =
         throw new MailRuleError("notice_from", `${notice.from} is not an owned account with an SMTP host`);
     }
 };
+
+export type ThreadHeaders = { inReplyTo?: string; references?: string[] };
+
+export const threadParentOf = (headers: ThreadHeaders, isKnown: (messageId: string) => boolean): string | undefined => {
+    if (headers.inReplyTo !== undefined && isKnown(headers.inReplyTo)) {
+        return headers.inReplyTo;
+    }
+    return [...(headers.references ?? [])].reverse().find(isKnown);
+};
+
+export type MailRoute = "new" | "related" | "input";
+
+export const routeFor = (status: JobStatus | undefined): MailRoute => {
+    if (status === undefined) {
+        return "new";
+    }
+    return status === "done" ? "related" : "input";
+};
+
+export const questionSubject = ({
+    startingSubject,
+    mailText,
+}: {
+    startingSubject?: string;
+    mailText: string;
+}): string => startingSubject ?? mailText.split("\n")[0];
+
+export type RequestMail = {
+    sender: string;
+    subject: string;
+    date: string;
+    text: string;
+    messagePath: string;
+    attachmentPaths: string[];
+};
+
+export const requestText = (mail: RequestMail): string => {
+    const attachments =
+        mail.attachmentPaths.length === 0
+            ? "No attachments."
+            : `Attachments:\n${mail.attachmentPaths.map((path) => `- ${path}`).join("\n")}`;
+    return [
+        `From: ${mail.sender}`,
+        `Subject: ${mail.subject}`,
+        `Date: ${mail.date}`,
+        `Saved message: ${mail.messagePath}`,
+        attachments,
+        "",
+        mail.text,
+    ].join("\n");
+};
+
+export const MAIL_HEADERS: readonly string[] = [
+    "From",
+    "To",
+    "Subject",
+    "Date",
+    "Message-ID",
+    "In-Reply-To",
+    "References",
+    "MIME-Version",
+    "Content-Type",
+    "Content-Transfer-Encoding",
+    "Content-Disposition",
+    "Content-ID",
+];
+
+export type MailNoticeText = { subject: string; text: string };
+
+export const heldBackNotice = (held: { account: string; recipients: string[]; subject: string }): MailNoticeText => ({
+    subject: `Email held back: ${held.subject}`,
+    text: [
+        `The email "${held.subject}" from the account ${held.account} was not sent.`,
+        `These recipients are not on the account's allowlist: ${held.recipients.join(", ")}.`,
+        "None of the recipients received it.",
+    ].join("\n"),
+});
+
+export const refusedNotice = (refused: {
+    account: string;
+    recipients: string[];
+    subject: string;
+    serverAnswer: string;
+}): MailNoticeText => ({
+    subject: `Email refused: ${refused.subject}`,
+    text: [
+        `The mail server refused the email "${refused.subject}" from the account ${refused.account}.`,
+        `Recipients: ${refused.recipients.join(", ")}.`,
+        `Server answer: ${refused.serverAnswer}`,
+        "It will not be tried again.",
+    ].join("\n"),
+});

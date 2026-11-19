@@ -10,7 +10,10 @@ import {
     threadParentOf,
 } from "../../src/mail/mail_model.ts";
 
-const knownIds = (...ids: string[]) => (messageId: string) => ids.includes(messageId);
+const knownIds =
+    (...ids: string[]) =>
+    (messageId: string) =>
+        ids.includes(messageId);
 
 describe("threadParentOf", () => {
     it("picks_in_reply_to_before_any_references_entry", () => {
