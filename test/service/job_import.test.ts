@@ -382,7 +382,7 @@ describe("the import step", () => {
 
         assert.equal(meanwhile, 1);
         assert.ok(lines.some((line) => /step=3/.test(line) && line.includes(`pid ${process.pid}`)));
-        assert.deepEqual(await readdir(target.stateDir), [DATABASE_NAME]);
+        assert.deepEqual((await readdir(target.stateDir)).sort(), ["secrets", DATABASE_NAME]);
     });
 
     it("releases the lock after a refusal", async () => {
