@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { MailRuleError, validateMailAccount } from "../../src/mail/mail_model.ts";
+import {
+    accountKey,
+    checkNotice,
+    isAllowed,
+    type MailAccount,
+    MailRuleError,
+    notAllowedRecipients,
+    validateMailAccount,
+} from "../../src/mail/mail_model.ts";
 
 const validOwned = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
     name: "intern",
@@ -106,5 +114,97 @@ describe("validateMailAccount defaults", () => {
         assert.equal(account.triageRole, "sorter");
         assert.deepEqual(account.allow, ["ana@example.com"]);
         assert.equal(account.tenant, "common");
+    });
+});
+
+describe("isAllowed", () => {
+    const allow = ["Ana@Example.com", "@team.org"];
+
+    it("allows a listed address in any letter case and an address at a listed domain", () => {
+        assert.equal(isAllowed(allow, "ana@example.com"), true);
+        assert.equal(isAllowed(allow, "x@team.org"), true);
+        assert.equal(isAllowed(allow, "X@TEAM.ORG"), true);
+    });
+
+    it("refuses a subdomain of a listed domain and another address at a listed address's domain", () => {
+        assert.equal(isAllowed(allow, "x@dev.team.org"), false);
+        assert.equal(isAllowed(allow, "ana@example.org"), false);
+    });
+
+    it("allows everyone when the list is empty", () => {
+        assert.equal(isAllowed([], "anyone@anywhere.net"), true);
+    });
+});
+
+describe("notAllowedRecipients", () => {
+    const account = (allow?: string[]): MailAccount => validateMailAccount(validOwned({ allow }), "intern");
+
+    it("returns the recipients the list does not allow", () => {
+        const refused = notAllowedRecipients(
+            account(["@example.com"]),
+            ["ana@example.com", "bo@other.org"],
+            undefined,
+        );
+        assert.deepEqual(refused, ["bo@other.org"]);
+    });
+
+    it("always allows the notice address, in any letter case", () => {
+        const refused = notAllowedRecipients(account(["@example.com"]), ["Ops@Other.org"], "ops@other.org");
+        assert.deepEqual(refused, []);
+    });
+
+    it("allows every recipient when the list is missing", () => {
+        assert.deepEqual(notAllowedRecipients(account(undefined), ["bo@other.org"], undefined), []);
+    });
+});
+
+describe("checkNotice", () => {
+    const sender = validateMailAccount(validOwned(), "intern");
+    const receiver = validateMailAccount(
+        validOwned({ name: "desk", address: "Desk@Example.com", smtp_host: undefined }),
+        "desk",
+    );
+    const watcher = validateMailAccount(
+        validOwned({ name: "watch", kind: "monitored", smtp_host: undefined, address: "watch@example.com" }),
+        "watch",
+    );
+    const noticeKey = (to: string, from: string): string => {
+        try {
+            checkNotice({ to, from }, [sender, receiver, watcher]);
+        } catch (error) {
+            assert.ok(error instanceof MailRuleError);
+            return error.key;
+        }
+        throw new Error("expected MailRuleError");
+    };
+
+    it("accepts a notice address that no owned account has, sent from an owned account with SMTP", () => {
+        checkNotice({ to: "ops@example.com", from: "intern" }, [sender, receiver, watcher]);
+    });
+
+    it("refuses a notice address equal to an owned account's address in any letter case", () => {
+        assert.equal(noticeKey("DESK@example.COM", "intern"), "notice_to");
+    });
+
+    it("accepts the address of a monitored account", () => {
+        checkNotice({ to: "watch@example.com", from: "intern" }, [sender, receiver, watcher]);
+    });
+
+    it("refuses a sender that is not an account", () => {
+        assert.equal(noticeKey("ops@example.com", "ghost"), "notice_from");
+    });
+
+    it("refuses a sender that is a monitored account", () => {
+        assert.equal(noticeKey("ops@example.com", "watch"), "notice_from");
+    });
+
+    it("refuses an owned sender with no SMTP host", () => {
+        assert.equal(noticeKey("ops@example.com", "desk"), "notice_from");
+    });
+});
+
+describe("accountKey", () => {
+    it("prefixes the account name with mail/", () => {
+        assert.equal(accountKey("intern"), "mail/intern");
     });
 });
