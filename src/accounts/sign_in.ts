@@ -4,7 +4,15 @@
  */
 import { type ExecFileException, execFile } from "node:child_process";
 import type { AccountClock, AccountStatusHub } from "./account_status.ts";
-import { accessTokenFor, SignInNeededError } from "./oauth.ts";
+import {
+    accessTokenFor,
+    type DeviceCode,
+    pollDeviceCode,
+    requestDeviceCode,
+    SignInNeededError,
+    storeSignedIn,
+    TokenRefusedError,
+} from "./oauth.ts";
 import type { AccountAuth, Credential, ProviderEndpoints } from "./providers.ts";
 import type { AccountSecret, SecretsStore } from "./secrets_store.ts";
 
@@ -24,6 +32,11 @@ export class CredentialFailure extends Error {
     }
 }
 
+/** What a team member does next to finish a sign-in. */
+export type SignInStart = { kind: "device_code"; code: string; address: string };
+
+const SLOW_DOWN_SECONDS = 5;
+
 export type AccountsLayerOptions = {
     secrets: SecretsStore;
     status: AccountStatusHub;
@@ -35,6 +48,11 @@ export type AccountsLayerOptions = {
 
 export type AccountsLayer = {
     credentialFor(auth: AccountAuth, scopes: readonly string[]): Promise<Credential>;
+    /**
+     * Starts the account's sign-in and returns at once. `onSignedIn` runs after the tokens are stored. A second
+     * sign-in of the account ends the first. On a failure the account stays `needs_sign_in`.
+     */
+    startSignIn(auth: AccountAuth, scopes: readonly string[], onSignedIn: () => void): Promise<SignInStart>;
     /** True when the auth needs a secret the store lacks. */
     needsSignIn(auth: AccountAuth): Promise<boolean>;
     setSecret(key: string, values: { password?: string; clientSecret?: string }): Promise<void>;
@@ -73,8 +91,78 @@ export function createAccountsLayer(options: AccountsLayerOptions): AccountsLaye
         }
     }
 
+    const pending = new Map<string, AbortController>();
+
+    function beginSignIn(key: string): AbortController {
+        pending.get(key)?.abort();
+        const controller = new AbortController();
+        pending.set(key, controller);
+        return controller;
+    }
+
+    function endSignIn(key: string, controller: AbortController): void {
+        if (pending.get(key) === controller) pending.delete(key);
+    }
+
+    function reportSignInFailure(auth: AccountAuth, error: unknown): void {
+        const [owner, name] = auth.key.split("/");
+        if (owner === undefined || name === undefined || status.get(owner, name)?.status !== "needs_sign_in") return;
+        const message = error instanceof Error ? error.message : `Account ${auth.key}: the sign-in failed.`;
+        status.report(owner, name, { kind: "needs_sign_in", message });
+    }
+
+    async function startSignIn(
+        auth: AccountAuth,
+        scopes: readonly string[],
+        onSignedIn: () => void,
+    ): Promise<SignInStart> {
+        const controller = beginSignIn(auth.key);
+        try {
+            const code = await requestDeviceCode(auth, scopes, endpoints);
+            void finishDeviceCode(auth, code, controller.signal, onSignedIn).finally(() =>
+                endSignIn(auth.key, controller),
+            );
+            return { kind: "device_code", code: code.userCode, address: code.verificationUri };
+        } catch (error) {
+            endSignIn(auth.key, controller);
+            const message = error instanceof Error ? error.message : `Account ${auth.key}: the sign-in failed.`;
+            throw new CredentialFailure("failing", message);
+        }
+    }
+
+    async function finishDeviceCode(
+        auth: AccountAuth,
+        code: DeviceCode,
+        signal: AbortSignal,
+        onSignedIn: () => void,
+    ): Promise<void> {
+        try {
+            const expiresAt = clock.now().getTime() + code.expiresInSeconds * 1000;
+            let intervalMs = code.intervalSeconds * 1000;
+            for (;;) {
+                await clock.wait(new Date(clock.now().getTime() + intervalMs), signal);
+                if (signal.aborted) return;
+                if (clock.now().getTime() >= expiresAt) throw new Error(`Account ${auth.key}: the code expired.`);
+                try {
+                    const answer = await pollDeviceCode(auth, endpoints, code.deviceCode);
+                    if (signal.aborted) return;
+                    await storeSignedIn(secrets, auth.key, answer, clock.now());
+                    onSignedIn();
+                    return;
+                } catch (error) {
+                    if (!(error instanceof TokenRefusedError)) throw error;
+                    if (error.code === "slow_down") intervalMs += SLOW_DOWN_SECONDS * 1000;
+                    else if (error.code !== "authorization_pending") throw error;
+                }
+            }
+        } catch (error) {
+            if (!signal.aborted) reportSignInFailure(auth, error);
+        }
+    }
+
     return {
         credentialFor,
+        startSignIn,
         async needsSignIn(auth) {
             const secret: AccountSecret = (await secrets.read(auth.key)) ?? {};
             switch (auth.kind) {

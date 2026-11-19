@@ -152,7 +152,8 @@ describe("Signing in with a device code or a loopback answer", () => {
             const stored = await secrets.read(KEY);
             assert.ok(stored?.refreshToken, "the refresh token is stored");
             assert.ok(stored.accessToken && fake.isValidAccessToken(stored.accessToken), "the access token is valid");
-            assert.equal(stored.accessTokenExpiresAt, clock.now().getTime() + 3600 * SECOND_MS);
+            const signedAt = (stored.accessTokenExpiresAt ?? 0) - 3600 * SECOND_MS;
+            assert.ok(signedAt >= START.getTime() && signedAt <= clock.now().getTime(), "the lifetime is the clock's");
             assert.equal(signedIn, 1);
         });
 
