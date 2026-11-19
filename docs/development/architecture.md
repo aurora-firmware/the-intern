@@ -1203,7 +1203,8 @@ component's options, for `createJob` and the job actions.
   `ConfigStore.update`, where they read both sections.
 - **Step 7, `repair`.** Before `host.resume()`: each outbox row left `sending` turns `may_not_have_gone_out` with its
   history entry; the intake rows of accounts the file no longer holds are removed and their `owed` rows turn
-  `stopped`; each saved email whose copy folder is missing is written out (ADR-011 decision 2).
+  `account_removed` with their history entries; each saved email whose copy folder is missing is written out
+  (ADR-011 decision 2).
 - **Step 8, `start`.** The accounts layer removes the secret files of accounts the file no longer holds, then each
   account starts: an owned one connects for intake, a monitored one makes a login check, and each sender drains its
   owed rows once the account is ready.
@@ -1233,9 +1234,10 @@ it for a credential:
 A second sign-in of one account replaces the first. A pending sign-in lives in memory, so a restart ends it and the
 account stays `needs_sign_in`.
 
-**Status.** An account whose `auth` needs a secret the store lacks starts `needs_sign_in` (REQ-002); every other
-account's status comes from its first check after a start. S-009 names no status for an account not yet checked, a
-new one or any one in the seconds after a start, and the Planner takes that to the product owner. Each connection
+**Status.** After a start, an add or a change, an account is `connecting` until its first check ends, and the change
+to the check's outcome reaches the feed (REQ-005, AC-005.2). An account whose `auth` needs a secret the store lacks is
+`needs_sign_in` at once instead (REQ-002). Neither waits for a connection, so readiness and the account operations
+never wait for a slow server. Each connection
 reports its outcome to the accounts layer: a refused password, an unreachable server, a certificate that doesn't
 verify and an SMTP failure turn the account `failing`, and a token the provider refuses turns it `needs_sign_in`.
 The layer's timer tries a `failing` account again after its check interval, then at doubling pauses of at most 30
@@ -1336,17 +1338,28 @@ the account turns `ready`:
 An SMTP failure before the server accepted the message, such as a refused connection, login or a `4xx` answer, puts
 the row back to `owed` and turns the account `failing`, so the row goes out once the account is ready again. A
 connection lost after the message's data was sent, before the final answer, leaves it unknown: the row turns
-`may_not_have_gone_out` with its history entry. A permanent refusal (`5xx`) turns the row `stopped` with the
-server's answer, and removing an account turns its `owed` rows `stopped`, in the transaction after the file write, so
-an account added again under the name never sends them. A `stopped` row is never sent. What the job's history and
-the team see for it is open: S-009 doesn't say, and the Planner takes it to the product owner.
+`may_not_have_gone_out` with its history entry.
+
+A permanent refusal (a `5xx` answer to the sender, a recipient or the message) is never tried again (REQ-022). One
+transaction turns the row `refused` with the server's answer, writes the `refused` history entry ("refused by the
+server" and that answer), and, unless the row went to the notice address, owes one refused-mail notice to it, key
+`refused:<rowId>`, written by `mail_model.ts` in the daemon's own words with no internal (REQ-013, REQ-016). nodemailer
+sends to the recipients a server accepts when it refuses only some: the row then turns `sent` for those, and the
+refused ones get the `refused` entry and the notice in the same transaction.
+
+Removing an account turns its `owed` rows `account_removed`, each with its history entry ("not sent: account
+removed"), in the transaction after the file write; step 7 finishes this after a crash. The sender only takes `owed`
+rows, so an account added again under the name never sends them (REQ-003).
 
 **The send tool** checks the account and its SMTP host first, then the allowlist: a recipient that isn't allowed
 writes a `held_back` row with its history entry and its notice, as in step 1, and the agent gets an error result
 naming the recipients (AC-012.1). Otherwise the tool writes its row as `sending`, key
 `tool:<conversationId>:<toolCallId>`, with the composed bytes and its thread row in one transaction, and sends. A row
 with that key already there returns its outcome, so the same tool call id acts once (REQ-011). A failure before the
-server accepted the message turns the row `failed` and the agent gets an error result; no history entry is written.
+server accepted the message puts the row to `owed`, so it goes out once the account is ready again (REQ-022), and the
+agent's result says it waits for the server; a permanent refusal is handled as above, and the agent's result names
+the server's answer.
+
 After the send, the tool's message gets one copy in the account's Sent folder: by IMAP APPEND, unless the account's
 IMAP host is `imap.gmail.com` or `outlook.office365.com`, whose servers file SMTP submissions themselves, or the folder
 already holds that `Message-ID`. The row's `copied` mark records the copy, and a sent row without it gets it when its
@@ -1394,8 +1407,8 @@ for a job without an email. It writes `request_mark` through the job store's upd
   `mail_account_status` is `ready` or the sign-in ends, as `followFeed` follows it for `bob follow`.
 - **Mail page.** It reads `mail.accounts.list` and `mail.notices.get`, again after a `settings_changed` delta, and
   applies `mail_account_status` deltas. A secret field starts empty and is cleared after the call.
-- **Job page.** `job_email.ts` shows the email details from `jobs.get`. How a browser opens a saved attachment is open:
-  S-009 names no route or operation that returns its bytes.
+- **Job page.** `job_email.ts` shows the email details from `jobs.get`, with each attachment's name and size and no
+  link: no route or operation sends an attachment to a browser (REQ-018).
 
 ### Tests
 

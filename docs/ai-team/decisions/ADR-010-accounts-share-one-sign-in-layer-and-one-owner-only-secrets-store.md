@@ -37,7 +37,9 @@ asks the layer for a credential each time it logs in.
    token that expires within 5 minutes, one refresh at a time per account, and writes the new tokens to the store
    before it returns them. A refused refresh turns the account `needs_sign_in`.
 4. **Status and retries.** The layer keeps each account's status, last error, its time and the last check in memory,
-   and publishes each change. A consumer reports each connection's outcome to it. A `failing` account is tried again
+   and publishes each change. An account is `connecting` until a consumer reports its first connection's outcome
+   after a start, an add or a change (S-009 REQ-005). A consumer reports each connection's outcome to it. A `failing`
+   account is tried again
    after its check interval, then at doubling pauses of at most 30 minutes; a `needs_sign_in` one waits for a sign-in
    or a new secret (S-009 REQ-005). Each account has its own timer, so one account never delays another. The clock is
    injectable for tests.
@@ -52,8 +54,8 @@ asks the layer for a credential each time it logs in.
   can every credential the service account acts with (ADR-002 decision 4).
 - An export and a copy of the database carry no secret, so accounts are signed in again after an import (S-009
   REQ-024).
-- Status lives in memory, so after a restart each account's status comes from its next check. An account whose `auth`
-  needs a secret the store lacks starts `needs_sign_in` (S-009 REQ-002).
+- Status lives in memory. After a start, an add or a change, an account is `connecting` until its first check ends,
+  except one whose `auth` needs a secret the store lacks, which is `needs_sign_in` (S-009 REQ-002, REQ-005).
 - Provider endpoints are a test-only switch, so the fake OAuth provider stands in for Google and Microsoft.
 
 ## Alternatives Considered

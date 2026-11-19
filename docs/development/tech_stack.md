@@ -309,7 +309,8 @@ variable carries a secret (S-009 REQ-017).
   one helper, `test/support/fake_mail_server.ts`. `imapkit` first shipped in October 2026, so no test imports it
   directly and a replacement changes that file alone. The helper holds mailboxes in memory, delivers a message to an
   inbox, records every message its SMTP side receives (S-009 AC-016.1 scans them), can stop answering and answer
-  again, and can leave IDLE out of its capabilities (AC-023.1).
+  again, can answer slowly (AC-005.2), can refuse a recipient permanently (AC-022.3), and can leave IDLE out of its
+  capabilities (AC-023.1).
 - `test/support/fake_oauth_provider.ts`, on `node:http`, answers the device code, authorization code, refresh and
   client credentials requests, rotates refresh tokens, and revokes one on request (AC-004.1 to AC-004.3).
 - A test-only certificate authority and a `localhost` certificate, valid for 100 years, live in

@@ -129,7 +129,7 @@ exceptions in decision 4.
    - The facts are rows of the job store's `intern_mail_` tables: the intake record (each owned account's starting
      point, the highest UID it has taken in, and each saved email with the job or input it became, ADR-011), the job
      threads (each `Message-ID` with its job) and the outbox (each email The Intern sends, with its state: `owed`,
-     `sending`, `sent`, `held_back`, `failed`, `stopped` or `may_not_have_gone_out`).
+     `sending`, `sent`, `held_back`, `refused`, `account_removed` or `may_not_have_gone_out`).
    - Intake takes an owned inbox's emails one at a time, in UID order, from the account's starting point. Each is saved,
      then becomes a job created with the idempotency key `mail:<savedId>` in the `mail.intake` key space, or a follow-up
      to its job's lead with the request id `mail:<savedId>` (ADR-004 decision 3). The record of what it became and the
@@ -143,13 +143,16 @@ exceptions in decision 4.
    - Sending is an effect sandwich. The row turns `sending` with its `Message-ID` fixed and joins the job thread, the
      server is called, then the row turns `sent` in the transaction that writes the job's `sent` history entry. The
      send tool writes its row as `sending`, keyed by its tool call, before it calls the server. A failure the server
-     reports before it takes the message puts an owed row back to `owed` and turns a send tool's row `failed`; a
-     permanent refusal turns the row `stopped`, and a `stopped` row is never sent.
+     reports for now, before it takes the message, puts the row back to `owed`, to go out once the account is ready
+     again. A permanent refusal turns the row `refused` with its history entry, and owes one refused-mail notice in the
+     same transaction unless the row went to the notice address; a `refused` row is never sent again.
    - The only recovery: at startup step 7, before `host.resume()`, each row left `sending` turns
      `may_not_have_gone_out` with its history entry and is never sent again; after it, each `owed` row is sent once its
      account is ready, and each sent row whose Sent folder copy is missing gets it, unless that folder already holds
      its `Message-ID`. At the same step the intake rows of accounts the configuration file no longer holds are
-     removed, and their `owed` rows turn `stopped`, so an account added again under the name never sends them.
+     removed, and their `owed` rows turn `account_removed` with their history entries, so an account added again
+     under the name never sends them. Removing an account makes the same change in the transaction after its file
+     write; this step finishes one a crash cut short.
    - Retries: an account whose server can't be reached or refuses it is tried again after its check interval and then
      at doubling pauses of at most 30 minutes (S-009 REQ-005, ADR-010 decision 4), and its owed mail waits for it.
      These retry a connection to an outside server. They hold no input for a conversation and never retry a failed job
