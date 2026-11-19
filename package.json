@@ -12,6 +12,9 @@
         "@earendil-works/pi-coding-agent": "1.4.0",
         "@earendil-works/pi-durable": "1.4.0",
         "amaro": "1.1.11",
+        "imapflow": "2.12.1",
+        "nodemailer": "10.6.0",
+        "postal-mime": "4.2.1",
         "preact": "11.1.1",
         "smol-toml": "1.9.1"
     },
@@ -19,7 +22,9 @@
         "@biomejs/biome": "2.6.4",
         "@types/node": "24.19.2",
         "axe-core": "4.14.0",
+        "imapkit": "5.3.2",
         "playwright-core": "1.65.0",
+        "smtp-server": "3.21.6",
         "typescript": "7.0.2",
         "vitepress": "1.6.4"
     },
