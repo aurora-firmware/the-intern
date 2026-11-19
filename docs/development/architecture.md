@@ -1233,10 +1233,13 @@ it for a credential:
 A second sign-in of one account replaces the first. A pending sign-in lives in memory, so a restart ends it and the
 account stays `needs_sign_in`.
 
-**Status.** Each connection reports its outcome to the accounts layer: a refused login turns the account `failing`,
-or `needs_sign_in` when the provider refused its token; an unreachable server, a certificate that doesn't verify and
-an SMTP failure turn it `failing`. The layer's timer tries a `failing` account again after its check interval, then at
-doubling pauses of at most 30 minutes (REQ-005). Connections set a 30-second limit on connecting, the greeting and
+**Status.** An account whose `auth` needs a secret the store lacks starts `needs_sign_in` (REQ-002); every other
+account's status comes from its first check after a start. S-009 names no status for an account not yet checked, a
+new one or any one in the seconds after a start, and the Planner takes that to the product owner. Each connection
+reports its outcome to the accounts layer: a refused password, an unreachable server, a certificate that doesn't
+verify and an SMTP failure turn the account `failing`, and a token the provider refuses turns it `needs_sign_in`.
+The layer's timer tries a `failing` account again after its check interval, then at doubling pauses of at most 30
+minutes (REQ-005). Connections set a 30-second limit on connecting, the greeting and
 each answer, so a server that hangs fails its own account only.
 
 **Writes.** `mail.accounts.create`, `mail.accounts.change`, `mail.accounts.remove` and `mail.notices.set` use
@@ -1362,8 +1365,8 @@ names for a job's conversation and into none for the front desk (REQ-011; S-001 
 - **Replay.** `mail_list_folders`, `mail_search` and `mail_read` are `replay: "safe"`; the others aren't.
 - **Acting once.** `mail_send` keys its outbox row by the tool call. `mail_save_draft` takes a `Message-ID` hashed from
   `<conversationId>:<toolCallId>`, which names nothing internal, and appends nothing when Drafts already holds it.
-  `mail_move` and `mail_set_flags` leave the same end state when repeated, and `mail_save_attachments` treats an
-  existing file with the same bytes as written.
+  `mail_move` and `mail_set_flags` leave the same end state when repeated, and a repeated `mail_save_attachments`
+  is refused because its files exist, so they are written once.
 - **No permanent deletion.** `mail_move` needs the MOVE capability and refuses without it. `mail_set_flags` sets only
   `\Seen`, `\Flagged` and `\Answered`. No code path sends EXPUNGE or CLOSE (tech_stack.md, Email).
 - **Folders.** Drafts, Sent and Trash are found by their SPECIAL-USE attribute, then by their usual names.

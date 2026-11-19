@@ -52,7 +52,8 @@ asks the layer for a credential each time it logs in.
   can every credential the service account acts with (ADR-002 decision 4).
 - An export and a copy of the database carry no secret, so accounts are signed in again after an import (S-009
   REQ-024).
-- Status lives in memory, so after a restart every account starts unknown and connects again.
+- Status lives in memory, so after a restart each account's status comes from its next check. An account whose `auth`
+  needs a secret the store lacks starts `needs_sign_in` (S-009 REQ-002).
 - Provider endpoints are a test-only switch, so the fake OAuth provider stands in for Google and Microsoft.
 
 ## Alternatives Considered
