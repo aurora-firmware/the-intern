@@ -1,7 +1,7 @@
 ---
 id: S-009
 title: Email
-version: '0.2'
+version: '0.3'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-17'
 author: planner
@@ -41,7 +41,7 @@ vocabulary of `docs/system_overview.html`. It adds these terms:
 | Allowlist | The recipient addresses and domains an owned account may send to. Empty means anyone (REQ-012). |
 | Notice address | The one address The Intern writes to about its own work: held-back mail and blocked questions that have no email sender to ask (REQ-013). |
 | Mail tools | The agent tools of REQ-011, offered to a role whose tool set names `mail`. The mark request tool is a job tool, not a mail tool (REQ-008). |
-| Account status | `ready`, `needs_sign_in` or `failing`, with the last error and its time (REQ-005). |
+| Account status | `connecting`, `ready`, `needs_sign_in` or `failing`, with the last error and its time (REQ-005). |
 | Check interval | How often the daemon looks for new mail in an owned account when the server can't tell it at once; 60 seconds by default (REQ-023). |
 
 ## Users and Journeys
@@ -226,8 +226,8 @@ contents. The page calls only these:
 |---|---|---|
 | Mail | `mail.accounts.list`, `mail.accounts.get`, `mail.notices.get`, `roles.list`, the instance feed | `mail.accounts.create`, `mail.accounts.change`, `mail.accounts.remove`, `mail.accounts.signin`, `mail.accounts.test`, `mail.notices.set` |
 
-The Job page of a job that came by email shows the account, the sender, the subject, the saved message with links to
-its attachments, the job thread and the request mark (REQ-018).
+The Job page of a job that came by email shows the account, the sender, the subject, the saved message, the name and
+size of each attachment, the job thread and the request mark (REQ-018). No attachment is sent to the browser.
 
 ### Exposed: tools
 
@@ -261,6 +261,7 @@ Tool names and parameter layouts are not contract; the tasks fix them, as in S-0
 | Blocked question | the job's sender, in the job thread, when the job came by email and the sender is allowed; otherwise the notice address, in a thread of its own for the job | the lead blocks the job with a mail text that differs from the last one mailed for the job | the lead's mail text | REQ-014 |
 | Result reply | the job's sender, in the job thread | a job with the request mark is completed with a mail text | the mail text | REQ-015 |
 | Held-back notice | the notice address | the allowlist holds back an email | what was held back and for whom, in the daemon's own words | REQ-012 |
+| Refused-mail notice | the notice address | the mail server permanently refuses an email that didn't go to the notice address | what was refused, for whom, and the server's message, in the daemon's own words | REQ-022 |
 
 Each is plain text from the account that the job came through, or from the notice account. A Blocked reason or
 completion justification is never mailed (REQ-016).
@@ -397,6 +398,8 @@ read it, the call SHALL be refused `conflict`, naming the file, and nothing chan
 A change to `imap_host`, `login` or `address` SHALL start the account afresh: mail in its inbox at the next successful
 connection is left alone (REQ-006). Removing an account SHALL stop its intake and tools, leave its jobs, their saved
 mail and their history in place, and leave running jobs to carry on; mail tools that name it are refused from then on.
+Mail the account still owes SHALL never be sent, even if an account with the same name is added later, and each such
+email SHALL get the history entry "not sent: account removed".
 Removing the account the notice settings name SHALL be refused `conflict`.
 
 `mail.accounts.test` SHALL connect and log in to IMAP, and to SMTP for an owned account with an SMTP host, send
@@ -475,6 +478,8 @@ account SHALL turn `needs_sign_in` (REQ-005). `mail.accounts.signin` SHALL be re
 Each account SHALL have a status, reported by `mail.accounts.list`, `mail.accounts.get`, the status operation and the
 `mail_account_status` delta:
 
+- `connecting`: not checked yet since it was added, changed or the daemon started. Nobody needs to act; the first
+  connection turns it into one of the other three.
 - `ready`: its last connection and login succeeded.
 - `needs_sign_in`: it has no usable secret or token, or the provider refused its sign-in.
 - `failing`: anything else stops it, such as an unreachable server, a refused password or a failed password command.
@@ -492,6 +497,15 @@ or slow another's.
   minutes, the second keeps taking in mail, and the first returns to `ready`
 
 **Verification:** test — a service test against the fake mail server under the test clock.
+
+#### AC-005.2 — A new account connects
+
+- **Given:** a running daemon and the fake mail server, set to answer slowly
+- **When:** a team member creates an owned account, and later restarts the daemon
+- **Then:** after the create and after the restart, the account shows `connecting` until its first connection ends,
+  then `ready`, and both changes reach the feed
+
+**Verification:** test — a service test against the fake mail server.
 
 ### REQ-006 — Intake: every new email in an owned inbox becomes a job
 
@@ -706,6 +720,8 @@ and loading the configuration file SHALL refuse that pairing `invalid_input`, be
 owned inbox and feed a job. The notice address SHALL receive:
 
 - a held-back notice for each email the allowlist holds back (REQ-012)
+- a refused-mail notice for each email the mail server permanently refuses, unless that email went to the notice
+  address itself (REQ-022)
 - the blocked question of any job that has no allowed email sender to ask (REQ-014), in a thread of its own for that
   job, which joins the job thread (REQ-009)
 
@@ -791,10 +807,10 @@ A job without the mark, or a cancelled job, SHALL send nothing. The justificatio
 
 ### REQ-016 — No internals in mail
 
-What the daemon itself puts in an email (the headers, the `Message-ID`, the held-back notice) SHALL contain no short
-number, job, conversation or request ID, role name, tool name or path of saved mail, and the daemon SHALL add no header
-beyond the standard ones. The daemon SHALL never mail a Blocked reason or completion justification, which are written
-for the team; only a lead's mail text is mailed (REQ-014, REQ-015).
+What the daemon itself puts in an email (the headers, the `Message-ID`, the held-back and refused-mail notices) SHALL
+contain no short number, job, conversation or request ID, role name, tool name or path of saved mail, and the daemon
+SHALL add no header beyond the standard ones. The daemon SHALL never mail a Blocked reason or completion justification,
+which are written for the team; only a lead's mail text is mailed (REQ-014, REQ-015).
 
 The shipped common prompt and triage instructions (REQ-019) SHALL tell agents that mail texts and mail they send show
 none of these unless the person they write to asked for one.
@@ -839,11 +855,12 @@ from a flag or the environment. `bob jobs list --mail` SHALL filter by account.
 
 ### REQ-018 — The Mail page and email on the Job page
 
-The Mail page SHALL list the accounts with their status, update it from the feed, and let a team member do what the
-`bob mail` commands do: create, change, test, sign in, remove, and set the notice settings. Sign-in SHALL show the
-Microsoft code and address, or a link to Google's sign-in. A secret field SHALL never be filled from the service. The
-Job page of a job that came by email SHALL show the account, sender, subject, saved message and attachments, the job
-thread and the request mark.
+The Mail page SHALL list the accounts with their status, update it from the feed, and let a team member do what the `bob
+mail` commands do: create, change, test, sign in, remove, and set the notice settings. Sign-in SHALL show the Microsoft
+code and address, or a link to Google's sign-in. A secret field SHALL never be filled from the service. The Job page of
+a job that came by email SHALL show the account, sender, subject, saved message, the name and size of each attachment,
+the job thread and the request mark. It SHALL offer no download of an attachment: only the job's agents read
+attachments, as files (REQ-007).
 
 #### AC-018.1 — The page
 
@@ -851,7 +868,7 @@ thread and the request mark.
 - **When:** a team member creates an owned account, tests it, signs in a `microsoft` account against the fake provider
   and opens a triage job's Job page
 - **Then:** the account appears `ready` without a reload, the code and address show during sign-in, and the Job page
-  shows the email, its attachment links and the request mark
+  shows the email, each attachment's name and size with no download link, and the request mark
 
 **Verification:** test — a web test.
 
@@ -925,6 +942,11 @@ the same step as the job change that causes it, so a crash between the two leave
 email whose sending never began SHALL be sent. When a crash leaves it unknown whether an email that began sending went
 out, the daemon SHALL NOT send it again, and SHALL record in the job's history that it may not have gone out.
 
+When the mail server permanently refuses an email The Intern sends, such as an address that doesn't exist, the daemon
+SHALL NOT try it again, SHALL record "refused by the server" with the server's message in the job's history, and SHALL
+send one notice about it to the notice address (REQ-013), unless the refused email was itself addressed to the notice
+address. A server that only fails for now, or can't be reached, is retried as REQ-005 states.
+
 #### AC-022.1 — A crash while sending
 
 - **Given:** a request job being completed, its result reply in flight
@@ -940,6 +962,15 @@ out, the daemon SHALL NOT send it again, and SHALL record in the job's history t
 - **Then:** the fake server receives the reply exactly once
 
 **Verification:** test — a service test that kills the daemon.
+
+#### AC-022.3 — A refused email
+
+- **Given:** a request job whose sender the fake server refuses permanently, and a notice address
+- **When:** the job is completed with a mail text, and later a blocked question to the notice address is refused too
+- **Then:** the result reply is tried once; the history records "refused by the server" with the server's message for
+  both; the notice address receives one notice for the first and none for the second
+
+**Verification:** test — a service test against the fake mail server.
 
 ### REQ-023 — Timeliness
 
@@ -1090,26 +1121,13 @@ The command reference SHALL match `bob mail --help`.
 
 ## Open Questions
 
-- **Mail libraries and test servers.** The product owner prefers imapflow for IMAP, postal-mime for reading messages,
-  nodemailer for SMTP, imapkit and smtp-server as in-process fake servers for tests, and plain HTTP requests for OAuth
-  token refresh rather than the providers' own libraries, all pinned exactly and kept behind the Email component's own
-  interface. The research of 2026-11-17 advised against using the himalaya command-line program as the mail engine:
-  its commands and JSON output broke in each major version (v1.0 removed watching and sync; v2.0 removed templates,
-  the keyring and OAuth, with about 30 more breaking changes unreleased), one person maintains it, its message summary
-  has no `References` header, push moved to a separate tool still at version 0, every call opens a new connection,
-  and the project's earlier use of v1.2.0 met five defects in it (B-034, B-050 to B-053, before the TypeScript
-  rework). Owner: the Architect. Resolution: decided in Feature Architecture.
-- **How saved mail is kept inside the one-file export (REQ-024), and where the secrets store lives (REQ-020).** Owner:
-  the Architect. Resolution: decided in Feature Architecture.
-- **A shared accounts layer.** The product owner asks that sign-in, token refresh, the secrets store and account
-  status stay apart from the mail-specific code, so that a later spec for calendars and contacts can reuse them with
-  its own protocols beside IMAP and SMTP (Microsoft 365 offers calendars and contacts only through Microsoft Graph).
-  This spec adds no calendar or contact behaviour. Owner: the Architect. Resolution: decided in Feature Architecture.
-- **The request id of an email follow-up** (ADR-004 decisions 3 and 5). Owner: the Architect. Resolution: decided in
-  Feature Architecture, with ADR-004 amended.
+None. Feature Architecture settled them: the mail libraries and test servers in `docs/development/tech_stack.md`,
+Email; the shared accounts layer and the secrets store in ADR-010; saved mail inside the one-file export in ADR-011;
+and the request id of an email follow-up in ADR-004 decisions 3 and 5.
 
 ## Amendment Log
 
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-11-19 | v0.2. REQ-002, REQ-020 and the Assumptions list: the secrets store holds the secrets of every kind of account The Intern connects to, with mail accounts its only users today, in place of a store for mail secrets only; S-002 and S-004 on this branch and the ADR-002 amendment follow. Open Questions: a shared accounts layer (sign-in, token refresh, the secrets store, account status) apart from the mail-specific code. No behaviour of email changes and no identifier is added, changed or retired. | Product owner decision, 2026-11-19: calendars and contacts will get their own spec, and S-009 shouldn't make them reopen S-002, S-004 and ADR-002. | None yet; S-009 isn't broken down |
+| 2026-11-19 | v0.3. REQ-005, Definitions and new AC-005.2: a fourth status, `connecting`, for an account not checked yet since it was added, changed or the daemon started. REQ-003: mail a removed account still owes is never sent, and each gets "not sent: account removed". REQ-022, REQ-013, REQ-016, Interfaces and new AC-022.3: an email the server permanently refuses isn't tried again; the history records "refused by the server" with the server's message, and the notice address gets one notice unless the refused email went to it. REQ-018, AC-018.1 and Interfaces: the Job page shows each attachment's name and size, with no download. Open Questions: settled by Feature Architecture. S-004 and S-006 on this branch follow. | Feature Architecture Spec findings F-A to F-D; product owner decisions, 2026-11-19. | None yet; S-009 isn't broken down |
