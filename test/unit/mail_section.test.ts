@@ -156,7 +156,9 @@ describe("loading the mail sections", () => {
 
     it("tells_the_name_of_two_accounts_that_share_it", async () => {
         const account = '[[mail_account]]\nname = "a"\nkind = "monitored"\naddress = "a@b.c"\nimap_host = "h"\n';
-        const { error } = await loadText(`${account}auth = "google"\nclient_id = "c"\n\n${account}auth = "google"\nclient_id = "c"\n`);
+        const { error } = await loadText(
+            `${account}auth = "google"\nclient_id = "c"\n\n${account}auth = "google"\nclient_id = "c"\n`,
+        );
         assert.ok(error instanceof ConfigError, String(error));
         assert.equal(error.key, "mail_account.a.name");
     });
