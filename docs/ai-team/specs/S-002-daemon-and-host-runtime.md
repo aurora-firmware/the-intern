@@ -70,7 +70,7 @@ Journeys, in priority order:
    Delivered by REQ-014, REQ-015.
 6. **The team changes settings while it runs.** Role and workspace settings change through operations, are written to
    the file and apply at once. Delivered by REQ-022.
-7. **The service account's credentials are used in place,** except the mail secrets the instance keeps for S-009.
+7. **The service account's credentials are used in place,** except the account secrets the instance keeps (S-009).
    Delivered by REQ-018, REQ-019, REQ-020.
 
 ## Exclusions
@@ -219,7 +219,7 @@ Restore admission order, apply the job repair rules (S-004 REQ-018), resume     
   unfinished work (held worker threads first, then the queue), then submit the
   input those rules owe (S-004 REQ-018)
   ↓
-Remove the mail secrets of accounts the file no longer holds; start listeners,  REQ-003,
+Remove the secrets of accounts the file no longer holds; start listeners,       REQ-003,
   scheduler and mail intake → status "ready"                                    S-009 REQ-002
 ```
 
@@ -281,7 +281,7 @@ cause:
 6. ensure the per-role default workspaces (S-001 REQ-003) and the front desk (S-001 REQ-021)
 7. restore admission (REQ-010), apply the job repair rules (S-004 REQ-018), resume unfinished work, then submit the
    input those rules owe (S-004 REQ-018)
-8. remove the mail secrets of every account the configuration file no longer holds (S-009 REQ-002), start the
+8. remove the secrets of every account the configuration file no longer holds (S-009 REQ-002), start the
    components that start after work resumes (listeners, scheduler, mail intake), then report ready
 
 #### AC-002.1 — The steps run in order
@@ -411,8 +411,8 @@ The daemon SHALL use four directories, resolved from the XDG base directories, e
 Each can be overridden by a command-line flag (REQ-021). A missing directory is created owner-only (mode 0700). An
 existing one that isn't a directory, isn't owned by the service account, or is accessible to the group or others
 stops startup with an error naming the path and the reason. The database file is owner-only. The instance
-directories also hold the mail secrets store (S-009 REQ-002): its directory is owner-only like the others, and its
-files are owner-only like the database file.
+directories also hold the secrets store (S-009 REQ-002): its directory is owner-only like the others, and its files
+are owner-only like the database file.
 
 #### AC-006.1 — Resolution
 
@@ -946,9 +946,11 @@ Models and their credentials MUST come from the service account's pi agent login
 The daemon writes nothing into pi agent's agent folder except token refreshes made by the login itself, under pi
 agent's own lock, so a person's pi under the same account and the daemon never log each other out. Every other
 credential the-intern acts with (mail, wiki, repositories, other hosts) is the service account's, in that account's
-usual places, with one exception: the instance keeps the mail passwords and client secrets a team member gives it,
-and the OAuth tokens it obtains, in its owner-only mail secrets store (S-009 REQ-002, REQ-020). No other credential
-is copied into the instance's directories, and no credential is kept in the database or anywhere else.
+usual places, with one exception: the instance keeps the passwords and client secrets a team member gives it for
+the accounts it connects to, and the OAuth tokens it obtains for them, in its owner-only secrets store (S-009
+REQ-002, REQ-020). Mail accounts are the only such accounts today; a later spec that adds another kind of account
+keeps its secrets in the same store. No other credential is copied into the instance's directories, and no
+credential is kept in the database or anywhere else.
 
 #### AC-018.1 — The pi agent folder is untouched
 
@@ -956,7 +958,7 @@ is copied into the instance's directories, and no credential is kept in the data
 - **When:** a daemon runs and is stopped
 - **Then:** every file in the folder is byte-identical apart from the login's own token file, no `auth.json` is created
   where there was none, and no credential string appears in the database, or in the instance directories outside
-  the mail secrets store (S-009 REQ-020)
+  the secrets store (S-009 REQ-020)
 
 **Verification:** test — `test/service/credentials.test.ts`, `test/unit/model_runtime.test.ts`.
 
@@ -1075,4 +1077,4 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-07 | v0.15. Triggers leave the job sources (Purpose, Definitions, Users, Exclusions, REQ-012, AC-012.5). REQ-021: the configuration file holds S-007's schedule entries. Interfaces and REQ-012: the `schedules.*` operations. Interfaces and REQ-014: the schedule fire skipped delta. REQ-002, Workflow, AC-002.2 and Configuration: the startup model check covers roles, and an entry's model is checked at a fire. REQ-022: unregistering a workspace an entry names is refused. REQ-012: a run on demand states its origin. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
 | 2026-11-13 | v0.16. Skills and instructions (S-008). REQ-006: the data directory also holds the internal folder of instruction files and shipped skills. REQ-021 and Configuration Requirements, Configuration file: the file holds the shipped roles' changed settings other than their instructions, and S-008's `[skills]` section; instructions are files, and the older `instructions` key and skill paths are read as S-008 REQ-011 states. REQ-002, AC-002.1, AC-002.2 and Workflow: step 1 checks the `[skills]` table, its search paths and the older keys; step 3, after single ownership, seeds and upgrades the internal folder and converts the older keys; the step numbers stay. Interfaces and REQ-012: the catalogue adds `skills.list`, `skills.enable`, `skills.disable`, `skills.paths.list`, `skills.paths.add`, `skills.paths.remove`, `skills.restore`, `instructions.list`, `instructions.restore`, `files.read` and `files.write`; `roles.list` returns instructions with a version token and default skills as names; `conversations.get` and `conversations.list` return the enabled set. Interfaces, the feed, REQ-014 and AC-014.2: the instance snapshot carries each enabled set, and the new deltas `skills_changed` and `files_changed`. REQ-022 and AC-022.3: a role's tools, default skills, model, thinking level and workspace still apply only to agents seated afterwards, while an instructions edit reaches running agents from their next model request, and a role's instruction file is guarded by its version token. Assumptions name S-008. No identifier added or retired. The feed: a seat change is followed by a `skills_changed` delta with the new defaults. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, findings B1, B3 to B5, C1 and C2. S-002 owns the catalogue, the feed and startup. | S-008's tasks |
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.16 confirmed: startup steps 1 and 3, the eleven S-008 operations, enabled sets in reads and the snapshot, skills_changed and files_changed (T-331 to T-335, T-355 to T-364) | none |
-| 2026-11-18 | v0.17. Email (S-009). REQ-018 and AC-018.1: credentials are used in place, except that the instance keeps the mail passwords and client secrets a team member gives it, and the OAuth tokens it obtains, in its owner-only mail secrets store, never in the database or anywhere else; AC-018.1 allows credential strings in that store only. REQ-006: the instance directories hold the secrets store, in an owner-only directory, with owner-only files. REQ-021 and Configuration Requirements, Configuration file: the file holds S-009's `[mail]` and `[[mail_account]]` sections, and no mail secret. REQ-012: the email origin holds the message ID, the sender and the account name, which Email observes. REQ-002 and Workflow: step 8 removes the mail secrets of accounts the file no longer holds, then starts the listeners, the scheduler and mail intake; the step numbers stay. Interfaces and REQ-012: the catalogue adds `mail.accounts.list`, `mail.accounts.get`, `mail.accounts.create`, `mail.accounts.change`, `mail.accounts.remove`, `mail.accounts.signin`, `mail.accounts.test`, `mail.notices.get` and `mail.notices.set`. Interfaces, the feed, and REQ-014: the instance feed adds the `mail_account_status` delta. Interfaces, `daemon.status`, and REQ-012: the status operation reports each mail account's status. No identifier added or retired. | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18 | S-009's tasks |
+| 2026-11-18 | v0.17. Email (S-009). REQ-018 and AC-018.1: credentials are used in place, except that the instance keeps the mail passwords and client secrets a team member gives it, and the OAuth tokens it obtains, in its owner-only secrets store, never in the database or anywhere else; AC-018.1 allows credential strings in that store only. REQ-006: the instance directories hold the secrets store, in an owner-only directory, with owner-only files. REQ-021 and Configuration Requirements, Configuration file: the file holds S-009's `[mail]` and `[[mail_account]]` sections, and no mail secret. REQ-012: the email origin holds the message ID, the sender and the account name, which Email observes. REQ-002 and Workflow: step 8 removes the mail secrets of accounts the file no longer holds, then starts the listeners, the scheduler and mail intake; the step numbers stay. Interfaces and REQ-012: the catalogue adds `mail.accounts.list`, `mail.accounts.get`, `mail.accounts.create`, `mail.accounts.change`, `mail.accounts.remove`, `mail.accounts.signin`, `mail.accounts.test`, `mail.notices.get` and `mail.notices.set`. Interfaces, the feed, and REQ-014: the instance feed adds the `mail_account_status` delta. Interfaces, `daemon.status`, and REQ-012: the status operation reports each mail account's status. No identifier added or retired. Revised 2026-11-19 on the same branch: the store is the instance's secrets store for every account it connects to, not for mail only; mail accounts are its only users today (product owner decision). | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18 | S-009's tasks |

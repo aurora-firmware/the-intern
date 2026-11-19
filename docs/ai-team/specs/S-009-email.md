@@ -1,7 +1,7 @@
 ---
 id: S-009
 title: Email
-version: '0.1'
+version: '0.2'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-17'
 author: planner
@@ -361,11 +361,13 @@ The configuration file SHALL hold mail accounts as `[[mail_account]]` sections a
 restart, and an invalid section SHALL stop startup with an error naming the file, the account and the reason (S-002
 REQ-021).
 
-Passwords, client secrets and OAuth tokens SHALL be kept in a secrets store of the instance, apart from the
-configuration file: owner-only (S-002 REQ-006), written atomically, written only by the account operations and by
-sign-in and token refresh, and never shown back. An account whose `auth` needs a secret the store doesn't hold SHALL
-start with status `needs_sign_in` (REQ-005), not stop startup. Removing an account SHALL remove its secrets, and at
-startup the daemon SHALL remove the secrets of any account the configuration file no longer holds.
+Passwords, client secrets and OAuth tokens SHALL be kept in the instance's secrets store, apart from the configuration
+file. The store holds the secrets of every kind of account The Intern connects to; mail accounts are its only users
+today, and a later spec, such as one for calendars and contacts, keeps its secrets there too. The store is owner-only
+(S-002 REQ-006), written atomically, written only by the account operations and by sign-in and token refresh, and never
+shown back. An account whose `auth` needs a secret the store doesn't hold SHALL start with status `needs_sign_in`
+(REQ-005), not stop startup. Removing an account SHALL remove its secrets, and at startup the daemon SHALL remove the
+secrets of any account the configuration file no longer holds.
 
 #### AC-002.1 — A hand edit at the next restart
 
@@ -886,7 +888,8 @@ results, command output, web pages, error messages, job history, or any model co
 token SHALL be written to the secrets store before it is used, atomically, so a crash never loses the newest one.
 
 ADR-002 decision 5 and S-002 REQ-018 say that no credential is copied into the instance; this spec amends them so that
-the instance keeps the mail secrets a team member gives it, and the tokens it obtains, in its owner-only secrets store.
+the instance keeps the account secrets a team member gives it, and the tokens it obtains, in its owner-only secrets
+store.
 The service account can read that store, as it can read every credential it acts with (ADR-002 decision 4).
 
 #### AC-020.1 — Nowhere but the store
@@ -1028,7 +1031,7 @@ The command reference SHALL match `bob mail --help`.
     Works with (managing mail accounts, Email); use case 6, the notice address and the triage job.
   - S-001: the shipped `triage` role (REQ-001, REQ-002, AC-001.1's "exactly `bob`, `gp` and `desk`"); `mail` in a
     role's tool set (REQ-003); removing a role refused while an owned account names it as its triage role (REQ-003).
-  - S-002: REQ-018 and AC-018.1 (the instance keeps mail secrets in its owner-only secrets store); REQ-006 (the
+  - S-002: REQ-018 and AC-018.1 (the instance keeps account secrets in its owner-only secrets store); REQ-006 (the
     directory that holds that store); REQ-021 and Configuration Requirements (`[mail]` and `[[mail_account]]`);
     REQ-012 (the email origin names the account); REQ-002 step 8 (mail starts with the listeners and the scheduler,
     after removing the secrets of accounts the file no longer holds);
@@ -1053,7 +1056,7 @@ The command reference SHALL match `bob mail --help`.
   - ADR-001 decision 4: the intake record, retries, job threads, owed mail and sends are new kinds of facts and a new
     pairing of a job write.
   - ADR-002: decision 1 (owned addresses only are a way in), decision 5, Consequences and Alternatives (the instance
-    keeps mail secrets); `docs/development/coding_guidelines.md` ("No credentials in the repository, state directory,
+    keeps account secrets); `docs/development/coding_guidelines.md` ("No credentials in the repository, state directory,
     database or logs").
   - ADR-004: the request id of an email follow-up (decision 3) and its place in decision 5's list.
   - `docs/system_overview.html`: the spec map, the Ways in line, the Email boxes, the `email` value of Way in, and the
@@ -1098,7 +1101,15 @@ The command reference SHALL match `bob mail --help`.
   rework). Owner: the Architect. Resolution: decided in Feature Architecture.
 - **How saved mail is kept inside the one-file export (REQ-024), and where the secrets store lives (REQ-020).** Owner:
   the Architect. Resolution: decided in Feature Architecture.
+- **A shared accounts layer.** The product owner asks that sign-in, token refresh, the secrets store and account
+  status stay apart from the mail-specific code, so that a later spec for calendars and contacts can reuse them with
+  its own protocols beside IMAP and SMTP (Microsoft 365 offers calendars and contacts only through Microsoft Graph).
+  This spec adds no calendar or contact behaviour. Owner: the Architect. Resolution: decided in Feature Architecture.
 - **The request id of an email follow-up** (ADR-004 decisions 3 and 5). Owner: the Architect. Resolution: decided in
   Feature Architecture, with ADR-004 amended.
 
 ## Amendment Log
+
+| Date | What changed | Why | Affected tasks |
+|------|-------------|-----|----------------|
+| 2026-11-19 | v0.2. REQ-002, REQ-020 and the Assumptions list: the secrets store holds the secrets of every kind of account The Intern connects to, with mail accounts its only users today, in place of a store for mail secrets only; S-002 and S-004 on this branch and the ADR-002 amendment follow. Open Questions: a shared accounts layer (sign-in, token refresh, the secrets store, account status) apart from the mail-specific code. No behaviour of email changes and no identifier is added, changed or retired. | Product owner decision, 2026-11-19: calendars and contacts will get their own spec, and S-009 shouldn't make them reopen S-002, S-004 and ADR-002. | None yet; S-009 isn't broken down |
