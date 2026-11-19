@@ -2,7 +2,7 @@
  * The accounts layer (ADR-010 decision 1): every login asks it for a credential. It reads and writes the secrets store
  * and runs a password command; it knows no mail library.
  */
-import { execFile } from "node:child_process";
+import { type ExecFileException, execFile } from "node:child_process";
 import type { AccountClock, AccountStatusHub } from "./account_status.ts";
 import { accessTokenFor, SignInNeededError } from "./oauth.ts";
 import type { AccountAuth, Credential, ProviderEndpoints } from "./providers.ts";
@@ -126,10 +126,7 @@ function runPasswordCommand(auth: AccountAuth, timeoutMs: number): Promise<strin
     });
 }
 
-function describeFailure(
-    error: NodeJS.ErrnoException & { killed?: boolean; signal?: string | null },
-    timeoutMs: number,
-) {
+function describeFailure(error: ExecFileException, timeoutMs: number) {
     if (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "printed over the 64 KiB limit";
     if (error.killed === true && typeof error.signal === "string") {
         return `ran over the time limit of ${timeoutMs / 1000} seconds`;
