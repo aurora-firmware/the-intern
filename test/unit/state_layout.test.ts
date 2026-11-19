@@ -83,6 +83,14 @@ describe("resolveInstanceDirs", () => {
     });
 });
 
+describe("resolveInstanceDirs secrets and mail directories", () => {
+    it("places the secrets and mail directories inside the state directory", () => {
+        const dirs = resolveInstanceDirs({ flags: { stateDir: "/b" }, env: {}, homeDir: HOME });
+        assert.equal(dirs.secretsDir, "/b/secrets");
+        assert.equal(dirs.mailDir, "/b/mail");
+    });
+});
+
 describe("ensureInstanceDirs", () => {
     let hermetic: HermeticEnv;
 
@@ -175,5 +183,34 @@ describe("ensureInstanceDirs", () => {
         await assert.rejects(stat(dirs.configDir), { code: "ENOENT" });
         await assert.rejects(stat(dirs.stateDir), { code: "ENOENT" });
         assert.equal((await stat(dirs.dataDir)).mode & 0o777, 0o755);
+    });
+
+    it("creates the secrets directory with mode 0700 and leaves the mail directory to its writer", async () => {
+        const dirs = layout(join(hermetic.root, "fresh"));
+        const previousUmask = process.umask(0o000);
+        try {
+            await ensureInstanceDirs(dirs);
+        } finally {
+            process.umask(previousUmask);
+        }
+        const info = await stat(dirs.secretsDir);
+        assert.ok(info.isDirectory());
+        assert.equal(info.mode & 0o777, 0o700);
+        await assert.rejects(stat(dirs.mailDir), { code: "ENOENT" });
+    });
+
+    it("refuses an existing secrets directory accessible to the group or others and names the path", async () => {
+        const dirs = layout(join(hermetic.root, "instance"));
+        await mkdir(dirs.stateDir, { recursive: true });
+        await chmod(dirs.stateDir, 0o700);
+        await mkdir(dirs.secretsDir, { mode: 0o750 });
+        await chmod(dirs.secretsDir, 0o750);
+        await assert.rejects(ensureInstanceDirs(dirs), (error: unknown) => {
+            assert.ok(error instanceof InstanceDirError);
+            assert.equal(error.path, dirs.secretsDir);
+            assert.match(error.message, new RegExp(dirs.secretsDir));
+            assert.match(error.message, /group or others/);
+            return true;
+        });
     });
 });

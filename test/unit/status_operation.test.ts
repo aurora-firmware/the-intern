@@ -13,6 +13,8 @@ const DIRS: InstanceDirs = {
     runtimeDir: "/run",
     configFile: "/cfg/config.json",
     databaseFile: "/state/db.sqlite",
+    secretsDir: "/state/secrets",
+    mailDir: "/state/mail",
 };
 const STARTED_AT = new Date("2026-10-31T08:30:00.000Z");
 const CALLER = { actor: { kind: "team_member" } } as const;

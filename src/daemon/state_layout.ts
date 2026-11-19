@@ -20,6 +20,8 @@ export type InstanceDirs = {
     runtimeDir: string;
     configFile: string;
     databaseFile: string;
+    secretsDir: string;
+    mailDir: string;
 };
 
 export class InstanceDirError extends Error {
@@ -74,6 +76,8 @@ export function resolveInstanceDirs(input: {
         runtimeDir,
         configFile: join(configDir, "config.toml"),
         databaseFile: join(stateDir, "the-intern.sqlite"),
+        secretsDir: join(stateDir, "secrets"),
+        mailDir: join(stateDir, "mail"),
     };
 }
 
@@ -108,10 +112,11 @@ async function createPrivateDir(path: string): Promise<void> {
 
 /**
  * Creates each missing instance directory with mode 0700. Every existing path is checked first, so a refusal
- * changes nothing. The state directory comes before the runtime directory, whose fallback lives inside it.
+ * changes nothing. The state directory comes before the runtime and secrets directories, which may live inside
+ * it. The mail directory is created by the saved copy, not here.
  */
 export async function ensureInstanceDirs(dirs: InstanceDirs): Promise<void> {
-    const ordered = [dirs.configDir, dirs.stateDir, dirs.dataDir, dirs.runtimeDir];
+    const ordered = [dirs.configDir, dirs.stateDir, dirs.dataDir, dirs.runtimeDir, dirs.secretsDir];
     const missing: string[] = [];
     for (const path of ordered) {
         if (!(await refuseUnsafeExistingDir(path))) missing.push(path);
