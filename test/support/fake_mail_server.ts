@@ -1,8 +1,20 @@
+import { readFile } from "node:fs/promises";
 import type net from "node:net";
+import { fileURLToPath } from "node:url";
 import imapkit from "imapkit";
 import { SMTPServer } from "smtp-server";
 
+/** The test certificate authority, for a daemon child that trusts it through `NODE_EXTRA_CA_CERTS`. */
+export const TEST_CA_FILE = fileURLToPath(new URL("../fixtures/tls/ca.pem", import.meta.url));
+
+const TLS_KEY_FILE = new URL("../fixtures/tls/localhost.key", import.meta.url);
+const TLS_CERT_FILE = new URL("../fixtures/tls/localhost.pem", import.meta.url);
+
+export type FakeMailSecurity = "none" | "starttls" | "tls";
+
 export type FakeMailOptions = {
+    /** How clients reach both servers. `none` is plain text, `starttls` offers the upgrade, `tls` is implicit. */
+    security?: FakeMailSecurity;
     /** Leave IDLE out of the IMAP capabilities when false. */
     idle?: boolean;
 };
@@ -44,6 +56,9 @@ const SPECIAL_USE_FOLDERS: SpecialUse[] = [
  * second server for a second address.
  */
 export async function startFakeMailServer(options: FakeMailOptions = {}): Promise<FakeMailServer> {
+    const security = options.security ?? "none";
+    const key = await readFile(TLS_KEY_FILE);
+    const cert = await readFile(TLS_CERT_FILE);
     const accounts = new Map<string, FakeMailAccount>();
     const mails: ReceivedMail[] = [];
     const refused = new Map<string, string>();
@@ -53,9 +68,12 @@ export async function startFakeMailServer(options: FakeMailOptions = {}): Promis
 
     const plugins = ["UIDPLUS", "SPECIAL-USE", "UNSELECT", "NAMESPACE", "ENABLE", "MOVE"];
     if (options.idle !== false) plugins.push("IDLE");
+    if (security === "starttls") plugins.push("STARTTLS");
     const imap = imapkit({
         plugins,
         users: {},
+        secureConnection: security === "tls",
+        credentials: { key, cert },
         storage: {
             INBOX: { messages: [] },
             "": {
@@ -71,7 +89,10 @@ export async function startFakeMailServer(options: FakeMailOptions = {}): Promis
     const smtp = new SMTPServer({
         logger: false,
         disableReverseLookup: true,
-        disabledCommands: ["STARTTLS"],
+        secure: security === "tls",
+        key,
+        cert,
+        disabledCommands: security === "starttls" ? [] : ["STARTTLS"],
         allowInsecureAuth: true,
         authMethods: ["PLAIN", "LOGIN"],
         onAuth: (auth, _session, done) => {
@@ -99,6 +120,9 @@ export async function startFakeMailServer(options: FakeMailOptions = {}): Promis
             });
         },
     });
+    // A client that distrusts the certificate drops the handshake, which smtp-server reports as an error event.
+    // That is the outcome such a test wants, so it never fails the test run.
+    smtp.on("error", () => undefined);
     await new Promise<void>((resolve) => smtp.listen(0, LOOPBACK, resolve));
     const smtpPort = (smtp.server.address() as net.AddressInfo).port;
 

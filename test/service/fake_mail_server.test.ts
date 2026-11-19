@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import net from "node:net";
 import { afterEach, describe, it } from "node:test";
+import tls from "node:tls";
 import nodemailer, { type Transporter } from "nodemailer";
-import { type FakeMailServer, startFakeMailServer } from "../support/fake_mail_server.ts";
+import { type FakeMailServer, startFakeMailServer, TEST_CA_FILE } from "../support/fake_mail_server.ts";
 import { scaled } from "../support/time_scale.ts";
 
 const SETTLE_TIMEOUT_MS = scaled(10_000);
@@ -277,6 +279,104 @@ describe("fake mail server", () => {
         it("refuses a refusal that is not a permanent answer", async () => {
             const server = await start();
             assert.throws(() => server.refuseRecipient("nobody@example.test", "450 try later"), /permanent 5xx/);
+        });
+    });
+
+    describe("certificate", () => {
+        async function handshake(
+            socket: net.Socket | undefined,
+            port: number,
+            trusted: boolean,
+        ): Promise<tls.TLSSocket> {
+            const secure = tls.connect({
+                ...(socket === undefined ? { host: "localhost", port } : { socket }),
+                servername: "localhost",
+                ...(trusted ? { ca: await readFile(TEST_CA_FILE) } : {}),
+            });
+            cleanups.push(() => {
+                secure.destroy();
+            });
+            await new Promise<void>((resolve, reject) => {
+                secure.once("secureConnect", resolve);
+                secure.once("error", reject);
+            });
+            return secure;
+        }
+
+        async function startTlsOnImap(server: FakeMailServer): Promise<net.Socket> {
+            const plain = await RawClient.connect(server.imapPort);
+            await plain.until(/^\* OK .*\r\n/);
+            plain.send("a1 STARTTLS");
+            await plain.until(/^a1 OK .*\r\n/m);
+            plain.socket.removeAllListeners("data");
+            return plain.socket;
+        }
+
+        it("presents the localhost certificate to an IMAP client that trusts the test authority over TLS", async () => {
+            const server = await start({ security: "tls" });
+            const secure = await handshake(undefined, server.imapPort, true);
+            assert.equal(secure.authorized, true);
+            assert.equal(secure.getPeerCertificate().subject.CN, "localhost");
+        });
+
+        it("fails to verify the certificate for an IMAP client that does not trust the test authority", async () => {
+            const server = await start({ security: "tls" });
+            await assert.rejects(
+                handshake(undefined, server.imapPort, false),
+                (error: NodeJS.ErrnoException) => error.code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+            );
+        });
+
+        it("presents the localhost certificate after STARTTLS on IMAP", async () => {
+            const server = await start({ security: "starttls" });
+            const secure = await handshake(await startTlsOnImap(server), 0, true);
+            assert.equal(secure.authorized, true);
+            assert.equal(secure.getPeerCertificate().subject.CN, "localhost");
+        });
+
+        it("fails to verify the certificate after STARTTLS on IMAP for a client that does not trust the authority", async () => {
+            const server = await start({ security: "starttls" });
+            await assert.rejects(
+                handshake(await startTlsOnImap(server), 0, false),
+                (error: NodeJS.ErrnoException) => error.code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+            );
+        });
+
+        it("serves SMTP over TLS to a client that trusts the test authority and not to one that does not", async () => {
+            const server = await start({ security: "tls" });
+            const trusting = nodemailer.createTransport({
+                host: "localhost",
+                port: server.smtpPort,
+                secure: true,
+                tls: { ca: await readFile(TEST_CA_FILE) },
+                auth: { user: ACCOUNT.login, pass: ACCOUNT.password },
+            });
+            const distrusting = nodemailer.createTransport({ host: "localhost", port: server.smtpPort, secure: true });
+            cleanups.push(
+                () => trusting.close(),
+                () => distrusting.close(),
+            );
+
+            assert.equal(await trusting.verify(), true);
+            await assert.rejects(distrusting.verify(), (error: { code?: string }) => error.code === "ESOCKET");
+        });
+
+        it("serves SMTP after STARTTLS to a client that trusts the test authority and not to one that does not", async () => {
+            const server = await start({ security: "starttls" });
+            const options = { host: "localhost", port: server.smtpPort, requireTLS: true };
+            const trusting = nodemailer.createTransport({
+                ...options,
+                tls: { ca: await readFile(TEST_CA_FILE) },
+                auth: { user: ACCOUNT.login, pass: ACCOUNT.password },
+            });
+            const distrusting = nodemailer.createTransport(options);
+            cleanups.push(
+                () => trusting.close(),
+                () => distrusting.close(),
+            );
+
+            assert.equal(await trusting.verify(), true);
+            await assert.rejects(distrusting.verify(), (error: { code?: string }) => error.code === "ESOCKET");
         });
     });
 });
