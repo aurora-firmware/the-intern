@@ -316,6 +316,31 @@ describe("Signing in with a device code or a loopback answer", () => {
             assert.equal(signedIn, 0);
         });
 
+        it("closes the listener, writes nothing and leaves the account needing sign-in when Google reports a refusal", async () => {
+            const { address, port } = await startGoogle();
+            const state = new URL(address).searchParams.get("state");
+            const answer = await fetch(`http://${LOOPBACK}:${port}/?error=access_denied&state=${state}`);
+            assert.equal(answer.status, 400);
+            await until(() => failures.length > 0, "the failure");
+            assert.equal(failures[0]?.status, "needs_sign_in");
+            assert.match(failures[0]?.lastError?.message ?? "", /access_denied/);
+            assert.equal(await isRefused(LOOPBACK, port), true, "the listener is closed");
+            assert.equal(exchanges(), 0);
+            assert.equal((await secrets.read(KEY))?.refreshToken, undefined);
+            assert.equal(signedIn, 0);
+        });
+
+        it("closes the listener and writes nothing when the provider refuses the code exchange", async () => {
+            await layer.setSecret(KEY, { clientSecret: "wrong-secret" });
+            const { address, port } = await startGoogle();
+            await fake.answerGoogle(address);
+            await until(() => failures.length > 0, "the failure");
+            assert.equal(failures[0]?.status, "needs_sign_in");
+            assert.equal(await isRefused(LOOPBACK, port), true, "the listener is closed");
+            assert.equal((await secrets.read(KEY))?.refreshToken, undefined);
+            assert.equal(signedIn, 0);
+        });
+
         it("ends the first sign-in of an account when a second starts", async () => {
             const first = await startGoogle();
             const second = await startGoogle();
