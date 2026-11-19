@@ -1512,7 +1512,10 @@ are not described here.
   REQ-013 and REQ-016 are tested without a server. Only the adapters `src/mail/imap_client.ts`, `smtp_client.ts` and
   `mime.ts` import the mail libraries. `src/mail/mail_store.ts` imports no pi package and writes only through the
   job store's transaction, and `src/mail/mail_tools_extension.ts` is one of the-intern's own pi-durable extensions.
-  The jobs component imports no mail module: it asks the policy the mail component registers.
+  `src/jobs/job_store.ts` calls `src/mail/mail_store.ts` for the `intern_mail_` rows a job write carries, as it calls
+  `schedule_history.ts`; `mail_store.ts` imports no other mail module and no mail library, and imports from the job
+  store only types. No other jobs module imports a mail module: the rules of owed mail come from the policy the mail
+  component registers (`src/jobs/mail_policy.ts`).
 - **Every job source ends in the same service operation.** Every way in and job source submits through the service layer.
 - **The command table imports no daemon module besides the path layout.** A `bob` command reaches the daemon only
   through the client library, except `serve` and `import`, which load the daemon's code by a dynamic import inside
