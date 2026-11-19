@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import type { AccountAuth, ProviderEndpoints } from "./providers.ts";
 import { microsoftDeviceCodeUrl, microsoftTokenUrl } from "./providers.ts";
 import type { AccountSecret, SecretsStore } from "./secrets_store.ts";
@@ -139,6 +140,49 @@ export function pollDeviceCode(
         client_id: clientIdOf(auth),
         grant_type: DEVICE_CODE_GRANT,
         device_code: deviceCode,
+    });
+}
+
+/** The address a team member opens to let the account's mail be read, with a fresh PKCE verifier and `state`. */
+export function googleAuthorization(
+    auth: AccountAuth,
+    scopes: readonly string[],
+    endpoints: ProviderEndpoints,
+    redirectUri: string,
+    state: string,
+    verifier: string,
+): string {
+    const query = new URLSearchParams({
+        client_id: clientIdOf(auth),
+        redirect_uri: redirectUri,
+        response_type: "code",
+        scope: scopes.join(" "),
+        state,
+        code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+        code_challenge_method: "S256",
+        access_type: "offline",
+        prompt: "consent",
+    });
+    return `${endpoints.googleAuthorize}?${query}`;
+}
+
+export function newPkceSecret(): string {
+    return randomBytes(32).toString("base64url");
+}
+
+/** Exchanges the code Google's redirect carried, with the PKCE verifier and the account's client secret. */
+export function exchangeAuthorizationCode(
+    auth: AccountAuth,
+    endpoints: ProviderEndpoints,
+    exchange: { code: string; verifier: string; redirectUri: string; clientSecret: string },
+): Promise<TokenAnswer> {
+    return postToken(auth, endpoints.googleToken, {
+        client_id: clientIdOf(auth),
+        client_secret: exchange.clientSecret,
+        grant_type: "authorization_code",
+        code: exchange.code,
+        code_verifier: exchange.verifier,
+        redirect_uri: exchange.redirectUri,
     });
 }
 

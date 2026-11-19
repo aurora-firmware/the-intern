@@ -4,9 +4,13 @@
  */
 import { type ExecFileException, execFile } from "node:child_process";
 import type { AccountClock, AccountStatusHub } from "./account_status.ts";
+import { listenForLoopbackAnswer } from "./loopback_answer.ts";
 import {
     accessTokenFor,
     type DeviceCode,
+    exchangeAuthorizationCode,
+    googleAuthorization,
+    newPkceSecret,
     pollDeviceCode,
     requestDeviceCode,
     SignInNeededError,
@@ -33,7 +37,9 @@ export class CredentialFailure extends Error {
 }
 
 /** What a team member does next to finish a sign-in. */
-export type SignInStart = { kind: "device_code"; code: string; address: string };
+export type SignInStart =
+    | { kind: "device_code"; code: string; address: string }
+    | { kind: "browser"; address: string; port: number };
 
 const SLOW_DOWN_SECONDS = 5;
 
@@ -118,6 +124,7 @@ export function createAccountsLayer(options: AccountsLayerOptions): AccountsLaye
     ): Promise<SignInStart> {
         const controller = beginSignIn(auth.key);
         try {
+            if (auth.kind === "google") return await startGoogle(auth, scopes, controller, onSignedIn);
             const code = await requestDeviceCode(auth, scopes, endpoints);
             void finishDeviceCode(auth, code, controller.signal, onSignedIn).finally(() =>
                 endSignIn(auth.key, controller),
@@ -128,6 +135,43 @@ export function createAccountsLayer(options: AccountsLayerOptions): AccountsLaye
             const message = error instanceof Error ? error.message : `Account ${auth.key}: the sign-in failed.`;
             throw new CredentialFailure("failing", message);
         }
+    }
+
+    async function startGoogle(
+        auth: AccountAuth,
+        scopes: readonly string[],
+        controller: AbortController,
+        onSignedIn: () => void,
+    ): Promise<SignInStart> {
+        const clientSecret = (await secrets.read(auth.key))?.clientSecret;
+        if (clientSecret === undefined) throw new Error(`Account ${auth.key} has no client secret.`);
+        const state = newPkceSecret();
+        const verifier = newPkceSecret();
+        const listener = await listenForLoopbackAnswer({
+            state,
+            clock,
+            signal: controller.signal,
+            exchange: async (code, redirectUri) => {
+                const answer = await exchangeAuthorizationCode(auth, endpoints, {
+                    code,
+                    verifier,
+                    redirectUri,
+                    clientSecret,
+                });
+                await storeSignedIn(secrets, auth.key, answer, clock.now());
+                onSignedIn();
+            },
+        });
+        void listener.outcome.then((outcome) => {
+            endSignIn(auth.key, controller);
+            if (outcome.kind === "failed") reportSignInFailure(auth, outcome.error);
+            if (outcome.kind === "ended" && !controller.signal.aborted) {
+                reportSignInFailure(auth, new Error(`Account ${auth.key}: no answer came within 10 minutes.`));
+            }
+        });
+        const redirectUri = `http://127.0.0.1:${listener.port}`;
+        const address = googleAuthorization(auth, scopes, endpoints, redirectUri, state, verifier);
+        return { kind: "browser", address, port: listener.port };
     }
 
     async function finishDeviceCode(

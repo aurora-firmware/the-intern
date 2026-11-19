@@ -146,6 +146,7 @@ describe("Signing in with a device code or a loopback answer", () => {
     });
 
     afterEach(async () => {
+        clock.advance(TEN_MINUTES_MS);
         await fake.stop();
         await hermetic.dispose();
     });
