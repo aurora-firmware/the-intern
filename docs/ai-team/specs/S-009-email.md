@@ -196,8 +196,10 @@ The instance scope of the observation feed (S-002 REQ-014) carries:
 | job created (existing, S-004 REQ-015) | a triage job, with its origin |
 | `mail_account_status` | the account name, its status, and the last error with its time |
 
-The job scope carries an entry in the job's history for each email received into the job, each email sent from it,
-each email held back by the allowlist and each email that may not have gone out (REQ-009, REQ-012, REQ-022).
+The job scope carries a `mail` entry in the job's history for each email received into the job, each email sent from it,
+each email held back by the allowlist, each email that may not have gone out, each result reply not sent for lack of a
+mail text, each email the mail server permanently refused, and each owed email not sent because its account was removed
+(REQ-003, REQ-009, REQ-012, REQ-015, REQ-022; the kinds are listed in S-004's history entry Contract).
 
 ### Exposed: the `bob mail` commands
 
@@ -1073,7 +1075,7 @@ The command reference SHALL match `bob mail --help`.
   - S-004: the job fields (the request mark and the email details) and REQ-003 (the email origin names the account);
     the job tools table and REQ-013 (mark request; `mailText` on block job and complete job); `jobs.complete`'s
     `mailText`; the History definition and history entries (email received, sent, held back, may not have gone out,
-    result reply not sent: no mail text);
+    result reply not sent: no mail text, refused by the server, not sent: account removed);
     `jobs.list`'s account filter; REQ-016 and REQ-017 (the export and import carry saved mail); REQ-018 (owed mail and
     the intake record).
   - S-005: `mail` leaves the reserved groups (Definitions, Users, Exclusions "Commands for later components", the
@@ -1130,4 +1132,4 @@ and the request id of an email follow-up in ADR-004 decisions 3 and 5.
 | Date | What changed | Why | Affected tasks |
 |------|-------------|-----|----------------|
 | 2026-11-19 | v0.2. REQ-002, REQ-020 and the Assumptions list: the secrets store holds the secrets of every kind of account The Intern connects to, with mail accounts its only users today, in place of a store for mail secrets only; S-002 and S-004 on this branch and the ADR-002 amendment follow. Open Questions: a shared accounts layer (sign-in, token refresh, the secrets store, account status) apart from the mail-specific code. No behaviour of email changes and no identifier is added, changed or retired. | Product owner decision, 2026-11-19: calendars and contacts will get their own spec, and S-009 shouldn't make them reopen S-002, S-004 and ADR-002. | None yet; S-009 isn't broken down |
-| 2026-11-19 | v0.3. REQ-005, Definitions and new AC-005.2: a fourth status, `connecting`, for an account not checked yet since it was added, changed or the daemon started. REQ-003: mail a removed account still owes is never sent, and each gets "not sent: account removed". REQ-022, REQ-013, REQ-016, Interfaces and new AC-022.3: an email the server permanently refuses isn't tried again; the history records "refused by the server" with the server's message, and the notice address gets one notice unless the refused email went to it. REQ-018, AC-018.1 and Interfaces: the Job page shows each attachment's name and size, with no download. Open Questions: settled by Feature Architecture. S-004 and S-006 on this branch follow. | Feature Architecture Spec findings F-A to F-D; product owner decisions, 2026-11-19. | None yet; S-009 isn't broken down |
+| 2026-11-19 | v0.3. REQ-005, Definitions and new AC-005.2: a fourth status, `connecting`, for an account not checked yet since it was added, changed or the daemon started. REQ-003: mail a removed account still owes is never sent, and each gets "not sent: account removed". REQ-022, REQ-013, REQ-016, Interfaces and new AC-022.3: an email the server permanently refuses isn't tried again; the history records "refused by the server" with the server's message, and the notice address gets one notice unless the refused email went to it. REQ-018, AC-018.1 and Interfaces: the Job page shows each attachment's name and size, with no download. Open Questions: settled by Feature Architecture. S-004 and S-006 on this branch follow. The feed events paragraph and the Assumptions list name every mail history entry (consistency review G2, G3). | Feature Architecture Spec findings F-A to F-D; product owner decisions, 2026-11-19. | None yet; S-009 isn't broken down |
