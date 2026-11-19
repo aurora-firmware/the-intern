@@ -48,7 +48,20 @@ export async function listenForLoopbackAnswer(options: LoopbackAnswerOptions): P
     const server = http.createServer((request, response) => {
         const url = new URL(request.url ?? "/", `http://${LOOPBACK}`);
         const code = url.searchParams.get("code");
-        if (isAnswering || request.method !== "GET" || url.searchParams.get("state") !== state || !code) {
+        const isAnswerToThisSignIn =
+            !isAnswering && request.method === "GET" && url.searchParams.get("state") === state;
+        if (!isAnswerToThisSignIn) {
+            page(response, 400, "This address takes only the answer to the sign-in that started it.");
+            return;
+        }
+        const refusal = url.searchParams.get("error");
+        if (!code && refusal !== null) {
+            isAnswering = true;
+            page(response, 400, "The sign-in was refused. Start it again to try again.");
+            finish({ kind: "failed", error: new Error(`The provider refused the sign-in: ${refusal}.`) });
+            return;
+        }
+        if (!code) {
             page(response, 400, "This address takes only the answer to the sign-in that started it.");
             return;
         }
