@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -19,14 +19,22 @@ export type FakeOAuthEndpoints = {
 export type FakeOAuthProvider = {
     endpoints: FakeOAuthEndpoints;
     enterCode(userCode: string): void;
+    /** Plays the browser: redirects to the loopback address in the URL with a code and the URL's `state`. */
+    answerGoogle(authorizationUrl: string): Promise<void>;
     revoke(refreshToken: string): void;
+    /** Every request the provider received, in order, with its form body. */
+    requests(): ReceivedRequest[];
     isValidAccessToken(token: string): boolean;
     stop(): Promise<void>;
 };
 
+export type ReceivedRequest = { path: string; body: Record<string, string> };
+
 type Answer = { status: number; body: Record<string, string | number> };
 
 type RefreshTokenState = { isUsed: boolean; revokedMessage?: string };
+
+type GoogleCode = { challenge: string };
 
 type DeviceGrant = { userCode: string; isEntered: boolean };
 
@@ -36,14 +44,19 @@ export const FAKE_OAUTH_CLIENT_SECRET = "fake-oauth-client-secret";
 const LOOPBACK = "127.0.0.1";
 const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 const MICROSOFT_PREFIX = "/microsoft";
-const DEVICE_CODE_PATH = /^\/[^/]+\/oauth2\/v2\.0\/devicecode$/;
-const TOKEN_PATH = /^\/[^/]+\/oauth2\/v2\.0\/token$/;
+const DEVICE_CODE_PATH = /^\/microsoft\/[^/]+\/oauth2\/v2\.0\/devicecode$/;
+const MICROSOFT_TOKEN_PATH = /^\/microsoft\/[^/]+\/oauth2\/v2\.0\/token$/;
+const GOOGLE_TOKEN_PATH = "/google/token";
 
 const REVOKED_MESSAGE = "The refresh token was revoked.";
 const USED_MESSAGE = "The refresh token was already used; a newer one replaced it.";
 
 function newSecret(): string {
     return randomBytes(16).toString("hex");
+}
+
+function invalidClient(): Answer {
+    return { status: 401, body: { error: "invalid_client", error_description: "The client secret is wrong." } };
 }
 
 function invalidGrant(message: string): Answer {
@@ -61,6 +74,8 @@ export async function startFakeOAuthProvider(options: FakeOAuthOptions): Promise
     const accessTokens = new Map<string, number>();
     const deviceGrants = new Map<string, DeviceGrant>();
     const refreshTokens = new Map<string, RefreshTokenState>();
+    const googleCodes = new Map<string, GoogleCode>();
+    const received: ReceivedRequest[] = [];
 
     function issueRefreshToken(): string {
         const token = newSecret();
@@ -87,9 +102,7 @@ export async function startFakeOAuthProvider(options: FakeOAuthOptions): Promise
     }
 
     function answerClientCredentials(form: Record<string, string>): Answer {
-        if (form.client_secret !== FAKE_OAUTH_CLIENT_SECRET) {
-            return { status: 401, body: { error: "invalid_client", error_description: "The client secret is wrong." } };
-        }
+        if (form.client_secret !== FAKE_OAUTH_CLIENT_SECRET) return invalidClient();
         return {
             status: 200,
             body: { token_type: "Bearer", access_token: issueAccessToken(), expires_in: options.accessTokenSeconds },
@@ -118,8 +131,20 @@ export async function startFakeOAuthProvider(options: FakeOAuthOptions): Promise
         };
     }
 
+    function answerAuthorizationCode(form: Record<string, string>): Answer {
+        if (form.client_secret !== FAKE_OAUTH_CLIENT_SECRET) return invalidClient();
+        const code = googleCodes.get(form.code ?? "");
+        googleCodes.delete(form.code ?? "");
+        const verifierChallenge = createHash("sha256")
+            .update(form.code_verifier ?? "")
+            .digest("base64url");
+        if (!code || code.challenge !== verifierChallenge) return invalidGrant("The code or its verifier is wrong.");
+        return { status: 200, body: tokenBody() };
+    }
+
     function answerToken(form: Record<string, string>): Answer {
         if (form.grant_type === "refresh_token") return answerRefresh(form);
+        if (form.grant_type === "authorization_code") return answerAuthorizationCode(form);
         if (form.grant_type === "client_credentials") return answerClientCredentials(form);
         const grant = deviceGrants.get(form.device_code ?? "");
         if (form.grant_type !== DEVICE_CODE_GRANT || !grant) return invalidGrant("The device code is unknown.");
@@ -128,10 +153,11 @@ export async function startFakeOAuthProvider(options: FakeOAuthOptions): Promise
     }
 
     async function route(request: http.IncomingMessage): Promise<Answer> {
-        const path = (request.url ?? "").slice(MICROSOFT_PREFIX.length);
+        const path = new URL(request.url ?? "", "http://localhost").pathname;
         const form = await readForm(request);
+        received.push({ path, body: form });
         if (DEVICE_CODE_PATH.test(path)) return answerDeviceCode();
-        if (TOKEN_PATH.test(path)) return answerToken(form);
+        if (MICROSOFT_TOKEN_PATH.test(path) || path === GOOGLE_TOKEN_PATH) return answerToken(form);
         return { status: 404, body: { error: "not_found" } };
     }
 
@@ -155,6 +181,25 @@ export async function startFakeOAuthProvider(options: FakeOAuthOptions): Promise
             const grant = [...deviceGrants.values()].find((candidate) => candidate.userCode === userCode);
             if (!grant) throw new Error(`The fake OAuth provider issued no user code ${userCode}.`);
             grant.isEntered = true;
+        },
+        async answerGoogle(authorizationUrl) {
+            const query = new URL(authorizationUrl).searchParams;
+            const redirectUri = query.get("redirect_uri");
+            const challenge = query.get("code_challenge");
+            if (!redirectUri || !challenge || query.get("code_challenge_method") !== "S256") {
+                throw new Error(
+                    `The authorization address ${authorizationUrl} lacks a redirect_uri or an S256 challenge.`,
+                );
+            }
+            const code = newSecret();
+            googleCodes.set(code, { challenge });
+            const redirect = new URL(redirectUri);
+            redirect.searchParams.set("code", code);
+            redirect.searchParams.set("state", query.get("state") ?? "");
+            await fetch(redirect, { redirect: "manual" });
+        },
+        requests() {
+            return received.map((request) => ({ path: request.path, body: { ...request.body } }));
         },
         revoke(refreshToken) {
             const state = refreshTokens.get(refreshToken);
