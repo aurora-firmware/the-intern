@@ -110,7 +110,6 @@ describe("account status hub", () => {
         hub.report("mail", "b", { kind: "failing", message: "down" });
         await advance(MINUTE_MS);
         assert.deepEqual(retries, ["a"]);
-        hub.report("mail", "a", { kind: "failing", message: "down" });
         await advance(4 * MINUTE_MS);
         assert.deepEqual(retries, ["a", "b"]);
     });
