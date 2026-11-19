@@ -209,3 +209,37 @@ export const validateMailAccount = (raw: Raw, label: string): MailAccount => {
     account.allow = allowList(raw, label);
     return account;
 };
+
+const sameAddress = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
+
+export const isAllowed = (allow: string[], address: string): boolean => {
+    if (allow.length === 0) {
+        return true;
+    }
+    const lowered = address.toLowerCase();
+    const domain = lowered.slice(lowered.lastIndexOf("@"));
+    return allow.some((entry) => {
+        const wanted = entry.toLowerCase();
+        return wanted.startsWith("@") ? wanted === domain : wanted === lowered;
+    });
+};
+
+export const notAllowedRecipients = (
+    account: MailAccount,
+    recipients: string[],
+    noticeTo: string | undefined,
+): string[] =>
+    recipients.filter(
+        (recipient) =>
+            !(noticeTo !== undefined && sameAddress(recipient, noticeTo)) && !isAllowed(account.allow, recipient),
+    );
+
+export const checkNotice = (notice: MailNotice, accounts: MailAccount[]): void => {
+    if (accounts.some((account) => account.kind === "owned" && sameAddress(account.address, notice.to))) {
+        throw new MailRuleError("notice_to", `${notice.to} is the address of an owned account`);
+    }
+    const sender = accounts.find((account) => account.name === notice.from);
+    if (sender?.kind !== "owned" || sender.smtpHost === undefined) {
+        throw new MailRuleError("notice_from", `${notice.from} is not an owned account with an SMTP host`);
+    }
+};

@@ -140,11 +140,7 @@ describe("notAllowedRecipients", () => {
     const account = (allow?: string[]): MailAccount => validateMailAccount(validOwned({ allow }), "intern");
 
     it("returns the recipients the list does not allow", () => {
-        const refused = notAllowedRecipients(
-            account(["@example.com"]),
-            ["ana@example.com", "bo@other.org"],
-            undefined,
-        );
+        const refused = notAllowedRecipients(account(["@example.com"]), ["ana@example.com", "bo@other.org"], undefined);
         assert.deepEqual(refused, ["bo@other.org"]);
     });
 
