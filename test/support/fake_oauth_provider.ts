@@ -149,6 +149,7 @@ export async function startFakeOAuthProvider(options: FakeOAuthOptions): Promise
         const grant = deviceGrants.get(form.device_code ?? "");
         if (form.grant_type !== DEVICE_CODE_GRANT || !grant) return invalidGrant("The device code is unknown.");
         if (!grant.isEntered) return { status: 400, body: { error: "authorization_pending" } };
+        deviceGrants.delete(form.device_code ?? "");
         return { status: 200, body: tokenBody() };
     }
 

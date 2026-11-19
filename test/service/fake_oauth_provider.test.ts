@@ -103,6 +103,20 @@ function refresh(fake: FakeOAuthProvider, refreshToken: string): Promise<Answer>
     });
 }
 
+describe("the fake OAuth provider's used device code", () => {
+    it("refuses a device code that was already exchanged", async () => {
+        const fake = await start();
+        const code = (await requestDeviceCode(fake)).body;
+        fake.enterCode(String(code.user_code));
+        await pollDeviceCode(fake, String(code.device_code));
+
+        const again = await pollDeviceCode(fake, String(code.device_code));
+
+        assert.equal(again.status, 400);
+        assert.equal(again.body.error, "invalid_grant");
+    });
+});
+
 describe("the fake OAuth provider's refresh tokens", () => {
     it("returns a new access token and a new refresh token on each refresh", async () => {
         const fake = await start();
