@@ -4,10 +4,10 @@ A test-only certificate authority and a `localhost` certificate for the fake mai
 (`test/support/fake_mail_server.ts`). They are valid for 100 years and grant access to nothing: no real service
 trusts the authority, and the keys are published in the repository on purpose.
 
-| File | What it is |
-|---|---|
-| `ca.pem`, `ca.key` | The test certificate authority. A test trusts it with `NODE_EXTRA_CA_CERTS=<path of ca.pem>` in the daemon child, or leaves it untrusted to see a certificate fail to verify. |
-| `localhost.pem`, `localhost.key` | The server certificate for `localhost`, `127.0.0.1` and `::1`, signed by the authority. |
+| File                             | What it is                                                                                                                                                                    |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ca.pem`, `ca.key`               | The test certificate authority. A test trusts it with `NODE_EXTRA_CA_CERTS=<path of ca.pem>` in the daemon child, or leaves it untrusted to see a certificate fail to verify. |
+| `localhost.pem`, `localhost.key` | The server certificate for `localhost`, `127.0.0.1` and `::1`, signed by the authority.                                                                                       |
 
 They were made with these commands, run in this folder:
 

@@ -20,6 +20,8 @@ export type FakeMailServer = {
     deliver(address: string, raw: string | Buffer): void;
     mailbox(address: string, folder: string): FakeMailMessage[];
     received(): ReceivedMail[];
+    pause(): void;
+    resume(): void;
     stop(): Promise<void>;
 };
 
@@ -43,6 +45,8 @@ const SPECIAL_USE_FOLDERS: SpecialUse[] = [
 export async function startFakeMailServer(options: FakeMailOptions = {}): Promise<FakeMailServer> {
     const accounts = new Map<string, FakeMailAccount>();
     const mails: ReceivedMail[] = [];
+    const held = new Set<net.Socket>();
+    let isPaused = false;
     let owner: string | undefined;
 
     const plugins = ["UIDPLUS", "SPECIAL-USE", "UNSELECT", "NAMESPACE", "ENABLE", "MOVE"];
@@ -64,6 +68,7 @@ export async function startFakeMailServer(options: FakeMailOptions = {}): Promis
 
     const smtp = new SMTPServer({
         logger: false,
+        disableReverseLookup: true,
         disabledCommands: ["STARTTLS"],
         allowInsecureAuth: true,
         authMethods: ["PLAIN", "LOGIN"],
@@ -89,6 +94,21 @@ export async function startFakeMailServer(options: FakeMailOptions = {}): Promis
     });
     await new Promise<void>((resolve) => smtp.listen(0, LOOPBACK, resolve));
     const smtpPort = (smtp.server.address() as net.AddressInfo).port;
+
+    function sockets(): net.Socket[] {
+        const open = [...imap.connections].flatMap((connection) => (connection.socket ? [connection.socket] : []));
+        return [...open, ...[...smtp.connections].map((connection) => connection._socket)];
+    }
+
+    function holdIfPaused(socket: net.Socket): void {
+        if (!isPaused) return;
+        socket.pause();
+        held.add(socket);
+    }
+    for (const server of [imap.server, smtp.server]) {
+        server.on("connection", holdIfPaused);
+        server.on("secureConnection", holdIfPaused);
+    }
 
     function requireOwner(address: string): void {
         if (owner === undefined || owner !== address.toLowerCase()) {
@@ -119,6 +139,15 @@ export async function startFakeMailServer(options: FakeMailOptions = {}): Promis
                 .map((message) => ({ uid: message.uid, flags: message.flags, raw: message.raw as Buffer }));
         },
         received: () => [...mails],
+        pause() {
+            isPaused = true;
+            for (const socket of sockets()) holdIfPaused(socket);
+        },
+        resume() {
+            isPaused = false;
+            for (const socket of [...held, ...sockets()]) socket.resume();
+            held.clear();
+        },
         async stop() {
             for (const connection of smtp.connections) connection._socket.destroy();
             await Promise.all([imap.stop(), new Promise<void>((resolve) => smtp.close(resolve))]);

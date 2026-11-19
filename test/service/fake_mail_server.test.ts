@@ -6,6 +6,8 @@ import { type FakeMailServer, startFakeMailServer } from "../support/fake_mail_s
 import { scaled } from "../support/time_scale.ts";
 
 const SETTLE_TIMEOUT_MS = scaled(10_000);
+/** A server command answers within a few event loop turns, so the watcher runs well past them. */
+const WATCHER_ROUNDS = 5;
 const ADDRESS = "ada@example.test";
 const ACCOUNT = { address: ADDRESS, login: "ada", password: "ada-password" };
 
@@ -69,6 +71,11 @@ class RawClient {
         }
     }
 
+    /** What has come in and not been consumed yet. */
+    get unread(): string {
+        return this.received;
+    }
+
     close(): void {
         this.socket.destroy();
     }
@@ -95,6 +102,26 @@ describe("fake mail server", () => {
         client.send(`a1 LOGIN ${ACCOUNT.login} ${ACCOUNT.password}`);
         await client.until(/^a1 OK .*\r\n/m);
         return client;
+    }
+
+    /**
+     * A connection in IDLE that proves the server has run on: a delivery is pushed to it even while the server reads
+     * nothing, so its announcement comes after anything the server would have answered by then.
+     */
+    async function watcher(server: FakeMailServer): Promise<() => Promise<void>> {
+        const client = await signedIn(server);
+        client.send("w1 SELECT INBOX");
+        await client.until(/^w1 OK .*\r\n/m);
+        client.send("w2 IDLE");
+        await client.until(/^\+ .*\r\n/);
+        let count = 0;
+        return async () => {
+            for (let round = 0; round < WATCHER_ROUNDS; round += 1) {
+                count += 1;
+                server.deliver(ADDRESS, MESSAGE);
+                await client.until(new RegExp(`^\\* ${count} EXISTS\\r\\n`, "m"));
+            }
+        };
     }
 
     describe("delivery", () => {
@@ -158,6 +185,54 @@ describe("fake mail server", () => {
             assert.equal(others.length, 0);
             assert.deepEqual(mail?.envelope, { from: ADDRESS, to: ["grace@example.test", "linus@example.test"] });
             assert.equal(mail?.raw.toString("utf8"), MESSAGE);
+        });
+    });
+
+    describe("pause", () => {
+        it("answers no IMAP command while paused and answers it after resume", async () => {
+            const server = await start();
+            const serverRuns = await watcher(server);
+            const client = await signedIn(server);
+            server.pause();
+
+            client.send("a2 NOOP");
+            await serverRuns();
+
+            assert.equal(client.unread, "");
+            server.resume();
+            await client.until(/^a2 OK .*\r\n/m);
+        });
+
+        it("answers no SMTP command while paused and answers it after resume", async () => {
+            const server = await start();
+            const serverRuns = await watcher(server);
+            const client = await RawClient.connect(server.smtpPort);
+            cleanups.push(() => client.close());
+            await client.until(/^220 .*\r\n/m);
+            server.pause();
+
+            client.send("EHLO tester.example.test");
+            await serverRuns();
+
+            assert.equal(client.unread, "");
+            server.resume();
+            await client.until(/^250 .*\r\n/m);
+        });
+
+        it("answers no command on a connection made while paused", async () => {
+            const server = await start();
+            const serverRuns = await watcher(server);
+            server.pause();
+            const client = await RawClient.connect(server.imapPort);
+            cleanups.push(() => client.close());
+            await client.until(/^\* OK .*\r\n/);
+
+            client.send("a1 CAPABILITY");
+            await serverRuns();
+
+            assert.equal(client.unread, "");
+            server.resume();
+            await client.until(/^a1 OK .*\r\n/m);
         });
     });
 });
