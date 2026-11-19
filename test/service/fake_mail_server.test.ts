@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import net from "node:net";
 import { afterEach, describe, it } from "node:test";
+import nodemailer from "nodemailer";
 import { type FakeMailServer, startFakeMailServer } from "../support/fake_mail_server.ts";
 import { scaled } from "../support/time_scale.ts";
 
@@ -134,6 +135,29 @@ describe("fake mail server", () => {
             const capabilities = await client.until(/^a2 OK .*\r\n/m);
             assert.ok(!/\bIDLE\b/.test(capabilities), capabilities);
             assert.ok(/\bMOVE\b/.test(capabilities), capabilities);
+        });
+    });
+
+    describe("submission", () => {
+        it("records the envelope and the raw bytes of a message submitted over SMTP", async () => {
+            const server = await start();
+            const transport = nodemailer.createTransport({
+                host: "127.0.0.1",
+                port: server.smtpPort,
+                ignoreTLS: true,
+                auth: { user: ACCOUNT.login, pass: ACCOUNT.password },
+            });
+            cleanups.push(() => transport.close());
+
+            await transport.sendMail({
+                envelope: { from: ADDRESS, to: ["grace@example.test", "linus@example.test"] },
+                raw: MESSAGE,
+            });
+
+            const [mail, ...others] = server.received();
+            assert.equal(others.length, 0);
+            assert.deepEqual(mail?.envelope, { from: ADDRESS, to: ["grace@example.test", "linus@example.test"] });
+            assert.equal(mail?.raw.toString("utf8"), MESSAGE);
         });
     });
 });
