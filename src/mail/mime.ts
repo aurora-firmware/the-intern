@@ -28,7 +28,6 @@ export type ComposeAttachment = { filename: string; contentType: string; content
 export type ComposeInput = {
     from: string;
     to: string[];
-    cc?: string[];
     subject: string;
     text: string;
     attachments?: ComposeAttachment[];
@@ -85,7 +84,6 @@ export const composeMessage = async (input: ComposeInput): Promise<{ raw: Buffer
     const composer = new MailComposer({
         from: input.from,
         to: input.to,
-        cc: input.cc,
         subject: input.subject,
         text: input.text,
         messageId,

@@ -85,14 +85,13 @@ describe("composeMessage and parseMessage", () => {
         const content = Buffer.from("abc");
         const { raw } = await composeMessage({
             ...baseInput,
-            cc: ["dee@example.net"],
             subject: "Grüße, 日本",
             attachments: [{ filename: "a.bin", contentType: "application/octet-stream", content }],
         });
         const parsed = await parseMessage(raw);
         assert.equal(parsed.from, baseInput.from);
         assert.deepEqual(parsed.to, baseInput.to);
-        assert.deepEqual(parsed.cc, ["dee@example.net"]);
+        assert.deepEqual(parsed.cc, []);
         assert.equal(parsed.subject, "Grüße, 日本");
         assert.equal(parsed.text.trim(), baseInput.text.trim());
         assert.equal(parsed.attachments.length, 1);
