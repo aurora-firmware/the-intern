@@ -26,7 +26,12 @@ const STATUSES: readonly string[] = ["to_do", "in_progress", "blocked", "done"];
 const LETTERS: readonly string[] = ["C", "W", "E", "S", "A"];
 export const STORE_PAGE_SIZE = 500;
 
-type JobDetail = Job & { leadConversation?: string; email?: JobEmail; worklog: WorklogEntry[]; history: HistoryEntry[] };
+type JobDetail = Job & {
+    leadConversation?: string;
+    email?: JobEmail;
+    worklog: WorklogEntry[];
+    history: HistoryEntry[];
+};
 type PageInput = { job: string; limit?: number; cursor?: string };
 type ListInput = {
     schedule?: string;
