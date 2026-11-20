@@ -24,7 +24,9 @@ describe("imap folders, search, move, flags and append", () => {
         for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
     });
 
-    async function connect(options: { move?: boolean } = {}): Promise<{ server: FakeMailServer; mail: ImapConnection }> {
+    async function connect(
+        options: { move?: boolean } = {},
+    ): Promise<{ server: FakeMailServer; mail: ImapConnection }> {
         const server = await startFakeMailServer(options);
         server.addAccount(ACCOUNT);
         cleanups.push(() => server.stop());
@@ -58,7 +60,11 @@ describe("imap folders, search, move, flags and append", () => {
             const { mail } = await connect();
 
             assert.deepEqual(
-                [await mail.specialFolder("drafts"), await mail.specialFolder("sent"), await mail.specialFolder("trash")],
+                [
+                    await mail.specialFolder("drafts"),
+                    await mail.specialFolder("sent"),
+                    await mail.specialFolder("trash"),
+                ],
                 ["Drafts", "Sent", "Trash"],
             );
             const paths = (await mail.listFolders()).map((folder) => folder.path);
@@ -66,7 +72,12 @@ describe("imap folders, search, move, flags and append", () => {
         });
 
         it("falls back to the usual names when no folder carries the attribute", () => {
-            const folders = [{ path: "INBOX" }, { path: "Entwürfe" }, { path: "Sent Items" }, { path: "Deleted Items" }];
+            const folders = [
+                { path: "INBOX" },
+                { path: "Entwürfe" },
+                { path: "Sent Items" },
+                { path: "Deleted Items" },
+            ];
 
             assert.equal(pickSpecialFolder(folders, "drafts"), undefined);
             assert.equal(pickSpecialFolder(folders, "sent"), "Sent Items");
@@ -87,10 +98,8 @@ describe("imap folders, search, move, flags and append", () => {
             server.deliver(ADDRESS, message("Grace <grace@example.test>", "New report", "quarterly numbers"));
             server.deliver(ADDRESS, message("Linus <linus@example.test>", "Kernel report", "quarterly numbers"));
             server.deliver(ADDRESS, message("Grace <grace@example.test>", "Lunch", "sandwiches"));
-            const [first] = await inboxRefs(mail);
-            assert.ok(first !== undefined);
             await mail.setFlags(await inboxRefs(mail), { seen: true });
-            await mail.setFlags([first], { seen: false });
+            await mail.setFlags(await mail.search("INBOX", { subject: "New report" }, 1), { seen: false });
 
             const found = await mail.search(
                 "INBOX",
@@ -166,9 +175,9 @@ describe("imap folders, search, move, flags and append", () => {
             server.deliver(ADDRESS, message("g@example.test", "Stale"));
             const [ref] = await inboxRefs(mail);
             assert.ok(ref !== undefined);
-            server.setUidValidity(ADDRESS, ref.uidValidity + 1);
+            const stale = { ...ref, uidValidity: ref.uidValidity + 1 };
 
-            const failure = await refusal(mail.fetchMessage(ref));
+            const failure = await refusal(mail.fetchMessage(stale));
 
             assert.match(failure.message, /UIDVALIDITY/);
         });
@@ -180,7 +189,7 @@ describe("imap folders, search, move, flags and append", () => {
             server.deliver(ADDRESS, message("g@example.test", "Bin me"));
             const refs = await inboxRefs(mail);
 
-            await mail.move(refs, await mail.specialFolder("trash") ?? "Trash");
+            await mail.move(refs, (await mail.specialFolder("trash")) ?? "Trash");
 
             assert.equal(server.mailbox(ADDRESS, "INBOX").length, 0);
             const trash = server.mailbox(ADDRESS, "Trash");
@@ -215,9 +224,9 @@ describe("imap folders, search, move, flags and append", () => {
             const { server, mail } = await connect();
             server.deliver(ADDRESS, message("g@example.test", "Stale"));
             const refs = await inboxRefs(mail);
-            server.setUidValidity(ADDRESS, (refs[0]?.uidValidity ?? 0) + 1);
+            const stale = refs.map((ref) => ({ ...ref, uidValidity: ref.uidValidity + 1 }));
 
-            const failure = await refusal(mail.move(refs, "Trash"));
+            const failure = await refusal(mail.move(stale, "Trash"));
 
             assert.match(failure.message, /UIDVALIDITY/);
             assert.equal(server.mailbox(ADDRESS, "INBOX").length, 1);
@@ -231,7 +240,11 @@ describe("imap folders, search, move, flags and append", () => {
             const refs = await inboxRefs(mail);
 
             await mail.setFlags(refs, { seen: true, flagged: true, answered: true });
-            assert.deepEqual(server.mailbox(ADDRESS, "INBOX")[0]?.flags.toSorted(), ["\\Answered", "\\Flagged", "\\Seen"]);
+            assert.deepEqual(server.mailbox(ADDRESS, "INBOX")[0]?.flags.toSorted(), [
+                "\\Answered",
+                "\\Flagged",
+                "\\Seen",
+            ]);
 
             await mail.setFlags(refs, { flagged: false });
             assert.deepEqual(server.mailbox(ADDRESS, "INBOX")[0]?.flags.toSorted(), ["\\Answered", "\\Seen"]);
@@ -241,10 +254,11 @@ describe("imap folders, search, move, flags and append", () => {
             const { server, mail } = await connect();
             server.deliver(ADDRESS, message("g@example.test", "Stale"));
             const refs = await inboxRefs(mail);
-            server.setUidValidity(ADDRESS, (refs[0]?.uidValidity ?? 0) + 1);
+            const stale = refs.map((ref) => ({ ...ref, uidValidity: ref.uidValidity + 1 }));
 
-            await refusal(mail.setFlags(refs, { seen: true }));
+            const failure = await refusal(mail.setFlags(stale, { seen: true }));
 
+            assert.match(failure.message, /UIDVALIDITY/);
             assert.deepEqual(server.mailbox(ADDRESS, "INBOX")[0]?.flags, []);
         });
     });
@@ -267,5 +281,10 @@ describe("imap folders, search, move, flags and append", () => {
 });
 
 function subjectOf(raw: Uint8Array): string {
-    return Buffer.from(raw).toString("utf8").split("\r\n").find((line) => line.startsWith("Subject:")) ?? "";
+    return (
+        Buffer.from(raw)
+            .toString("utf8")
+            .split("\r\n")
+            .find((line) => line.startsWith("Subject:")) ?? ""
+    );
 }
