@@ -31,7 +31,7 @@ export type JobEmail = {
     sender: string;
     subject: string;
     /** The saved message and its attachments, as paths computed at the read. */
-    message: { path: string; attachments: string[] } | null;
+    message: { path: string; attachments: { name: string; size: number; path: string }[] } | null;
     thread: {
         direction: "received" | "sent";
         sender: string;

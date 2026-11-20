@@ -29,7 +29,7 @@ const DETAILS: JobEmail = {
     account: "work",
     sender: "ann@example.test",
     subject: "Please look at this",
-    message: { path: "/mail/work/saved-1/message.eml", attachments: ["/mail/work/saved-1/a.pdf"] },
+    message: { path: "/mail/work/saved-1/message.eml", attachments: [{ name: "a.pdf", size: 12, path: "/mail/work/saved-1/a.pdf" }] },
     thread: [
         {
             direction: "received",
