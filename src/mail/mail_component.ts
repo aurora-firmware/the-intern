@@ -133,7 +133,7 @@ export async function createMailComponent(options: MailComponentOptions): Promis
         checks.delete(name);
     };
 
-    async function login(account: MailAccount): Promise<CheckOutcome> {
+    async function login(account: MailAccount, signal: AbortSignal): Promise<CheckOutcome> {
         try {
             const auth = authOf(account);
             const credential = await accounts.credentialFor(auth, SCOPES[account.auth] ?? []);
@@ -143,6 +143,7 @@ export async function createMailComponent(options: MailComponentOptions): Promis
                 security: account.imapSecurity,
                 credential,
                 idleSeconds: account.checkIntervalSeconds,
+                signal,
             });
             await imap.logout();
             if (account.kind === "owned" && account.smtpHost !== undefined && account.smtpPort !== undefined) {
@@ -151,6 +152,7 @@ export async function createMailComponent(options: MailComponentOptions): Promis
                     port: account.smtpPort,
                     security: account.smtpSecurity,
                     credential,
+                    signal,
                 });
                 if (!smtp.ok) return { kind: "failing", message: smtp.message };
             }
@@ -166,7 +168,7 @@ export async function createMailComponent(options: MailComponentOptions): Promis
         endCheck(account.name);
         const controller = new AbortController();
         checks.set(account.name, controller);
-        void login(account).then((outcome) => {
+        void login(account, controller.signal).then((outcome) => {
             if (controller.signal.aborted) return;
             checks.delete(account.name);
             accountStatus.report(MAIL_OWNER, account.name, outcome);

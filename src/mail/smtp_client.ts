@@ -1,3 +1,4 @@
+import { Socket } from "node:net";
 import { PassThrough } from "node:stream";
 import { createTransport } from "nodemailer";
 import type { Credential } from "../accounts/providers.ts";
@@ -8,6 +9,8 @@ export type SmtpOptions = {
     port: number;
     security: MailSecurity;
     credential: Credential;
+    /** An abort ends the connection a login check is making or using. Sending ignores it. */
+    signal?: AbortSignal;
 };
 
 export type SmtpEnvelope = { from: string; to: string[] };
@@ -38,9 +41,10 @@ type SmtpError = Error & {
     responseCode?: number;
 };
 
-function transportFor(options: SmtpOptions) {
+function transportFor(options: SmtpOptions, socket?: Socket) {
     const { credential } = options;
     return createTransport({
+        ...(socket !== undefined && { socket }),
         host: options.host,
         port: options.port,
         secure: options.security === "tls",
@@ -69,13 +73,19 @@ function messageOf(error: unknown, credential: Credential): string {
 }
 
 export async function checkSmtpLogin(options: SmtpOptions): Promise<SmtpLoginCheck> {
-    const transport = transportFor(options);
+    // The transport connects a socket it is given, so closing that socket ends the check wherever it stands.
+    const socket = new Socket();
+    const end = () => socket.destroy();
+    options.signal?.addEventListener("abort", end, { once: true });
+    if (options.signal?.aborted) end();
+    const transport = transportFor(options, socket);
     try {
         await transport.verify();
         return { ok: true };
     } catch (error) {
         return { ok: false, message: messageOf(error, options.credential) };
     } finally {
+        options.signal?.removeEventListener("abort", end);
         transport.close();
     }
 }
