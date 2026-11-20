@@ -87,7 +87,9 @@ describe("smtp client", () => {
         it("reports not_taken for a wrong token, without the token", async () => {
             const server = await serve();
 
-            const outcome = await send(server, { credential: { user: ACCOUNT.login, accessToken: "bad-token-s3cret" } });
+            const outcome = await send(server, {
+                credential: { user: ACCOUNT.login, accessToken: "bad-token-s3cret" },
+            });
 
             assert.equal(outcome.kind, "not_taken");
             assert.doesNotMatch(JSON.stringify(outcome), /bad-token-s3cret/);
