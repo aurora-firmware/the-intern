@@ -19,8 +19,10 @@ const PASSWORD = "s3cret";
 const AFTER_RETRY_PAUSE = "2026-03-02T11:00:00.000Z";
 const EXISTING_MESSAGES = 5000;
 
+type Entry = { field: string; old: unknown; new: unknown; author: { kind: string } };
 type Job = {
     id: string;
+    leadConversation?: string;
     number: string;
     status: string;
     related: string[];
@@ -182,5 +184,34 @@ describe("intake", { timeout: TEST_TIMEOUT_MS }, () => {
         const after = await jobOf(rig, first);
         assert.equal(after.status, "done");
         assert.deepEqual(after.related, [reply?.number]);
+    });
+
+    it("delivers a reply in a Blocked job's thread to its lead as input and resumes the job (AC-5)", async () => {
+        const rig = await startWatching();
+        rig.deliver(ADDRESS, rawMail("question", "please file this"));
+        const [job] = await untilJobs(rig, 1);
+        await until("the job to block", async () => ((await jobOf(rig, job)).status === "blocked" ? true : undefined));
+        const lead = (await jobOf(rig, job)).leadConversation as string;
+
+        rig.deliver(ADDRESS, rawMail("Re: question", "use the staging one", ["In-Reply-To: <question@example.test>"]));
+
+        const history = () =>
+            rig.process().invoke("jobs.history.list", { job: job?.id, limit: 100 }) as Promise<{ entries: Entry[] }>;
+        await until("the reply to be recorded", async () =>
+            (await history()).entries.filter((entry) => entry.field === "mail").length === 2 ? true : undefined,
+        );
+        const { entries } = await history();
+        assert.ok(
+            entries.some((entry) => entry.field === "status" && entry.old === "blocked" && entry.new === "in_progress"),
+            "the job resumed",
+        );
+        const { entries: leadEntries } = (await rig.process().invoke("conversations.entries", {
+            conversationId: lead,
+            limit: 500,
+        })) as { entries: { kind: string; data: { actor: unknown; content: string } }[] };
+        const [steer] = leadEntries.filter((entry) => entry.kind === "intern.steer");
+        assert.deepEqual(steer?.data.actor, { kind: "team_member", wayIn: "email" });
+        assert.match(steer?.data.content ?? "", /From: ann@example\.test[\s\S]*use the staging one/);
+        assert.equal((await jobsOf(rig)).length, 1);
     });
 });
