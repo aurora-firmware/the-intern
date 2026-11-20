@@ -3,7 +3,7 @@
  * with. A tool names its account and behaves the same on an owned and a monitored one. A call that can't be answered
  * is an error result with the reason, and the agent's run goes on.
  */
-import { stat, writeFile } from "node:fs/promises";
+import { rm, stat, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 import { type Static, Type } from "@earendil-works/pi-ai";
 import {
@@ -202,9 +202,18 @@ async function requireFolderOnDisk(path: string): Promise<void> {
     }
 }
 
-async function requireNoFile(path: string): Promise<void> {
-    if ((await stat(path).catch(() => undefined)) !== undefined) {
-        throw new MailToolRefusal(`The file ${path} exists; nothing was saved and it was left unchanged.`);
+// A file this call wrote is removed again when a later one is refused, so a refused call saves nothing of the message.
+async function writeAllOrNone(files: { path: string; content: Uint8Array }[]): Promise<void> {
+    const written: string[] = [];
+    for (const file of files) {
+        try {
+            await writeFile(file.path, file.content, { flag: "wx" });
+            written.push(file.path);
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+            await Promise.all(written.map((path) => rm(path)));
+            throw new MailToolRefusal(`The file ${file.path} exists; nothing was saved and it was left unchanged.`);
+        }
     }
 }
 
@@ -231,8 +240,7 @@ const saveAttachmentsTool = (options: MailToolsOptions) =>
                     path: join(directory, fileNameOf(attachment.filename, index)),
                     content: attachment.content,
                 }));
-                for (const file of files) await requireNoFile(file.path);
-                for (const file of files) await writeFile(file.path, file.content, { flag: "wx" });
+                await writeAllOrNone(files);
                 return jsonResult({ saved: files.map((file) => file.path) });
             });
         },

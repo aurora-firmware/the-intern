@@ -90,31 +90,47 @@ export function createToolConnections(deps: ToolConnectionDeps): ToolConnections
         entry.idleTimer.unref();
     }
 
-    return {
-        async use(accountName, run) {
-            const account = requireReady(accountName);
-            const entry = held.get(accountName) ?? hold(account);
-            clearTimeout(entry.idleTimer);
-            const call = entry.tail.then(async () => {
-                try {
-                    return await run(await entry.imap, entry.account);
-                } catch (error) {
-                    // A lost connection or a failed login is not worth keeping; a server's refusal is.
-                    const isLost = !(error instanceof ImapFailure) || error.kind !== "protocol";
-                    if (isLost && held.get(accountName) === entry) await drop(accountName);
-                    throw error;
-                }
-            });
-            entry.tail = call.catch(() => undefined);
+    async function use<T>(
+        accountName: string,
+        run: (imap: ImapConnection, account: MailAccount) => Promise<T>,
+    ): Promise<T> {
+        const account = requireReady(accountName);
+        const entry = held.get(accountName) ?? hold(account);
+        clearTimeout(entry.idleTimer);
+        const dropEntry = async (): Promise<void> => {
+            if (held.get(accountName) === entry) await drop(accountName);
+        };
+        const call = entry.tail.then(async (): Promise<T> => {
+            // A call ahead of this one on the chain may have dropped the connection; this one opens another.
+            if (held.get(accountName) !== entry) return use(accountName, run);
+            let imap: ImapConnection;
             try {
-                return await call;
-            } finally {
-                if (held.get(accountName) === entry) {
-                    await entry.tail;
-                    restartIdleTimer(entry);
-                }
+                imap = await entry.imap;
+            } catch (error) {
+                await dropEntry();
+                throw error;
             }
-        },
+            try {
+                return await run(imap, entry.account);
+            } catch (error) {
+                // Only a lost connection is dropped: a refusal of the call, or the server's own `NO`, leaves it usable.
+                if (error instanceof ImapFailure && error.kind !== "protocol") await dropEntry();
+                throw error;
+            }
+        });
+        entry.tail = call.catch(() => undefined);
+        try {
+            return await call;
+        } finally {
+            if (held.get(accountName) === entry) {
+                await entry.tail;
+                restartIdleTimer(entry);
+            }
+        }
+    }
+
+    return {
+        use,
         close: drop,
         async closeAll() {
             await Promise.all([...held.keys()].map(drop));
