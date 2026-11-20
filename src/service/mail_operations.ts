@@ -248,10 +248,13 @@ export function mailOperations({ agents, accounts, secrets, accountStatus, contr
         name: "mail.accounts.remove",
         kind: "control",
         parse: parseName,
-        run: ({ config }, { name }) =>
+        run: ({ config, jobStore }, { name }) =>
             mappingRefusals(async () => {
+                let address = name;
                 await config.update(mailAccountSection, (current) => {
-                    if (!current.some((candidate) => candidate.name === name)) throw missing(name);
+                    const removed = current.find((candidate) => candidate.name === name);
+                    if (removed === undefined) throw missing(name);
+                    address = removed.address;
                     if (config.current(mailSection)?.from === name) {
                         throw new ServiceError(
                             "conflict",
@@ -261,6 +264,8 @@ export function mailOperations({ agents, accounts, secrets, accountStatus, contr
                     return current.filter((candidate) => candidate.name !== name);
                 });
                 await accounts.removeAccount(accountKey(name));
+                // The sender only takes `owed` rows, so an account added again under the name never sends these.
+                await jobStore.writeMail((tx) => tx.markAccountRemoved(name, address));
                 control.stopAccount(name);
                 return {};
             }),
