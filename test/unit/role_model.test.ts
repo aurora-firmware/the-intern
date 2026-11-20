@@ -5,6 +5,8 @@ import { JOB_TOOL_NAMES } from "../../src/jobs/job_model.ts";
 import {
     applyRoleChange,
     COORDINATION_TOOL_NAMES,
+    MAIL_TOOL_NAMES,
+    MAIL_TOOL_SET_ENTRY,
     type RoleDefinition,
     RoleInvalidError,
     resolveSeat,
@@ -167,4 +169,50 @@ describe("applyRoleChange", () => {
         applyRoleChange(base, { skills: [] });
         assert.deepEqual(base, role());
     });
+});
+
+describe("the mail tool-set entry", () => {
+    it("names the entry and the eight mail tools", () => {
+        assert.equal(MAIL_TOOL_SET_ENTRY, "mail");
+        assert.deepEqual(
+            [...MAIL_TOOL_NAMES],
+            [
+                "mail_list_folders",
+                "mail_search",
+                "mail_read",
+                "mail_save_attachments",
+                "mail_move",
+                "mail_set_flags",
+                "mail_save_draft",
+                "mail_send",
+            ],
+        );
+    });
+
+    it("accepts mail in a tool set", () => {
+        validateRoleDefinition(role({ tools: ["read", "mail"] }));
+    });
+
+    it("replaces mail with the eight tool names in a job seat", () => {
+        const seat = resolveSeat(role({ tools: ["read", "mail"] }), defaults);
+        assert.ok(!seat.tools.includes("mail"));
+        assert.deepEqual(
+            seat.tools.filter((name) => name.startsWith("mail_")),
+            [...MAIL_TOOL_NAMES],
+        );
+        assert.equal(seat.tools.indexOf("mail_list_folders"), 1);
+    });
+
+    it("drops mail in a front desk seat", () => {
+        const seat = resolveSeat(role({ tools: ["read", "mail"] }), defaults, {}, "front_desk");
+        assert.deepEqual(seat.tools, ["read", ...FRONT_DESK_TOOL_NAMES, SKILL_TOOL_NAME]);
+    });
+
+    for (const name of MAIL_TOOL_NAMES) {
+        it(`refuses ${name} named directly as an unknown tool`, () => {
+            const error = invalidField(role({ tools: [name] }));
+            assert.equal(error.field, "tools");
+            assert.match(error.reason, new RegExp(name));
+        });
+    }
 });
