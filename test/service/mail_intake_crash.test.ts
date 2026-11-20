@@ -159,9 +159,12 @@ describe("intake across a kill", () => {
                     limit: 500,
                 })) as { entries: Entry[] }
             ).entries.filter((entry) => entry.kind === "intern.steer" && entry.data.content?.includes("body of Re"));
-        await until("the reply to reach the lead", async () => ((await steers()).length > 0 ? true : undefined));
-        await sleep(SERVER_DOWN_MS);
+        // The marker is a later email, so its job exists only once intake has gone past the reply and any repeat of it.
+        rig.deliver(ADDRESS, rawMail("marker"));
+        await until("the marker's job", async () =>
+            (await jobsOf(restarted)).some((listed) => subjectOf(listed) === "marker") ? true : undefined,
+        );
         assert.equal((await steers()).length, 1);
-        assert.equal((await jobsOf(restarted)).length, 1);
+        assert.deepEqual((await jobsOf(restarted)).map(subjectOf).toSorted(), ["marker", "question"]);
     });
 });
