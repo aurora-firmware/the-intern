@@ -172,7 +172,7 @@ export type EntryPage = { limit?: number; cursor?: string };
 
 export type JobChange =
     | { type: "job_created"; job: Job }
-    | { type: "job_changed"; number: string; fields: Partial<Record<EditableField, string>> }
+    | { type: "job_changed"; number: string; fields: Partial<Record<EditableField | "requestMark", string>> }
     | { type: "worklog_added"; number: string; entry: WorklogEntry }
     | { type: "status_changed"; number: string; old: JobStatus; new: JobStatus; blockedReason?: string }
     | { type: "job_done"; number: string; resolution: Resolution }
@@ -188,6 +188,8 @@ export type JobStore = {
     /** The lead's newest transcript entry ID recorded by the job's block, or null (S-004 REQ-018 rule 3). */
     blockedAfterEntryOf(ref: string): Promise<string | null>;
     updateFields(ref: string, fields: Partial<Record<EditableField, string>>, author: JobAuthor): Promise<Job>;
+    /** Sets or clears the request mark of a job that is not Done, with a `requestMark` history entry. */
+    setRequestMark(ref: string, marked: boolean, author: JobAuthor): Promise<Job>;
     addWorklog(ref: string, text: string, author: JobAuthor): Promise<WorklogEntry>;
     listWorklog(ref: string, page: EntryPage): Promise<{ entries: WorklogEntry[]; cursor?: string }>;
     listHistory(ref: string, page: EntryPage): Promise<{ entries: HistoryEntry[]; cursor?: string }>;
@@ -729,6 +731,25 @@ async function updateFieldsIn(
     return { value: job, changes: [{ type: "job_changed", number: job.number, fields: changed }] };
 }
 
+async function setRequestMarkIn(
+    tx: HostSqlExecutor,
+    ref: string,
+    marked: boolean,
+    author: JobAuthor,
+): Promise<Written<Job>> {
+    const row = await findRow(tx, ref);
+    if (row.status === "done") {
+        refuse({ code: "conflict", message: "request mark refused: the job is Done and Done is final" });
+    }
+    const next = String(marked);
+    if (row.request_mark === next) return { value: await toJob(tx, row), changes: [] };
+    const at = new Date().toISOString();
+    await tx.run("UPDATE intern_jobs SET request_mark = ?, updated_at = ? WHERE id = ?", next, at, row.id);
+    await addHistory(tx, row.id, { at, author, field: "requestMark", old: row.request_mark, new: next });
+    const job = await toJob(tx, await findRow(tx, row.id));
+    return { value: job, changes: [{ type: "job_changed", number: job.number, fields: { requestMark: next } }] };
+}
+
 async function addWorklogIn(
     tx: HostSqlExecutor,
     ref: string,
@@ -990,6 +1011,7 @@ export function createJobStore(db: HostDatabase, options: JobStoreOptions = {}):
             return row?.blocked_after_entry ?? null;
         },
         updateFields: (ref, fields, author) => write((tx) => updateFieldsIn(tx, ref, fields, author)),
+        setRequestMark: (ref, marked, author) => write((tx) => setRequestMarkIn(tx, ref, marked, author)),
         addWorklog: (ref, text, author) => write((tx) => addWorklogIn(tx, ref, text, author)),
         listWorklog: (ref, page) =>
             listEntries<WorklogRow, WorklogEntry>(db, "intern_worklog", "at, author, text", ref, page, toWorklogEntry),

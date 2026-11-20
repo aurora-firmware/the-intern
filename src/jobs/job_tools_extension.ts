@@ -23,6 +23,7 @@ import { type Caller, ServiceError } from "../service/operations.ts";
 import { blockJob, completeJob, type JobActionDeps } from "./job_actions.ts";
 import { EDITABLE_FIELDS, type JobAuthor } from "./job_model.ts";
 import { JobNotFoundError, JobRefusedError, type JobStore } from "./job_store.ts";
+import { MailTextRequiredError } from "./mail_policy.ts";
 
 export const JOB_TOOLS_EXTENSION_NAME = "intern.jobs";
 
@@ -74,7 +75,12 @@ async function refusable(tool: string, action: () => Promise<ToolExecutionResult
     try {
         return await action();
     } catch (error) {
-        if (error instanceof JobRefusedError || error instanceof JobNotFoundError || error instanceof ServiceError) {
+        if (
+            error instanceof JobRefusedError ||
+            error instanceof JobNotFoundError ||
+            error instanceof ServiceError ||
+            error instanceof MailTextRequiredError
+        ) {
             return textResult(`${tool} was refused: ${error.message}`, true);
         }
         throw error;
@@ -214,8 +220,11 @@ const blockJobTool = (options: JobToolsOptions) =>
         description:
             "Block the job of this conversation with the reason you need an answer, and end your run until one " +
             "arrives. Only the job's lead can use it, and it must be the only tool call of its turn. It is refused " +
-            "while an agent you invoked still runs.",
-        parameters: Type.Object({ reason: Type.String({ description: "What you need answered, and why." }) }),
+            "while an agent you invoked still runs. Give a mailText, the email's text, when the question is mailed.",
+        parameters: Type.Object({
+            reason: Type.String({ description: "What you need answered, and why." }),
+            mailText: Type.Optional(Type.String({ description: "The text of the email that asks the question." })),
+        }),
         async execute(args, api, context) {
             const { jobId, isLead, author } = await seatOf(options, api);
             if (!isLead) return leadOnly("block_job", "block");
@@ -223,7 +232,7 @@ const blockJobTool = (options: JobToolsOptions) =>
                 return textResult("block_job was refused: it must be the only tool call of its turn.", true);
             }
             const result = await refusable("block_job", async () => {
-                await blockJob(options.actions(), jobId, args.reason, author);
+                await blockJob(options.actions(), jobId, args.reason, author, args.mailText);
                 return textResult(`The job is blocked: ${args.reason}`);
             });
             return result.isError === true ? result : { ...result, control: { terminate: true } };
@@ -236,9 +245,10 @@ const completeJobTool = (options: JobToolsOptions) =>
         description:
             "Complete the job of this conversation, with the justification that its definition of done is met. " +
             "Only the job's lead can use it, the job needs a definition of done, and it must be the only tool call of " +
-            "its turn. Your run ends at this call.",
+            "its turn. Your run ends at this call. Give a mailText, the result reply, for a job with the request mark.",
         parameters: Type.Object({
             justification: Type.String({ description: "Why the definition of done is met." }),
+            mailText: Type.Optional(Type.String({ description: "The text of the result reply email." })),
         }),
         async execute(args, api, context) {
             const { jobId, conversationId, isLead, author } = await seatOf(options, api);
@@ -250,10 +260,41 @@ const completeJobTool = (options: JobToolsOptions) =>
                 return textResult("complete_job was refused: it must be the only tool call of its turn.", true);
             }
             const result = await refusable("complete_job", async () => {
-                const done = await completeJob(options.actions(), jobId, args.justification, author, conversationId);
+                const { justification, mailText } = args;
+                const done = await completeJob(
+                    options.actions(),
+                    jobId,
+                    justification,
+                    author,
+                    conversationId,
+                    mailText,
+                );
                 return textResult(`${done.number} is Done.`);
             });
             return result.isError === true ? result : { ...result, control: { terminate: true } };
+        },
+    });
+
+const markRequestTool = (options: JobToolsOptions) =>
+    defineTool({
+        name: "mark_request",
+        description:
+            "Set or clear the request mark of the job of this conversation: whether its email asks The Intern for " +
+            "something. Only the lead of a job that came by email can use it.",
+        parameters: Type.Object({
+            marked: Type.Boolean({ description: "True when the email asks for something, false when it does not." }),
+        }),
+        async execute(args, api) {
+            const { jobId, isLead, author } = await seatOf(options, api);
+            if (!isLead) return leadOnly("mark_request", "mark the request of");
+            return refusable("mark_request", async () => {
+                const store = options.jobStore();
+                if ((await store.getJob(jobId)).mailAccount === undefined) {
+                    return textResult("mark_request was refused: the job did not come by email.", true);
+                }
+                const job = await store.setRequestMark(jobId, args.marked, author);
+                return textResult(`The request mark of ${job.number} is ${job.requestMark}.`);
+            });
         },
     });
 
@@ -298,6 +339,7 @@ export function createJobToolsExtension(options: JobToolsOptions): Extension {
             relateJobsTool(options),
             blockJobTool(options),
             completeJobTool(options),
+            markRequestTool(options),
             readScheduleRunsTool(options),
         ]
             .map(refusingWithoutJob)
