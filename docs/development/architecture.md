@@ -1256,14 +1256,21 @@ connection (REQ-003, REQ-006).
 
 Each `ready` owned account holds one IMAP connection with `INBOX` selected, apart from the tools' connection, so a
 tool's folder never breaks the inbox's IDLE. When the server offers IDLE, an `exists` event runs a check at once; a
-check also runs at every check interval, and imapflow's `maxIdleTime` is set to it (REQ-023).
+check also runs at every check interval, and imapflow's `maxIdleTime` is set to it (REQ-023). A check's commands end
+IDLE, and imapflow starts it again by itself only after 15 quiet seconds, so intake starts IDLE again at the end of
+every check; otherwise mail that arrives just after a check would wait past REQ-023's 10 seconds. The `exists`
+listener is registered once, after the first check, since the server announces new mail only to a connection with
+`INBOX` selected. A UID the inbox no longer holds, moved or deleted before intake reached it, reads as no message, not
+as a failure, and intake passes over it.
 
 A check reads `INBOX`'s UIDVALIDITY and UIDNEXT:
 
 - No intake row, or one whose identity differs: the row records UIDVALIDITY, UIDNEXT as the next UID to take, and the
   identity. Nothing is taken (REQ-006).
 - UIDVALIDITY differs from the row's: the row moves to the new UIDVALIDITY and UIDNEXT, nothing is taken, and the
-  account's last error says the server could no longer tell old mail from new (REQ-021).
+  account's last error says the server could no longer tell old mail from new (REQ-021). The account status hub sets
+  that last error and its time and leaves the status `ready`: the account never shows `failing`, not even for one
+  `mail_account_status` delta, because nothing stops it (REQ-005).
 - Otherwise each UID from the next UID on is taken in, in ascending order, one at a time, read with `BODY.PEEK[]` so
   nothing is flagged on the server.
 

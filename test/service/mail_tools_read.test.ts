@@ -470,9 +470,10 @@ describe("the mail tools that read", { timeout: TEST_TIMEOUT_MS }, () => {
         it("closes the account's tools connection when the account stops, and every connection when the daemon stops", async () => {
             const { started, conversationId } = await readerWithMail();
             await started.run(conversationId, [{ name: "mail_list_folders", arguments: { account: WORK.name } }]);
+            // Intake holds the inbox connection of an owned account, apart from the tools' one.
             await until(
-                "the tools connection to be the only one open",
-                () => started.workServer.openConnections() === 1,
+                "the tools and intake connections to be open",
+                () => started.workServer.openConnections() === 2,
             );
 
             started.mail.control.stopAccount(WORK.name);

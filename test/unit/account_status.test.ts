@@ -129,4 +129,37 @@ describe("account status hub", () => {
             ["other"],
         );
     });
+
+    it("sets the last error and its time, publishes once and leaves the status, last check and retry alone", async () => {
+        const { hub, options, advance, retries } = setup();
+        hub.start("mail", "work", options("work"));
+        hub.report("mail", "work", { kind: "ready" });
+        const before = hub.get("mail", "work");
+        const seen: string[] = [];
+        hub.onChange((view) => seen.push(`${view.status}:${view.lastError?.message}`));
+        await advance(MINUTE_MS);
+
+        hub.noteError("mail", "work", "the server lost track");
+        await advance(10 * MINUTE_MS);
+
+        const after = hub.get("mail", "work");
+        assert.deepEqual(seen, ["ready:the server lost track"]);
+        assert.deepEqual(after?.lastError, {
+            message: "the server lost track",
+            at: new Date(START.getTime() + MINUTE_MS),
+        });
+        assert.equal(after?.status, "ready");
+        assert.deepEqual(after?.lastCheck, before?.lastCheck);
+        assert.deepEqual(retries, []);
+    });
+
+    it("does nothing for an account that is not started", () => {
+        const { hub } = setup();
+        const seen: string[] = [];
+        hub.onChange((view) => seen.push(view.name));
+
+        hub.noteError("mail", "nobody", "lost");
+
+        assert.deepEqual(seen, []);
+    });
 });
