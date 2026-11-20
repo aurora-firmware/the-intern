@@ -1,4 +1,4 @@
-import { Readable } from "node:stream";
+import { PassThrough } from "node:stream";
 import { createTransport } from "nodemailer";
 import type { Credential } from "../accounts/providers.ts";
 import type { MailSecurity } from "./mail_model.ts";
@@ -101,14 +101,22 @@ export async function sendRaw(
     options: SmtpOptions & { envelope: SmtpEnvelope; raw: Uint8Array },
 ): Promise<SmtpOutcome> {
     const transport = transportFor(options);
-    // The bytes are read only once the server has answered DATA with 354, so a fully read stream means they went out.
+    // nodemailer buffers the message early, so the source stream ending proves nothing. The stream it hands the
+    // connection is only consumed once the server has answered DATA with 354, which is when the bytes go out.
     let isDataSent = false;
-    const raw = Readable.from([Buffer.from(options.raw)]);
-    raw.on("end", () => {
-        isDataSent = true;
+    transport.use("stream", (mail, done) => {
+        const original = mail.message.createReadStream.bind(mail.message);
+        mail.message.createReadStream = () => {
+            const wrapped = original().pipe(new PassThrough());
+            wrapped.once("resume", () => {
+                isDataSent = true;
+            });
+            return wrapped;
+        };
+        done();
     });
     try {
-        const info = await transport.sendMail({ envelope: options.envelope, raw });
+        const info = await transport.sendMail({ envelope: options.envelope, raw: Buffer.from(options.raw) });
         return { kind: "sent", accepted: info.accepted.map(String), refused: refusalsOf(info.rejectedErrors) };
     } catch (error) {
         const failure = error as SmtpError;
