@@ -253,6 +253,7 @@ export type ToolMail = {
 export type ToolSendResult =
     | { kind: "sent"; messageId: string; to: string[] }
     | { kind: "waiting" }
+    | { kind: "not_ready"; account: string }
     | { kind: "held_back"; notAllowed: string[] }
     | { kind: "refused"; answer: string }
     | { kind: "unknown" }
@@ -592,6 +593,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         const key = `${TOOL_PREFIX}${mail.conversationId}:${mail.callId}`;
         const existing = await jobStore.readMail((tx) => tx.outboxByKey(key));
         if (existing !== undefined) return resultOfRow(existing);
+        if (!deps.isReady(mail.account)) return { kind: "not_ready", account: mail.account };
         const account = accountNamed(mail.account) as MailAccount;
         const owed: NewOutboxRow = {
             key,

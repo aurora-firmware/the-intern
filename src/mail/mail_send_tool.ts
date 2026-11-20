@@ -2,10 +2,11 @@
  * The send tool (S-009 REQ-010, REQ-011, REQ-012, REQ-022): `mail_send` writes its email as an outbox row keyed by the
  * tool call, so the same call acts once, and the outbox sends it and files its copy in the Sent folder.
  */
+import { readFile } from "node:fs/promises";
+import { basename, isAbsolute, join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import { readConversationMeta } from "../host/seating.ts";
-import { readAttachments } from "./mail_sort_tools.ts";
 import {
     accountField,
     jsonResult,
@@ -27,6 +28,8 @@ function resultOf(result: ToolSendResult) {
             return jsonResult({ sent: true, messageId: result.messageId, to: result.to });
         case "waiting":
             return textResult(WAITS);
+        case "not_ready":
+            return textResult(`mail_send was refused: the mail account "${result.account}" is not ready.`, true);
         case "held_back":
             return textResult(
                 `mail_send was refused: nothing was sent, because the allowlist doesn't allow ${result.notAllowed.join(", ")}.`,
@@ -42,6 +45,21 @@ function resultOf(result: ToolSendResult) {
                     "Sent folder before sending it again.",
             );
     }
+}
+
+async function readAttachments(workspace: string | undefined, paths: string[]) {
+    const attachments = [];
+    for (const path of paths) {
+        if (!isAbsolute(path) && workspace === undefined) {
+            throw new Error("The conversation has no workspace to resolve a file in.");
+        }
+        const file = isAbsolute(path) ? path : join(workspace as string, path);
+        const content = await readFile(file).catch(() => {
+            throw new MailToolRefusal(`The file ${file} can't be read; nothing was sent.`);
+        });
+        attachments.push({ filename: basename(file), contentType: "application/octet-stream", content });
+    }
+    return attachments;
 }
 
 export const sendTool = (options: MailToolsOptions) =>
