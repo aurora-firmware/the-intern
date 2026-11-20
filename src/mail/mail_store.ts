@@ -303,6 +303,18 @@ async function rowsInState(tx: HostSqlExecutor, state: OutboxState, account?: st
     return rows.map(toOutbox);
 }
 
+/** The job's rows in the given states, oldest first; no other job's row is read. */
+async function outboxRowsOfJob(tx: HostSqlExecutor, job: string, states: readonly OutboxState[]): Promise<OutboxRow[]> {
+    if (states.length === 0) return [];
+    const marks = states.map(() => "?").join(", ");
+    const rows = await tx.all<OutboxColumns>(
+        `SELECT * FROM intern_mail_outbox WHERE job = ? AND state IN (${marks}) ORDER BY rowid`,
+        job,
+        ...states,
+    );
+    return rows.map(toOutbox);
+}
+
 /** Turns the account's `owed` rows `account_removed`, each with its history entry by the daemon. */
 async function markAccountRemoved(
     tx: HostSqlExecutor,
@@ -352,6 +364,7 @@ export function bindMailStore(tx: HostSqlExecutor, addHistory: HistoryWriter) {
         setOutboxState: (id: string, state: OutboxState, change?: OutboxChange) =>
             setOutboxState(tx, id, state, change),
         rowsInState: (state: OutboxState, account?: string) => rowsInState(tx, state, account),
+        outboxRowsOfJob: (job: string, states: readonly OutboxState[]) => outboxRowsOfJob(tx, job, states),
         markAccountRemoved: (account: string, address: string) => markAccountRemoved(tx, addHistory, account, address),
         newestQuestion: (job: string) => newestQuestion(tx, job),
         emailRowsOf: (job: string) => emailRowsOf(tx, job),

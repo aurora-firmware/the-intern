@@ -46,13 +46,8 @@ async function blockCount(jobStore: JobStore, job: Job): Promise<number> {
     return count;
 }
 
-async function outboxRowsOf(jobStore: JobStore, jobId: string, states: readonly OutboxState[]): Promise<OutboxRow[]> {
-    return jobStore.readMail(async (tx) => {
-        const rows: OutboxRow[] = [];
-        for (const state of states) rows.push(...(await tx.rowsInState(state)).filter((row) => row.job === jobId));
-        return rows;
-    });
-}
+const outboxRowsOf = (jobStore: JobStore, jobId: string, states: readonly OutboxState[]): Promise<OutboxRow[]> =>
+    jobStore.readMail((tx) => tx.outboxRowsOfJob(jobId, states));
 
 const headersOf = (received: MailMessageRow[]): { inReplyTo: string | null; references: string | null } => {
     const ids = received.flatMap((row) => (row.messageId === null ? [] : [row.messageId]));
