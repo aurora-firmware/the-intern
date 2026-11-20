@@ -17,6 +17,7 @@ import { leadConversationOf } from "../service/job_operations.ts";
 import type { JobAuthor } from "./job_model.ts";
 import { type Job, JobNotFoundError } from "./job_store.ts";
 import type { JobsComponentOptions } from "./jobs_component.ts";
+import { type MailDecision, MailTextRequiredError, mailPolicyOf } from "./mail_policy.ts";
 
 /** The request id prefix of the input that `jobs.resume` writes together with the resume. */
 export const RESUME_REQUEST_PREFIX = "resume:";
@@ -44,10 +45,43 @@ async function activeInvocationOf(ctx: ServiceContext, jobId: string): Promise<s
     return undefined;
 }
 
-/** Blocks the job with the reason, then parks its lead conversation to wait for an answer. */
-export async function blockJob(deps: JobActionDeps, jobId: string, reason: string, author: JobAuthor): Promise<Job> {
+type MailAsked = { decision: MailDecision; committed: () => void };
+
+// Asks the mail policy, if there is one, before anything is written. Without a policy nothing is required or owed.
+async function askMailPolicy(
+    ctx: ServiceContext,
+    action: "block" | "complete",
+    job: Job,
+    author: JobAuthor,
+    mailText: string | undefined,
+): Promise<MailAsked> {
+    const policy = mailPolicyOf(ctx.host);
+    if (policy === undefined) return { decision: { kind: "none" }, committed: () => {} };
+    const ask = { job, author, mailText };
+    const decision = await (action === "block" ? policy.forBlock(ask) : policy.forComplete(ask));
+    if (decision.kind === "mail_text_required") throw new MailTextRequiredError(job.id);
+    return { decision, committed: () => policy.committed() };
+}
+
+const mailInput = ({ decision }: MailAsked) => ({
+    ...(decision.kind === "owe" && { owedMail: decision.row }),
+    ...(decision.kind === "not_sent" && { mailNotSent: true }),
+});
+
+/**
+ * Blocks the job with the reason, then parks its lead conversation to wait for an answer. The mail policy owes the
+ * question's email, or requires a mail text.
+ */
+export async function blockJob(
+    deps: JobActionDeps,
+    jobId: string,
+    reason: string,
+    author: JobAuthor,
+    mailText?: string,
+): Promise<Job> {
     const { ctx, options } = deps;
     const job = await ctx.jobStore.getJob(jobId);
+    const asked = await askMailPolicy(ctx, "block", job, author, mailText);
     const activeInvocation = await activeInvocationOf(ctx, job.id);
     const leadId = await leadConversationOf(ctx.host, job.id);
     // Read before the block write, so input the lead takes after it is after this entry (S-004 REQ-018 rule 3).
@@ -59,9 +93,11 @@ export async function blockJob(deps: JobActionDeps, jobId: string, reason: strin
             blockedReason: reason,
             ...(activeInvocation !== undefined && { activeInvocation }),
             ...(blockedAfterEntry !== null && { blockedAfterEntry }),
+            ...mailInput(asked),
         },
         author,
     );
+    if (asked.decision.kind === "owe") asked.committed();
     await options.afterWrite?.("job-blocked", job.id);
     if (leadId === undefined) return blocked;
     await parkConversation(ctx.host, leadId, { waitingFor: "answer", continueOn: "each" });
@@ -157,10 +193,16 @@ async function finishJob(
     justification: string,
     author: JobAuthor,
     ownConversationId?: string,
+    mailText?: string,
 ): Promise<Job> {
     const { ctx } = deps;
     const job = await ctx.jobStore.getJob(jobId);
-    const done = await ctx.jobStore.applyAction(job.id, action, { justification }, author);
+    const asked =
+        action === "complete"
+            ? await askMailPolicy(ctx, "complete", job, author, mailText)
+            : ({ decision: { kind: "none" }, committed: () => {} } satisfies MailAsked);
+    const done = await ctx.jobStore.applyAction(job.id, action, { justification, ...mailInput(asked) }, author);
+    if (asked.decision.kind === "owe") asked.committed();
     // The job is Done, so a failure after the write must still abort what it can. A lead's own tool call does not
     // fail on it: that would drop `terminate` and start another model turn. A team member's call fails `internal`
     // with the original error. Repair rule 4 finishes what failed at the next start.
@@ -190,8 +232,9 @@ export function completeJob(
     justification: string,
     author: JobAuthor,
     ownConversationId?: string,
+    mailText?: string,
 ) {
-    return finishJob(deps, "complete", jobId, justification, author, ownConversationId);
+    return finishJob(deps, "complete", jobId, justification, author, ownConversationId, mailText);
 }
 
 /** Cancels the job with its justification, then closes and aborts every conversation of the job. */
