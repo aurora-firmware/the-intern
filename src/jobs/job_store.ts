@@ -29,7 +29,7 @@ import {
 
 export type { ScheduleRunItem, ScheduleSkip };
 
-export const JOB_SCHEMA_VERSION = 5;
+export const JOB_SCHEMA_VERSION = 6;
 
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 500;
@@ -98,6 +98,9 @@ export type Job = {
     blockedReason?: string;
     resolution?: Resolution;
     related: string[];
+    /** The mail account the job came through, present only for a job that came by email. */
+    mailAccount?: string;
+    requestMark?: string;
 };
 
 export type NewJob = {
@@ -124,6 +127,8 @@ export type JobListFilter = {
     relatedTo?: string;
     /** Only the jobs of this schedule entry. */
     schedule?: string;
+    /** Only the jobs that came through this mail account. */
+    mailAccount?: string;
     limit?: number;
     cursor?: string;
 };
@@ -268,6 +273,62 @@ export const JOB_MIGRATIONS: readonly string[] = [
     CREATE INDEX intern_jobs_by_schedule_instant ON intern_jobs
         (schedule_entry, ${FIRED_INSTANT_SQL});
     `,
+    `
+    CREATE TABLE intern_mail_intake (
+        account TEXT NOT NULL,
+        uidvalidity INTEGER NOT NULL,
+        next_uid INTEGER NOT NULL,
+        identity TEXT NOT NULL,
+        PRIMARY KEY (account)
+    );
+    CREATE TABLE intern_mail_messages (
+        id TEXT PRIMARY KEY,
+        account TEXT NOT NULL,
+        uidvalidity INTEGER NOT NULL,
+        uid INTEGER NOT NULL,
+        message_id TEXT,
+        in_reply_to TEXT,
+        refs TEXT,
+        sender TEXT,
+        subject TEXT,
+        date TEXT,
+        raw BLOB,
+        size INTEGER,
+        attachments TEXT,
+        route TEXT,
+        job TEXT,
+        outcome TEXT,
+        UNIQUE (account, uidvalidity, uid)
+    );
+    CREATE TABLE intern_mail_thread (
+        message_id TEXT NOT NULL,
+        job TEXT NOT NULL,
+        direction TEXT NOT NULL
+    );
+    CREATE INDEX intern_mail_thread_by_message ON intern_mail_thread (message_id);
+    CREATE TABLE intern_mail_outbox (
+        id TEXT PRIMARY KEY,
+        key TEXT NOT NULL,
+        job TEXT NOT NULL,
+        account TEXT,
+        kind TEXT NOT NULL,
+        recipients TEXT NOT NULL,
+        subject TEXT,
+        mail_text TEXT,
+        in_reply_to TEXT,
+        refs TEXT,
+        message_id TEXT,
+        raw BLOB,
+        state TEXT NOT NULL,
+        server_answer TEXT,
+        copied INTEGER,
+        UNIQUE (key)
+    );
+    ALTER TABLE intern_jobs ADD COLUMN mail_account TEXT;
+    ALTER TABLE intern_jobs ADD COLUMN mail_message TEXT;
+    ALTER TABLE intern_jobs ADD COLUMN request_mark TEXT;
+    CREATE INDEX intern_jobs_by_mail_account ON intern_jobs (mail_account);
+    `,
 ];
 
 if (JOB_MIGRATIONS.length !== JOB_SCHEMA_VERSION) throw new Error("JOB_SCHEMA_VERSION and MIGRATIONS are out of step");
@@ -324,10 +385,13 @@ type JobRow = {
     created_at: string;
     updated_at: string;
     done_at: string | null;
+    mail_account: string | null;
+    request_mark: string | null;
 };
 
 const JOB_COLUMNS = `id, letter, n, title, description, definition_of_done, status, blocked_reason, resolution_kind,
-    resolution_justification, request_text, origin, stated_by, created_at, updated_at, done_at`;
+    resolution_justification, request_text, origin, stated_by, created_at, updated_at, done_at, mail_account,
+    request_mark`;
 
 async function relatedNumbers(executor: HostSqlExecutor, id: string): Promise<string[]> {
     const rows = await executor.all<{ letter: Letter; n: number }>(
@@ -357,6 +421,10 @@ async function toJob(executor: HostSqlExecutor, row: JobRow): Promise<Job> {
     };
     if (row.done_at !== null) job.doneAt = row.done_at;
     if (row.stated_by !== null) job.statedBy = row.stated_by;
+    if (row.mail_account !== null) {
+        job.mailAccount = row.mail_account;
+        if (row.request_mark !== null) job.requestMark = row.request_mark;
+    }
     if (row.blocked_reason !== null) job.blockedReason = row.blocked_reason;
     if (row.resolution_kind !== null) {
         job.resolution = { kind: row.resolution_kind, justification: row.resolution_justification ?? "" };
@@ -428,6 +496,10 @@ async function listConditions(
     if (filter.schedule !== undefined) {
         where.push("j.schedule_entry = ?");
         params.push(filter.schedule);
+    }
+    if (filter.mailAccount !== undefined) {
+        where.push("j.mail_account = ?");
+        params.push(filter.mailAccount);
     }
     if (filter.cursor !== undefined) {
         const cursor = decodeCursor(filter.cursor);

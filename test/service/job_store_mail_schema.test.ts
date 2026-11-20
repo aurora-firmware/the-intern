@@ -98,15 +98,25 @@ describe("job schema version 6", () => {
         for (const [index, number] of numbers.entries()) {
             if (index === 2) continue;
             const account = index === 4 ? "other" : "work";
-            await db.run("UPDATE intern_jobs SET mail_account = ?, request_mark = 'mark' WHERE n = ?", account, index + 1);
+            await db.run(
+                "UPDATE intern_jobs SET mail_account = ?, request_mark = 'mark' WHERE n = ?",
+                account,
+                index + 1,
+            );
             assert.ok(number);
         }
 
         const first = await store.listJobs({ mailAccount: "work", limit: 2 });
-        assert.deepEqual(first.jobs.map((job) => job.number), [numbers[3], numbers[1]]);
+        assert.deepEqual(
+            first.jobs.map((job) => job.number),
+            [numbers[3], numbers[1]],
+        );
         assert.ok(first.cursor);
         const second = await store.listJobs({ mailAccount: "work", limit: 2, cursor: first.cursor as string });
-        assert.deepEqual(second.jobs.map((job) => job.number), [numbers[0]]);
+        assert.deepEqual(
+            second.jobs.map((job) => job.number),
+            [numbers[0]],
+        );
         assert.equal(second.cursor, undefined);
         assert.equal(first.jobs[0]?.mailAccount, "work");
         assert.equal(first.jobs[0]?.requestMark, "mark");

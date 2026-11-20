@@ -32,6 +32,7 @@ type ListInput = {
     status?: JobStatus;
     letter?: Letter;
     relatedTo?: string;
+    mailAccount?: string;
     limit?: number;
     cursor?: string;
 };
@@ -78,6 +79,7 @@ function parseList(raw: unknown): ListInput {
     if (record.status !== undefined) input.status = parseOneOf<JobStatus>(record, "status", STATUSES);
     if (record.letter !== undefined) input.letter = parseOneOf<Letter>(record, "letter", LETTERS);
     if (record.relatedTo !== undefined) input.relatedTo = requireString(record, "relatedTo");
+    if (record.mailAccount !== undefined) input.mailAccount = requireString(record, "mailAccount");
     if (record.cursor !== undefined) input.cursor = requireString(record, "cursor");
     return input;
 }
