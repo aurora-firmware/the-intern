@@ -1,6 +1,7 @@
 /**
  * The mail daemon component (S-009): the `mail` and `mail_account` configuration sections, the startup checks of steps
- * 5 and 6, and the start of each account at step 8: the removal of the secrets of accounts the file no longer holds,
+ * 5 and 6, the repair of step 7 (rows left `sending`, rows of removed accounts, missing saved copies), and the start of
+ * each account at step 8: the removal of the secrets of accounts the file no longer holds,
  * then a login check in the background that never holds readiness back.
  */
 
@@ -27,6 +28,7 @@ import { accountKey, checkNotice, type MailAccount, MailRuleError } from "./mail
 import { mailAccountSection, mailSection } from "./mail_section.ts";
 import { createMailToolsExtension } from "./mail_tools_extension.ts";
 import { createMailPolicy, createOutbox, type Outbox } from "./outbox.ts";
+import { hasSavedCopy, writeSavedCopy } from "./saved_copy.ts";
 import { checkSmtpLogin } from "./smtp_client.ts";
 import { createToolConnections } from "./tool_connection.ts";
 
@@ -113,6 +115,58 @@ function lateSecretsStore(open: () => SecretsStore | undefined): SecretsStore {
         keys: () => store().keys(),
         removeAllExcept: (keys) => store().removeAllExcept(keys),
     };
+}
+
+/** The address of a removed account, from the identity its intake record kept; the name when it kept none. */
+function addressOfIdentity(identity: string | undefined, fallback: string): string {
+    if (identity === undefined) return fallback;
+    try {
+        const parts: unknown = JSON.parse(identity);
+        const found = Array.isArray(parts) ? parts[2] : undefined;
+        return typeof found === "string" ? found : fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+/** Settles the outbox rows and the intake records the last run left (step 7). */
+async function settleMailRows(ctx: ServiceContext, configured: readonly MailAccount[]): Promise<void> {
+    const configuredNames = configured.map((account) => account.name);
+    await ctx.jobStore.writeMail(async (tx) => {
+        for (const row of await tx.rowsInState("sending")) {
+            await tx.setOutboxState(row.id, "may_not_have_gone_out");
+            const from = configured.find((account) => account.name === row.account)?.address ?? row.account ?? "";
+            await tx.addMailHistory(
+                row.job,
+                { mail: "may_not_have_gone_out", from, to: row.recipients, subject: row.subject ?? "" },
+                { kind: "daemon" },
+            );
+        }
+        const removed = new Set<string>();
+        for (const row of await tx.rowsInState("owed")) {
+            if (row.account !== null && !configuredNames.includes(row.account)) removed.add(row.account);
+        }
+        for (const name of removed) {
+            const address = addressOfIdentity((await tx.readIntake(name))?.identity, name);
+            await tx.markAccountRemoved(name, address);
+        }
+        await tx.removeIntakeExcept(configuredNames);
+    });
+}
+
+/** Writes out again each saved email whose copy folder is missing, as after an import (ADR-011 decision 4). */
+async function restoreSavedCopies(ctx: ServiceContext): Promise<void> {
+    let cursor: string | undefined;
+    do {
+        const page = await ctx.jobStore.listJobs({ limit: 200, ...(cursor !== undefined && { cursor }) });
+        for (const job of page.jobs) {
+            for (const email of await ctx.jobStore.readMail((tx) => tx.emailRowsOf(job.id))) {
+                if (email.raw === null || (await hasSavedCopy(ctx.dirs.mailDir, email.id))) continue;
+                await writeSavedCopy(ctx.dirs.mailDir, email.id, email.raw);
+            }
+        }
+        cursor = page.cursor;
+    } while (cursor !== undefined);
 }
 
 function outcomeOfFailure(error: unknown): CheckOutcome {
@@ -284,6 +338,10 @@ export async function createMailComponent(options: MailComponentOptions): Promis
                 if (!(error instanceof MailRuleError)) throw error;
                 throw new ConfigError(ctx.dirs.configFile, error.reason, `mail.${error.key}`);
             }
+        },
+        async repair(ctx) {
+            await settleMailRows(ctx, ctx.config.current(mailAccountSection));
+            await restoreSavedCopies(ctx);
         },
         async start(ctx) {
             context = ctx;
