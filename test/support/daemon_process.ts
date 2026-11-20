@@ -9,6 +9,7 @@ import { join } from "node:path";
 import type { ProviderEndpoints } from "../../src/accounts/providers.ts";
 import type { DeskCreatePoint } from "../../src/desk/desk_component.ts";
 import type { WritePoint } from "../../src/jobs/jobs_component.ts";
+import type { MailWritePoint } from "../../src/mail/mail_component.ts";
 import { ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
 import type { DaemonStatus } from "../../src/service/status_operation.ts";
 import type { HermeticEnv } from "./hermetic_env.ts";
@@ -107,6 +108,8 @@ export type StartDaemonOptions = {
     turnEndRule?: boolean;
     /** The child kills itself with `SIGKILL` the first time the Jobs component reaches this write point. */
     jobCrashAt?: WritePoint;
+    /** The child kills itself with `SIGKILL` the first time the mail component reaches this write point. */
+    mailCrashAt?: MailWritePoint;
     /** The child kills itself with `SIGKILL` just before, or just after, the commit that creates the front desk. */
     deskCrashAt?: DeskCreatePoint;
     /**

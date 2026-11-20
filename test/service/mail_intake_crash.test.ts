@@ -87,8 +87,7 @@ async function untilKilled(daemon: DaemonProcess): Promise<void> {
     assert.equal((outcome as { signal: string | null }).signal, "SIGKILL");
 }
 
-const jobsOf = async (daemon: DaemonProcess) =>
-    ((await daemon.invoke("jobs.list", {})) as { jobs: Job[] }).jobs;
+const jobsOf = async (daemon: DaemonProcess) => ((await daemon.invoke("jobs.list", {})) as { jobs: Job[] }).jobs;
 
 /** Kills a child at `point` as it takes in mail, `KILL_COUNT` times, with the server down while each next one starts. */
 async function killRepeatedly(rig: MailRig, point: MailWritePoint, first: DaemonProcess): Promise<void> {
@@ -139,8 +138,10 @@ describe("intake across a kill", () => {
         await untilWatching(opener);
         rig.deliver(ADDRESS, rawMail("question"));
         const job = await until("the question's job to block", async () => {
-            const [found] = await jobsOf(opener);
-            return found?.status === "blocked" ? found : undefined;
+            const [listed] = await jobsOf(opener);
+            if (listed === undefined) return undefined;
+            const found = (await opener.invoke("jobs.get", { job: listed.id })) as Job;
+            return found.status === "blocked" ? found : undefined;
         });
         opener.kill9();
         await opener.exited;

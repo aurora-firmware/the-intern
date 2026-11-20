@@ -400,8 +400,8 @@ function createComponents(switches: Switches, release: Promise<void>): DaemonCom
     return components;
 }
 
-/** Kills the process the first time the Jobs component reaches `crashAt`, and never lets the work after it run. */
-function killingAt(crashAt: WritePoint): NonNullable<JobsComponentOptions["afterWrite"]> {
+/** Kills the process the first time a component reaches its write point `crashAt`, and never lets the work after it run. */
+function killingAt<Point extends string>(crashAt: Point): (point: Point) => Promise<void> | undefined {
     return (point) => {
         if (point !== crashAt) return undefined;
         process.kill(process.pid, "SIGKILL");
@@ -660,6 +660,7 @@ async function main(): Promise<void> {
         jobs,
         logger,
         ...(mailClock && { clock: mailClock }),
+        ...(switches.mailCrashAt !== undefined && { afterWrite: killingAt(switches.mailCrashAt) }),
         ...(switches.oauthEndpoints && { oauthEndpoints: switches.oauthEndpoints }),
     });
     const schedules = await createSchedulesComponent({
