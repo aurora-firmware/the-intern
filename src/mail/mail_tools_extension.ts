@@ -1,76 +1,32 @@
 /**
- * The mail tools extension (S-009 REQ-011, REQ-010): the tools an agent reads and saves attachments of a mail account
+ * The mail tools extension (S-009 REQ-011, REQ-010): the tools an agent reads, sorts and drafts in a mail account
  * with. A tool names its account and behaves the same on an owned and a monitored one. A call that can't be answered
  * is an error result with the reason, and the agent's run goes on.
  */
 import { rm, stat, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 import { type Static, Type } from "@earendil-works/pi-ai";
+import { defineExtension, defineTool, type Extension, type ToolExecutionApi } from "@earendil-works/pi-durable";
+import type { SearchQuery } from "./imap_client.ts";
+import { moveTool, saveDraftTool, setFlagsTool } from "./mail_sort_tools.ts";
 import {
-    defineExtension,
-    defineTool,
-    type Extension,
-    type ToolExecutionApi,
-    type ToolExecutionResult,
-} from "@earendil-works/pi-durable";
-import { type ImapConnection, ImapFailure, type MessageRef, type SearchQuery } from "./imap_client.ts";
+    accountField,
+    jsonResult,
+    type MailToolsOptions,
+    messageFields,
+    readParsed,
+    refOf,
+    refusable,
+    requireFolder,
+} from "./mail_tool_support.ts";
 import { type ParsedMessage, parseMessage } from "./mime.ts";
-import { MailToolRefusal, type ToolConnections } from "./tool_connection.ts";
+import { MailToolRefusal } from "./tool_connection.ts";
 
 export const MAIL_TOOLS_EXTENSION_NAME = "intern.mail";
 
 const DEFAULT_SEARCH_LIMIT = 20;
 const MAX_SEARCH_LIMIT = 50;
 const DEFAULT_FOLDER = "INBOX";
-
-export type MailToolsOptions = {
-    connections(): ToolConnections;
-};
-
-const textResult = (text: string, isError = false): ToolExecutionResult => ({
-    output: [{ type: "text", text }],
-    ...(isError && { isError }),
-});
-
-const jsonResult = (value: unknown): ToolExecutionResult => textResult(JSON.stringify(value, null, 2));
-
-// A refused call, or a server that answers no, is an error result for the agent; anything else is a real failure.
-async function refusable(tool: string, action: () => Promise<ToolExecutionResult>): Promise<ToolExecutionResult> {
-    try {
-        return await action();
-    } catch (error) {
-        if (error instanceof MailToolRefusal || error instanceof ImapFailure) {
-            return textResult(`${tool} was refused: ${error.message}`, true);
-        }
-        throw error;
-    }
-}
-
-async function requireFolder(imap: ImapConnection, folder: string): Promise<void> {
-    const folders = await imap.listFolders();
-    if (!folders.some((entry) => entry.path === folder)) {
-        throw new MailToolRefusal(`The account has no folder "${folder}".`);
-    }
-}
-
-const accountField = Type.String({ description: "The name of the mail account." });
-const messageFields = {
-    account: accountField,
-    folder: Type.String({ description: "The folder the message is in, as mail_search returned it." }),
-    uidValidity: Type.Number({ description: "The folder's UIDVALIDITY, as mail_search returned it." }),
-    uid: Type.Number({ description: "The message's UID, as mail_search returned it." }),
-};
-
-const refOf = (args: { folder: string; uidValidity: number; uid: number }): MessageRef => ({
-    folder: args.folder,
-    uidValidity: args.uidValidity,
-    uid: args.uid,
-});
-
-async function readParsed(imap: ImapConnection, ref: MessageRef): Promise<ParsedMessage> {
-    await requireFolder(imap, ref.folder);
-    return parseMessage(await imap.fetchMessage(ref));
-}
 
 const headersOf = (message: ParsedMessage) => ({
     messageId: message.messageId,
@@ -249,6 +205,14 @@ const saveAttachmentsTool = (options: MailToolsOptions) =>
 export function createMailToolsExtension(options: MailToolsOptions): Extension {
     return defineExtension({
         name: MAIL_TOOLS_EXTENSION_NAME,
-        tools: [listFoldersTool(options), searchTool(options), readTool(options), saveAttachmentsTool(options)],
+        tools: [
+            listFoldersTool(options),
+            searchTool(options),
+            readTool(options),
+            saveAttachmentsTool(options),
+            moveTool(options),
+            setFlagsTool(options),
+            saveDraftTool(options),
+        ],
     });
 }
