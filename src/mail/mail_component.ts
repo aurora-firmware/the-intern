@@ -23,7 +23,9 @@ import type { Operation } from "../service/operations.ts";
 import { openImap } from "./imap_client.ts";
 import { accountKey, checkNotice, type MailAccount, MailRuleError } from "./mail_model.ts";
 import { mailAccountSection, mailSection } from "./mail_section.ts";
+import { createMailToolsExtension } from "./mail_tools_extension.ts";
 import { checkSmtpLogin } from "./smtp_client.ts";
+import { createToolConnections } from "./tool_connection.ts";
 
 const MAIL_OWNER = "mail";
 
@@ -130,6 +132,12 @@ export async function createMailComponent(options: MailComponentOptions): Promis
     const checks = new Map<string, AbortController>();
     let context: ServiceContext | undefined;
 
+    const toolConnections = createToolConnections({
+        account: (name) => context?.config.current(mailAccountSection).find((entry) => entry.name === name),
+        status: (name) => accountStatus.get(MAIL_OWNER, name)?.status,
+        credential: (account) => accounts.credentialFor(authOf(account), SCOPES[account.auth] ?? []),
+    });
+
     const endCheck = (name: string): void => {
         checks.get(name)?.abort();
         checks.delete(name);
@@ -189,6 +197,7 @@ export async function createMailComponent(options: MailComponentOptions): Promis
 
     const stopAccount = (name: string): void => {
         endCheck(name);
+        void toolConnections.close(name);
         accountStatus.stop(MAIL_OWNER, name);
     };
 
@@ -203,6 +212,7 @@ export async function createMailComponent(options: MailComponentOptions): Promis
 
     const component: DaemonComponent = {
         name: "mail",
+        extensions: [createMailToolsExtension({ connections: () => toolConnections })],
         async prepareFiles({ dirs }) {
             secrets = createSecretsStore({ secretsDir: dirs.secretsDir });
             return undefined;
@@ -248,6 +258,7 @@ export async function createMailComponent(options: MailComponentOptions): Promis
         },
         async stop() {
             for (const name of [...checks.keys()]) endCheck(name);
+            await toolConnections.closeAll();
             for (const account of accountStatus.list(MAIL_OWNER)) accountStatus.stop(MAIL_OWNER, account.name);
             context = undefined;
         },
