@@ -38,6 +38,8 @@ export type FakeMailServer = {
     received(): ReceivedMail[];
     pause(): void;
     resume(): void;
+    /** The number of IMAP and SMTP connections the server holds open. */
+    openConnections(): number;
     setSlow(ms: number): void;
     refuseRecipient(address: string, answer: string): void;
     dropAfterData(on: boolean): void;
@@ -221,6 +223,7 @@ export async function startFakeMailServer(options: FakeMailOptions = {}): Promis
             for (const socket of [...held, ...sockets()]) socket.resume();
             held.clear();
         },
+        openConnections: () => sockets().filter((socket) => !socket.destroyed).length,
         setSlow(ms) {
             slowMs = ms;
             for (const rule of slowRules) rule.remove();
