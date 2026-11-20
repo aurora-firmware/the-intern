@@ -341,7 +341,7 @@ describe("mail.accounts.signin after the tokens are stored", () => {
         });
         const signIn = operations.find((operation) => operation.name === "mail.accounts.signin");
         const context = { config: { current: () => [account] } } as unknown as ServiceContext;
-        await signIn?.run(context, { name: "work" }, {} as never);
+        await signIn?.run(context, { name: "work" } as never, {} as never);
 
         signedIn();
         await new Promise((resolve) => setImmediate(resolve));
