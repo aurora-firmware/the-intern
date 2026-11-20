@@ -20,6 +20,8 @@ const SENDER = "ann@example.test";
 const PASSWORD = "s3cret";
 const AFTER_RETRY_PAUSE = "2026-03-02T11:00:00.000Z";
 const EXISTING_MESSAGES = 5000;
+// S-009 REQ-023: unscaled, since it is the spec's bound and the library's own IDLE restart (15 s) must not meet it.
+const ANNOUNCED_MAIL_BOUND_MS = 10_000;
 
 type Entry = { field: string; old: unknown; new: unknown; author: { kind: string } };
 type Job = {
@@ -31,9 +33,6 @@ type Job = {
     request: { text: string; origin: { kind: string; wayIn: string; observed?: Record<string, string> } };
 };
 
-const INTERVAL_MS = 61_000;
-const TICK_MS = 200;
-let intervals = 0;
 const scenario = (name: string, run: () => Promise<void>) => it(name, { timeout: TEST_TIMEOUT_MS }, run);
 
 const rigs: MailRig[] = [];
@@ -42,19 +41,13 @@ afterEach(async () => {
     for (const rig of rigs.splice(0)) await rig.stop();
 });
 
-/** Waits for a value. With a rig, the mail clock moves on by one interval at each turn, so the interval check runs. */
-async function until<T>(
-    what: string,
-    attempt: () => Promise<T | undefined> | T | undefined,
-    rig?: MailRig,
-): Promise<T> {
+async function until<T>(what: string, attempt: () => Promise<T | undefined> | T | undefined): Promise<T> {
     const deadline = Date.now() + WAIT_MS;
     for (;;) {
         const found = await attempt();
         if (found !== undefined) return found;
         assert.ok(Date.now() < deadline, `timed out waiting for ${what}`);
-        if (rig !== undefined) await rig.setClock(new Date(Date.parse(AFTER_RETRY_PAUSE) + ++intervals * INTERVAL_MS));
-        await new Promise((resolve) => setTimeout(resolve, rig === undefined ? POLL_MS : TICK_MS));
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
     }
 }
 
@@ -84,7 +77,7 @@ const jobOf = async (rig: MailRig, job: Job | undefined) =>
     (await rig.process().invoke("jobs.get", { job: job?.id })) as Job;
 
 const untilJobs = (rig: MailRig, count: number) =>
-    until(`${count} jobs`, async () => ((await jobsOf(rig)).length >= count ? await jobsOf(rig) : undefined), rig);
+    until(`${count} jobs`, async () => ((await jobsOf(rig)).length >= count ? await jobsOf(rig) : undefined));
 
 const rawMail = (subject: string, text: string, headers: string[] = []): string =>
     [
@@ -127,6 +120,17 @@ describe("intake", () => {
             assert.equal(jobs.filter((job) => job.request.text.includes(`Subject: ${subject}`)).length, 1, subject);
         }
         assert.deepEqual(rig.server.received(), []);
+    });
+
+    scenario("takes the second of two emails in turn within 10 seconds, the clock still (AC-6)", async () => {
+        const rig = await startWatching();
+        rig.deliver(ADDRESS, rawMail("one", "first"));
+        const [first] = await untilJobs(rig, 1);
+
+        rig.deliver(ADDRESS, rawMail("two", "second"));
+
+        const second = await rig.waitForJob((job) => job.id !== first?.id, { timeoutMs: ANNOUNCED_MAIL_BOUND_MS });
+        assert.ok(second);
     });
 
     scenario("saves the message and its attachments and leaves the message in INBOX unflagged (AC-3)", async () => {
@@ -201,11 +205,8 @@ describe("intake", () => {
 
         const history = () =>
             rig.process().invoke("jobs.history.list", { job: job?.id, limit: 100 }) as Promise<{ entries: Entry[] }>;
-        await until(
-            "the reply to be recorded",
-            async () =>
-                (await history()).entries.filter((entry) => entry.field === "mail").length === 2 ? true : undefined,
-            rig,
+        await until("the reply to be recorded", async () =>
+            (await history()).entries.filter((entry) => entry.field === "mail").length === 2 ? true : undefined,
         );
         const { entries } = await history();
         assert.ok(
