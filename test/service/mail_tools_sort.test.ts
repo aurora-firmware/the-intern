@@ -3,7 +3,7 @@
  * `mail_save_draft`, on the fake model against the fake mail server, for an owned and a monitored account.
  */
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
@@ -375,5 +375,137 @@ describe("the mail tools that sort and draft", { timeout: TEST_TIMEOUT_MS }, () 
             assert.equal(other?.isError, true);
             assert.deepEqual(flagsNow(), []);
         });
+    });
+
+    describe("mail_save_draft", () => {
+        async function drafter() {
+            const started = await start();
+            await deliverAll(started.workServer, WORK.address, ["question"]);
+            const seat = await started.seat("sorter");
+            const [question] = await inFolder(started, seat.conversationId, WORK.name);
+            const draft = (extra: Record<string, unknown> = {}, id?: string): Call => ({
+                name: "mail_save_draft",
+                id,
+                arguments: {
+                    account: WORK.name,
+                    to: ["ann@example.test"],
+                    subject: "Re: question",
+                    text: "Here.",
+                    ...extra,
+                },
+            });
+            const drafts = async () =>
+                Promise.all(started.workServer.mailbox(WORK.address, "Drafts").map((m) => parseMessage(m.raw)));
+            return { started, ...seat, question, draft, drafts };
+        }
+
+        it("saves one draft for a repeated tool call id and sends nothing (AC-4)", async () => {
+            const { started, conversationId, draft, drafts } = await drafter();
+
+            const [first, repeated] = await started.run(conversationId, [draft({}, "call-1"), draft({}, "call-1")]);
+            await started.run(conversationId, [draft({}, "call-2")]);
+
+            assert.equal(first?.isError, false, first?.text);
+            assert.equal(repeated?.isError, false, repeated?.text);
+            const held = await drafts();
+            assert.equal(held.length, 2);
+            assert.notEqual(held[0]?.messageId, held[1]?.messageId);
+            assert.deepEqual(started.workServer.received(), []);
+        });
+
+        it("composes the draft from the account with its reply headers and a named file (AC-4)", async () => {
+            const { started, conversationId, workspace, question, draft, drafts } = await drafter();
+            await writeFile(join(workspace, "answer.txt"), "attached");
+            const original = await parseMessage(started.workServer.mailbox(WORK.address, "INBOX")[0]?.raw ?? "");
+
+            const [saved] = await started.run(conversationId, [
+                draft({ attachments: ["answer.txt"], replyTo: question }, "call-1"),
+            ]);
+
+            assert.equal(saved?.isError, false, saved?.text);
+            const [held] = await drafts();
+            assert.equal(held?.from, WORK.address);
+            assert.deepEqual(held?.to, ["ann@example.test"]);
+            assert.equal(held?.text.trim(), "Here.");
+            assert.equal(held?.inReplyTo, original.messageId);
+            assert.deepEqual(held?.references, [original.messageId]);
+            assert.deepEqual(
+                held?.attachments.map((a) => [a.filename, Buffer.from(a.content).toString()]),
+                [["answer.txt", "attached"]],
+            );
+            assert.match(held?.messageId ?? "", /^<[0-9a-f]{32,}@example\.test>$/);
+            assert.ok(!(held?.messageId ?? "").includes(conversationId));
+            assert.ok(started.workServer.mailbox(WORK.address, "Drafts")[0]?.flags.includes("\\Draft"));
+        });
+
+        it("refuses a file that doesn't exist and a message that can't be replied to, and saves nothing (AC-4)", async () => {
+            const { started, conversationId, question, draft, drafts } = await drafter();
+
+            const [noFile, noMessage] = await started.run(conversationId, [
+                draft({ attachments: ["missing.txt"] }, "call-1"),
+                draft({ replyTo: { ...question, uid: 999 } }, "call-2"),
+            ]);
+
+            assert.equal(noFile?.isError, true);
+            assert.match(noFile?.text ?? "", /missing\.txt/);
+            assert.equal(noMessage?.isError, true);
+            assert.deepEqual(await drafts(), []);
+        });
+    });
+
+    it("sorts and drafts a monitored mailbox for a scheduled job's lead without sending or starting a job (AC-2)", async () => {
+        const started = await start();
+        const subjects = ["a", "b", "c", "d", "e"];
+        await deliverAll(started.watchServer, WATCH.address, subjects);
+        const { conversationId } = await started.seat("sorter", true);
+        const messages = await inFolder(started, conversationId, WATCH.name);
+        const named = (subject: string) => messages.find((message) => message.subject === subject);
+        const location = { account: WATCH.name, folder: "INBOX", uidValidity: messages[0]?.uidValidity };
+
+        const results = await started.run(conversationId, [
+            {
+                name: "mail_move",
+                arguments: { ...location, uids: ["a", "b", "c"].map((s) => named(s)?.uid), target: "Sent" },
+            },
+            {
+                name: "mail_set_flags",
+                arguments: { ...location, uids: [named("d")?.uid, named("e")?.uid], seen: true, flagged: true },
+            },
+            {
+                name: "mail_save_draft",
+                arguments: {
+                    account: WATCH.name,
+                    to: ["ann@example.test"],
+                    subject: "Re: d",
+                    text: "one",
+                    replyTo: named("d"),
+                },
+            },
+            {
+                name: "mail_save_draft",
+                arguments: {
+                    account: WATCH.name,
+                    to: ["ann@example.test"],
+                    subject: "Re: e",
+                    text: "two",
+                    replyTo: named("e"),
+                },
+            },
+        ]);
+
+        for (const result of results) assert.equal(result.isError, false, result.text);
+        assert.deepEqual(await subjectsIn(started.watchServer, WATCH.address, "Sent"), ["a", "b", "c"]);
+        assert.deepEqual(await subjectsIn(started.watchServer, WATCH.address, "INBOX"), ["d", "e"]);
+        assert.deepEqual(
+            started.watchServer.mailbox(WATCH.address, "INBOX").map((message) => message.flags.toSorted()),
+            [
+                ["\\Flagged", "\\Seen"],
+                ["\\Flagged", "\\Seen"],
+            ],
+        );
+        assert.deepEqual(await subjectsIn(started.watchServer, WATCH.address, "Drafts"), ["Re: d", "Re: e"]);
+        assert.deepEqual(started.watchServer.received(), []);
+        const jobs = (await started.invoke("jobs.list", {})) as { jobs: unknown[] };
+        assert.equal(jobs.jobs.length, 1, "only the probe job exists");
     });
 });

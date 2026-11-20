@@ -1,9 +1,10 @@
 /**
- * The mail tools extension (S-009 REQ-011, REQ-010): the tools an agent reads and saves attachments of a mail account
+ * The mail tools extension (S-009 REQ-011, REQ-010): the tools an agent reads, sorts and drafts in a mail account
  * with. A tool names its account and behaves the same on an owned and a monitored one. A call that can't be answered
  * is an error result with the reason, and the agent's run goes on.
  */
-import { rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 import { type Static, Type } from "@earendil-works/pi-ai";
 import {
@@ -20,7 +21,7 @@ import {
     type MessageRef,
     type SearchQuery,
 } from "./imap_client.ts";
-import { type ParsedMessage, parseMessage } from "./mime.ts";
+import { composeMessage, type ParsedMessage, parseMessage } from "./mime.ts";
 import { MailToolRefusal, type ToolConnections } from "./tool_connection.ts";
 
 export const MAIL_TOOLS_EXTENSION_NAME = "intern.mail";
@@ -318,6 +319,77 @@ const setFlagsTool = (options: MailToolsOptions) =>
         },
     });
 
+// The same call hashes to the same Message-ID, which is how a repeat finds its draft; the hash names nothing internal.
+const draftMessageId = (conversationId: string, callId: string, address: string): string =>
+    `<${createHash("sha256").update(`${conversationId}:${callId}`).digest("hex")}@${address.slice(address.lastIndexOf("@") + 1)}>`;
+
+async function readAttachments(workspace: string | undefined, paths: string[]) {
+    const attachments = [];
+    for (const path of paths) {
+        if (!isAbsolute(path) && workspace === undefined) {
+            throw new Error("The conversation has no workspace to resolve a file in.");
+        }
+        const file = isAbsolute(path) ? path : join(workspace as string, path);
+        const content = await readFile(file).catch(() => {
+            throw new MailToolRefusal(`The file ${file} can't be read; no draft was saved.`);
+        });
+        attachments.push({ filename: basename(file), contentType: "application/octet-stream", content });
+    }
+    return attachments;
+}
+
+// composeMessage gives every message a Message-ID of its own; the draft's replaces it, in the header it was written to.
+const withMessageId = (raw: Buffer, composedId: string, messageId: string): Buffer =>
+    Buffer.from(raw.toString("latin1").replace(composedId, messageId), "latin1");
+
+const saveDraftTool = (options: MailToolsOptions) =>
+    defineTool({
+        name: "mail_save_draft",
+        description:
+            "Save a plain-text draft in the account's Drafts folder, optionally as a reply to a message and with " +
+            "files of yours attached (a relative path is relative to your workspace). Nothing is sent. Saving the " +
+            "same call again saves nothing more.",
+        parameters: Type.Object({
+            account: accountField,
+            to: Type.Array(Type.String(), { minItems: 1, description: "The recipients' addresses." }),
+            subject: Type.String(),
+            text: Type.String({ description: "The plain text of the message." }),
+            attachments: Type.Optional(Type.Array(Type.String(), { description: "Paths of files to attach." })),
+            replyTo: Type.Optional(
+                Type.Object(
+                    { folder: messageFields.folder, uidValidity: messageFields.uidValidity, uid: messageFields.uid },
+                    { description: "The message of the same account this draft replies to." },
+                ),
+            ),
+        }),
+        async execute(args, api: ToolExecutionApi) {
+            return refusable("mail_save_draft", async () => {
+                const attachments = await readAttachments(api.env?.cwd, args.attachments ?? []);
+                return options.connections().use(args.account, async (imap, account) => {
+                    const folder = await imap.specialFolder("drafts");
+                    if (folder === undefined) throw new MailToolRefusal(`The account has no Drafts folder.`);
+                    const messageId = draftMessageId(String(api.conversationId), api.callId, account.address);
+                    if (await imap.hasMessageId(folder, messageId)) return jsonResult({ saved: false, folder });
+                    const original =
+                        args.replyTo === undefined ? undefined : await readParsed(imap, refOf(args.replyTo));
+                    const composed = await composeMessage({
+                        from: account.address,
+                        to: args.to,
+                        subject: args.subject,
+                        text: args.text,
+                        attachments,
+                        ...(original?.messageId && {
+                            inReplyTo: original.messageId,
+                            references: [...original.references, original.messageId],
+                        }),
+                    });
+                    await imap.append(folder, withMessageId(composed.raw, composed.messageId, messageId), ["\\Draft"]);
+                    return jsonResult({ saved: true, folder });
+                });
+            });
+        },
+    });
+
 export function createMailToolsExtension(options: MailToolsOptions): Extension {
     return defineExtension({
         name: MAIL_TOOLS_EXTENSION_NAME,
@@ -328,6 +400,7 @@ export function createMailToolsExtension(options: MailToolsOptions): Extension {
             saveAttachmentsTool(options),
             moveTool(options),
             setFlagsTool(options),
+            saveDraftTool(options),
         ],
     });
 }
