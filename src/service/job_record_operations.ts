@@ -17,6 +17,7 @@ import {
     type WorklogEntry,
 } from "../jobs/job_store.ts";
 import type { JobsComponentOptions } from "../jobs/jobs_component.ts";
+import { type JobEmail, mailPolicyOf } from "../jobs/mail_policy.ts";
 import { leadConversationOf } from "./job_operations.ts";
 import { type Caller, defineOperation, type Operation, ServiceError } from "./operations.ts";
 
@@ -25,7 +26,7 @@ const STATUSES: readonly string[] = ["to_do", "in_progress", "blocked", "done"];
 const LETTERS: readonly string[] = ["C", "W", "E", "S", "A"];
 export const STORE_PAGE_SIZE = 500;
 
-type JobDetail = Job & { leadConversation?: string; worklog: WorklogEntry[]; history: HistoryEntry[] };
+type JobDetail = Job & { leadConversation?: string; email?: JobEmail; worklog: WorklogEntry[]; history: HistoryEntry[] };
 type PageInput = { job: string; limit?: number; cursor?: string };
 type ListInput = {
     schedule?: string;
@@ -176,7 +177,10 @@ export function jobRecordOperations(_options: JobsComponentOptions) {
         parse: (raw) => ({ job: requireString(asRecord(raw), "job") }),
         async run(ctx, input) {
             await refuseFrontDesk(ctx.host, input.job);
-            return refusing(readJob(ctx, input.job));
+            const detail = await refusing(readJob(ctx, input.job));
+            if (detail.mailAccount === undefined) return detail;
+            const email = await mailPolicyOf(ctx.host)?.emailDetails(detail);
+            return email === undefined ? detail : { ...detail, email };
         },
     });
     const list = defineOperation<ServiceContext, ListInput, { jobs: Job[]; cursor?: string }>({
