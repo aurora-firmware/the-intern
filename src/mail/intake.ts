@@ -13,7 +13,7 @@ import { steerConversation } from "../host/steering.ts";
 import type { JobsComponentOptions } from "../jobs/jobs_component.ts";
 import { createJob, leadConversationOf } from "../service/job_operations.ts";
 import type { Caller } from "../service/operations.ts";
-import { type ImapConnection, ImapFailure, openImap } from "./imap_client.ts";
+import { type ImapConnection, openImap } from "./imap_client.ts";
 import { type MailAccount, type MailRoute, requestText, routeFor, threadParentOf } from "./mail_model.ts";
 import type { MailMessageRow } from "./mail_store.ts";
 import { type ParsedMessage, parseMessage } from "./mime.ts";
@@ -154,27 +154,10 @@ async function route(session: Session, saved: MailMessageRow, parsed: ParsedMess
     }
 }
 
-/** The email's bytes, or undefined for a UID the inbox no longer holds: moved or deleted before intake got to it. */
-async function fetchRaw(session: Session, uid: number): Promise<Uint8Array | undefined> {
-    try {
-        return await session.imap.fetchRaw(uid);
-    } catch (error) {
-        // `fetchRaw` words the failure for a UID the server has no message for; any other failure is the connection's.
-        if (
-            error instanceof ImapFailure &&
-            error.kind === "protocol" &&
-            error.message.startsWith("no message with UID")
-        ) {
-            return undefined;
-        }
-        throw error;
-    }
-}
-
 /** Takes in one email by the four steps of the architecture: save, copy, route, record. */
 async function takeIn(session: Session, uid: number, uidvalidity: number): Promise<void> {
     const { account, deps, ctx } = session;
-    const raw = await fetchRaw(session, uid);
+    const raw = await session.imap.fetchRaw(uid);
     if (raw === undefined) {
         const next = { uidvalidity, nextUid: uid + 1, identity: identityOf(account) };
         return ctx.jobStore.writeMail((tx) => tx.writeIntake(account.name, next));
@@ -236,21 +219,20 @@ async function watch(account: MailAccount, deps: IntakeDeps, signal: AbortSignal
     try {
         const session: Session = { account, deps, imap, ctx: deps.context() };
         let isWoken = false;
-        let isListening = false;
+        let hasChecked = false;
         let pause: AbortController | undefined;
         const wake = () => {
             isWoken = true;
             pause?.abort();
         };
+        imap.onNewMail(wake);
         while (!signal.aborted) {
             isWoken = false;
             await check(session);
-            // The server pushes only to a connection that has INBOX selected, so the listener comes after a first check.
-            if (!isListening) {
-                isListening = true;
-                imap.onNewMail(wake);
-                deps.logger.info("mail intake watching", { account: account.name });
-            }
+            // A check selects INBOX again, which ends IDLE; the library would restart it only 15 seconds later.
+            imap.idle();
+            if (!hasChecked) deps.logger.info("mail intake watching", { account: account.name });
+            hasChecked = true;
             if (isWoken) continue;
             pause = new AbortController();
             const stop = () => pause?.abort();

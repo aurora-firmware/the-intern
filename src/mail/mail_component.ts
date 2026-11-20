@@ -149,11 +149,7 @@ export async function createMailComponent(options: MailComponentOptions): Promis
         clock,
         logger,
         fail: (name, message) => accountStatus.report(MAIL_OWNER, name, { kind: "failing", message }),
-        // The status has no last error without a status, so the error is reported and the account is ready again.
-        noteError: (name, message) => {
-            accountStatus.report(MAIL_OWNER, name, { kind: "failing", message });
-            accountStatus.report(MAIL_OWNER, name, { kind: "ready" });
-        },
+        noteError: (name, message) => accountStatus.noteError(MAIL_OWNER, name, message),
         ...(options.afterWrite && { afterWrite: options.afterWrite }),
     });
 

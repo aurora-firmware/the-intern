@@ -205,28 +205,27 @@ describe("imap client", () => {
 
             const raw = await connection.fetchRaw(1);
 
-            assert.equal(Buffer.from(raw).toString("utf8"), MESSAGE);
+            assert.equal(Buffer.from(raw ?? []).toString("utf8"), MESSAGE);
             assert.deepEqual(server.mailbox(ADDRESS, "INBOX")[0]?.flags, []);
         });
 
-        it("fails with an ImapFailure when the message does not exist", async () => {
+        it("returns undefined for a UID the inbox does not hold", async () => {
             const server = await start();
             const connection = await connect(server, "none");
             await connection.inboxState();
 
-            const failure = await failureOf(connection.fetchRaw(99));
-
-            assert.equal(failure.kind, "protocol");
+            assert.equal(await connection.fetchRaw(99), undefined);
         });
     });
 
     describe("new mail", () => {
-        it("calls the listener when a message arrives on a server that offers IDLE", async () => {
+        it("calls the listener when a message arrives after idle() on a server that offers IDLE", async () => {
             const server = await start();
             const connection = await connect(server, "none");
             await connection.inboxState();
             const arrived = new Promise<void>((resolve, reject) => {
                 connection.onNewMail(resolve);
+                connection.idle();
                 setTimeout(() => reject(new Error("no new mail announced")), WAIT_MS);
             });
 
