@@ -57,6 +57,7 @@ describe("daemon.status", () => {
             versions: { intern: "1.2.3", pi: "4.5.6" },
             instance: { configDir: "/cfg", stateDir: "/state", dataDir: "/data", runtimeDir: "/run" },
             workerThreads: { count: 32, inUse: 0, waiting: [] },
+            mailAccounts: [],
         });
     });
 

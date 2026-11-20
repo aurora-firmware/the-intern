@@ -56,11 +56,14 @@ async function startDaemon(accountStatus: AccountStatusHub | undefined): Promise
     return {
         context: captured,
         daemon,
-        status: async () => (await daemon.catalogue.invoke("daemon.status", {}, TEAM_MEMBER)) as { mailAccounts: unknown },
+        status: async () =>
+            (await daemon.catalogue.invoke("daemon.status", {}, TEAM_MEMBER)) as { mailAccounts: unknown },
     };
 }
 
-async function nextDelta(subscription: ReturnType<ServiceContext["instanceFeed"]["subscribe"]>): Promise<InstanceDelta> {
+async function nextDelta(
+    subscription: ReturnType<ServiceContext["instanceFeed"]["subscribe"]>,
+): Promise<InstanceDelta> {
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error("timed out waiting for the next delta")), WAIT_TIMEOUT_MS);
