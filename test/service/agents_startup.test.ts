@@ -102,7 +102,7 @@ async function startReady(env: HermeticEnv) {
 }
 
 describe("the agents component at startup", () => {
-    it("becomes ready with the roles bob, gp and desk when there is no configuration file", async () => {
+    it("becomes ready with the roles bob, gp, desk and triage when there is no configuration file", async () => {
         const env = await hermetic();
 
         const agents = await startReady(env);
@@ -112,15 +112,15 @@ describe("the agents component at startup", () => {
                 .runtime()
                 .catalog.list()
                 .map((role) => role.name),
-            ["bob", "gp", "desk"],
+            ["bob", "gp", "desk", "triage"],
         );
     });
 
-    it("creates the default workspaces of bob, gp and desk with mode 0700", async () => {
+    it("creates the default workspaces of bob, gp, desk and triage with mode 0700", async () => {
         const env = await hermetic();
         await startReady(env);
 
-        for (const role of ["bob", "gp", "desk"]) {
+        for (const role of ["bob", "gp", "desk", "triage"]) {
             const info = await stat(join(env.dataDir, "workspaces", role));
             assert.equal(info.mode & 0o777, OWNER_ONLY_MODE, role);
         }

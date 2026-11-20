@@ -33,6 +33,7 @@ type Role = {
     name: string;
     instructions?: string;
     instructionsVersion?: string;
+    tools?: string[];
     instructionsMissing?: boolean;
     changed: boolean;
     shipped: boolean;
@@ -150,12 +151,12 @@ const tokenOf = async (roles: () => Promise<{ name: string; instructionsVersion?
 const reviewer = { name: "reviewer", instructions: "Review the work.", tools: ["read"], skills: [] };
 
 describe("the role operations", () => {
-    it("lists the shipped roles bob, gp and desk through roles.list", async () => {
+    it("lists the shipped roles bob, gp, desk and triage through roles.list", async () => {
         const { roles } = await start(await hermetic());
 
         assert.deepEqual(
             (await roles()).map((role) => role.name),
-            ["bob", "gp", "desk"],
+            ["bob", "gp", "desk", "triage"],
         );
     });
 
@@ -347,6 +348,28 @@ describe("the role operations", () => {
         assert.equal(gp?.instructions, shippedInstructions);
         assert.equal(gp?.changed, false);
         assert.doesNotMatch(await fileText(env), /\[roles\.gp\]/);
+    });
+
+    it("applies a changed tool set of triage and restores the shipped one", async () => {
+        const env = await hermetic();
+        const { invoke, roles } = await start(env);
+        const triage = async () => (await roles()).find((role) => role.name === "triage");
+        const shippedTools = (await triage())?.tools;
+        assert.deepEqual(shippedTools, ["read", "mail"]);
+
+        await invoke("roles.change", {
+            name: "triage",
+            tools: ["read", "write"],
+            instructionsVersion: await tokenOf(roles, "triage"),
+        });
+
+        assert.deepEqual((await triage())?.tools, ["read", "write"]);
+        assert.equal((await triage())?.changed, true);
+
+        await invoke("roles.restore", { name: "triage" });
+
+        assert.deepEqual((await triage())?.tools, shippedTools);
+        assert.equal((await triage())?.changed, false);
     });
 
     it("refuses with conflict naming the file and applies nothing when the file changed on disk", async () => {
