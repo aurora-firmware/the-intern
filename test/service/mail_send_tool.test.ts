@@ -437,6 +437,37 @@ describe("the send tool", { timeout: TEST_TIMEOUT_MS }, () => {
         assert.deepEqual(started.workServer.mailbox(WORK.address, "Sent"), []);
     });
 
+    it("refuses a send on an account that isn't ready, writes no row and still returns a first outcome (REQ-011)", async () => {
+        const started = await start();
+        const { conversationId } = await started.seat("sorter");
+        started.proxy.setUp(false);
+        const [waiting] = await started.run(conversationId, [sendCall({}, "call-1")]);
+        const rowsBefore = await started.ctx.jobStore.readMail((tx) => tx.rowsInState("owed"));
+
+        const [refused, repeated] = await started.run(conversationId, [
+            sendCall({ subject: "Second" }, "call-2"),
+            sendCall({}, "call-1"),
+        ]);
+
+        assert.equal(refused?.isError, true);
+        assert.match(refused?.text ?? "", /not ready/);
+        assert.equal(repeated?.text, waiting?.text);
+        assert.deepEqual(await started.ctx.jobStore.readMail((tx) => tx.rowsInState("owed")), rowsBefore);
+    });
+
+    it("refuses a file that can't be read, naming it and saying nothing was sent (REQ-011)", async () => {
+        const started = await start();
+        const { conversationId } = await started.seat("sorter");
+
+        const [refused] = await started.run(conversationId, [sendCall({ attachments: ["missing.txt"] }, "call-1")]);
+
+        assert.equal(refused?.isError, true);
+        assert.match(refused?.text ?? "", /missing\.txt/);
+        assert.match(refused?.text ?? "", /nothing was sent/);
+        assert.doesNotMatch(refused?.text ?? "", /draft/);
+        assert.deepEqual(started.workServer.received(), []);
+    });
+
     it("is refused, writing no row, while mail is not started yet", async () => {
         const tool = sendTool({
             connections: () => assert.fail("no connection is opened"),
