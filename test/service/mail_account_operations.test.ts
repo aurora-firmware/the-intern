@@ -162,6 +162,22 @@ describe("the mail account operations", () => {
         assert.ok(error.message.includes(configFile(rig)), error.message);
         assert.equal(await readConfig(rig), edited);
     });
+
+    it("keeps the stored secret when a change that carries a new one is refused (AC-4)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await start();
+        const daemon = rig.process();
+        await daemon.invoke("mail.accounts.create", ownedInput(rig, "work"));
+        await appendFile(configFile(rig), "\n# a hand edit\n");
+
+        const error = await refusal(daemon.invoke("mail.accounts.change", { name: "work", password: "new-pw" }));
+
+        assert.equal(error.code, "conflict");
+        const stored = await readFile(secretFile(rig, "work"), "utf8");
+        assert.match(stored, new RegExp(PASSWORD));
+        assert.doesNotMatch(stored, /new-pw/);
+    });
 });
 
 describe("the mail notice settings operations", () => {
