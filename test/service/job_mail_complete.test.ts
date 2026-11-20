@@ -173,6 +173,16 @@ describe("jobs.complete with a mail text", () => {
         assert.equal((await started.ctx.jobStore.listHistory(job.id, {})).entries.length, before);
     });
 
+    it("passes an empty mail text to the policy and does not refuse the call", async () => {
+        const started = await start();
+        const job = await started.markedEmailJob("saved-5");
+
+        await started.invoke("jobs.complete", { job: job.id, justification: "done", mailText: "" });
+
+        assert.deepEqual(started.asked, [{ action: "complete", mailText: "" }]);
+        assert.equal((await started.ctx.jobStore.getJob(job.id)).status, "done");
+    });
+
     it("completes without a mail text and writes the not_sent history entry", async () => {
         const started = await start();
         const job = await started.markedEmailJob("saved-3");
