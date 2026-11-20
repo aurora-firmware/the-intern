@@ -68,6 +68,9 @@ async function startWatching(existing: (server: FakeMailServer) => void = () => 
     return rig;
 }
 
+const jobOf = async (rig: MailRig, job: Job | undefined) =>
+    (await rig.process().invoke("jobs.get", { job: job?.id })) as Job;
+
 async function untilJobs(rig: MailRig, count: number): Promise<Job[]> {
     return until(`${count} jobs`, async () => {
         const jobs = await jobsOf(rig);
@@ -157,5 +160,27 @@ describe("intake", { timeout: TEST_TIMEOUT_MS }, () => {
         assert.deepEqual(attachments, [pdf, note]);
         const [stored] = rig.server.mailbox(ADDRESS, "INBOX");
         assert.deepEqual([stored?.flags, stored?.raw], [[], sent.raw]);
+    });
+
+    it("makes a Done job's reply a related job, and an unthreaded quote of it a job related to nothing (AC-4)", async () => {
+        const rig = await startWatching();
+        rig.deliver(ADDRESS, rawMail("first", "please file this"));
+        const [first] = await untilJobs(rig, 1);
+        await until("the first job to settle", async () =>
+            (await jobOf(rig, first)).status === "blocked" ? true : undefined,
+        );
+        const finished = await rig.process().invoke("jobs.cancel", { job: first?.id, justification: "not needed" });
+        assert.equal((finished as Job).status, "done");
+
+        rig.deliver(ADDRESS, rawMail("Re: first", "one more thing", ["In-Reply-To: <first@example.test>"]));
+        const [, reply] = await untilJobs(rig, 2);
+        rig.deliver(ADDRESS, rawMail("Re: Re: first", "> one more thing\r\n\r\nand again"));
+        const [, , quote] = await untilJobs(rig, 3);
+
+        assert.deepEqual(reply?.related, [first?.number]);
+        assert.deepEqual(quote?.related, []);
+        const after = await jobOf(rig, first);
+        assert.equal(after.status, "done");
+        assert.deepEqual(after.related, [reply?.number]);
     });
 });
