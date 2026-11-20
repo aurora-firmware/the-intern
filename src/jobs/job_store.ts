@@ -4,6 +4,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { HostDatabase, HostSqlExecutor, HostSqlValue } from "../host/harness_host.ts";
+import { bindMailStore, type MailStoreFunctions } from "../mail/mail_store.ts";
 import {
     type ActionInput,
     checkAction,
@@ -135,6 +136,24 @@ export type JobListFilter = {
 
 export type WorklogEntry = { at: string; author: JobAuthor; text: string };
 export type HistoryEntry = { at: string; author: JobAuthor; field: string; old: unknown; new: unknown };
+
+/** What a `mail` history entry records about one email (S-004 Interfaces, history entry). */
+export type MailHistoryEntry = {
+    mail: "received" | "sent" | "held_back" | "may_not_have_gone_out" | "refused" | "account_removed" | "not_sent";
+    from: string;
+    to: string[];
+    subject: string;
+    /** `held_back`: the recipients the allowlist didn't allow. */
+    notAllowed?: string[];
+    /** `refused`: the server's message. */
+    serverAnswer?: string;
+};
+
+/** The mail store's functions in one job store transaction, with the writer of `mail` history entries. */
+export type MailTx = MailStoreFunctions & {
+    addMailHistory(jobId: string, entry: MailHistoryEntry, author: JobAuthor): Promise<void>;
+};
+
 export type EntryPage = { limit?: number; cursor?: string };
 
 export type JobChange =
@@ -169,6 +188,10 @@ export type JobStore = {
     latestScheduledRun(entry: string): Promise<Job | undefined>;
     /** Appends one `repair` history entry by the daemon. Reports no change. */
     recordRepair(ref: string, repair: { rule: 1 | 2 | 3 | 4; did: string }): Promise<void>;
+    /** Runs `work` in one job store transaction with the mail store. A throw rolls back everything it wrote. */
+    writeMail<T>(work: (tx: MailTx) => Promise<T>): Promise<T>;
+    /** Runs `work` for reads of the mail store, outside a write. */
+    readMail<T>(work: (tx: MailTx) => Promise<T>): Promise<T>;
     /** Reports each change after its transaction commits. Returns the function that removes the listener. */
     onCommit(listener: (change: JobChange) => void): () => void;
 };
@@ -615,6 +638,29 @@ async function addHistory(tx: HostSqlExecutor, jobId: string, entry: HistoryEntr
     );
 }
 
+const MAIL_TEXTS: Partial<Record<MailHistoryEntry["mail"], string>> = {
+    refused: "refused by the server",
+    account_removed: "not sent: account removed",
+    not_sent: "result reply not sent: no mail text",
+};
+
+async function addMailHistory(
+    tx: HostSqlExecutor,
+    jobId: string,
+    entry: MailHistoryEntry,
+    author: JobAuthor,
+): Promise<void> {
+    const text = MAIL_TEXTS[entry.mail];
+    const detail = text === undefined ? entry : { ...entry, text };
+    await addHistory(tx, jobId, { at: new Date().toISOString(), author, field: "mail", old: null, new: detail });
+}
+
+function mailTxOf(tx: HostSqlExecutor): MailTx {
+    const addMail = (jobId: string, entry: MailHistoryEntry, author: JobAuthor) =>
+        addMailHistory(tx, jobId, entry, author);
+    return { ...bindMailStore(tx, addMail), addMailHistory: addMail };
+}
+
 function refuse(check: { code: "conflict" | "invalid_input"; field?: string; message: string }): never {
     throw new JobRefusedError(check.code, check.message, check.field);
 }
@@ -936,6 +982,8 @@ export function createJobStore(db: HostDatabase, options: JobStoreOptions = {}):
             const id = await newestJobId(db, entry);
             return id === undefined ? undefined : toJob(db, await findRow(db, id));
         },
+        writeMail: (work) => transact((tx) => work(mailTxOf(tx))),
+        readMail: (work) => work(mailTxOf(db)),
         relate: (a, b, author) => write((tx) => setLinkByRef(tx, a, b, true, author)),
         unrelate: (a, b, author) => write((tx) => setLinkByRef(tx, a, b, false, author)),
         applyAction: (ref, action, input, author) => write((tx) => applyActionIn(tx, ref, action, input, author)),
