@@ -36,6 +36,8 @@ import { scaled } from "../support/time_scale.ts";
 const TEST_TIMEOUT_MS = scaled(60_000);
 const WAIT_MS = scaled(20_000);
 const POLL_MS = 10;
+/** How long `openImap`'s client lets its socket sit quiet (its `socketTimeout`). */
+const IMAP_SOCKET_TIMEOUT_MS = 30_000;
 const SCRIPT_INPUT = "script";
 const WORK = { name: "work", address: "bob@example.test" };
 const WATCH = { name: "watch", address: "inbox@example.test" };
@@ -609,6 +611,29 @@ describe("the mail tools' connections", () => {
         await Promise.all([call(), call(), call()]);
 
         assert.equal(state.mostRunning, 1);
+        await tools.closeAll();
+    });
+
+    it("keeps a connection that only listed folders open past the client's quiet-socket timeout", {
+        timeout: scaled(60_000),
+    }, async () => {
+        const server = await mailServer(WORK.address);
+        const tools = createToolConnections({
+            account: () =>
+                ({ ...account, imapHost: "127.0.0.1", imapPort: server.imapPort, checkIntervalSeconds: 60 }) as never,
+            status: () => "ready",
+            credential: async () => ({ user: WORK.address, password: PASSWORD }),
+        });
+        await tools.use("work", (imap) => imap.listFolders());
+
+        // Not a wait for a state: the claim is that nothing ends the connection while it is quiet. The client's
+        // socket timer (30 s, `imap_client.ts`) was armed by the call's last reply, before this timer, and Node
+        // fires timers in the order they fall due, so the socket timeout has run by the time this one ends.
+        await sleep(IMAP_SOCKET_TIMEOUT_MS + 5_000);
+        const folders = await tools.use("work", (imap) => imap.listFolders());
+
+        assert.equal(folders.length, 4);
+        assert.equal(server.openConnections(), 1);
         await tools.closeAll();
     });
 });
