@@ -1,16 +1,29 @@
 /**
- * The mail policy the mail component registers with the jobs component (S-009 REQ-014, REQ-015; S-004 REQ-014): the
- * mail a block or a completion owes, and the email details `jobs.get` returns. It reads through the job store's mail
- * transaction and never writes; the job write inserts the owed row it returns.
+ * The outbox (S-009 REQ-012 to REQ-015, REQ-022; ADR-001 decision 4). The mail policy the mail component registers
+ * with the jobs component decides the mail a block or a completion owes, and the email details `jobs.get` returns: it
+ * reads through the job store's mail transaction and never writes; the job write inserts the owed row it returns. The
+ * senders, one for each account, send the `owed` rows once, oldest first.
  */
 import { basename } from "node:path";
+import type { Credential } from "../accounts/providers.ts";
+import type { Logger } from "../daemon/logger.ts";
 import type { JobAuthor } from "../jobs/job_model.ts";
-import type { Job, JobStore } from "../jobs/job_store.ts";
+import type { Job, JobStore, MailTx } from "../jobs/job_store.ts";
 import type { JobEmail, MailAsk, MailDecision, MailPolicy, OwedMail } from "../jobs/mail_policy.ts";
-import { isAllowed, type MailAccount, type MailNotice, questionSubject } from "./mail_model.ts";
-import type { MailMessageRow, OutboxRow, OutboxState } from "./mail_store.ts";
-import { parseMessage } from "./mime.ts";
+import {
+    heldBackNotice,
+    isAllowed,
+    type MailAccount,
+    type MailNotice,
+    type MailNoticeText,
+    notAllowedRecipients,
+    questionSubject,
+    refusedNotice,
+} from "./mail_model.ts";
+import type { MailMessageRow, NewOutboxRow, OutboxRow, OutboxState } from "./mail_store.ts";
+import { composeMessage, parseMessage } from "./mime.ts";
 import { savedCopyPaths } from "./saved_copy.ts";
+import { type SmtpOutcome, sendRaw } from "./smtp_client.ts";
 
 export type MailPolicyDeps = {
     jobStore: JobStore;
@@ -18,6 +31,8 @@ export type MailPolicyDeps = {
     accounts: () => readonly MailAccount[];
     notice: () => MailNotice | undefined;
     mailDir: string;
+    /** Called after the commit of a job write that owes mail, so the senders take the row. */
+    committed?: () => void;
 };
 
 type Destination = { account: string; recipient: string; replyTo: "job" | "notice" };
@@ -199,5 +214,258 @@ export function createMailPolicy(deps: MailPolicyDeps): MailPolicy {
         };
     }
 
-    return { forBlock, forComplete, emailDetails, committed: () => {} };
+    return { forBlock, forComplete, emailDetails, committed: () => deps.committed?.() };
+}
+
+export type OutboxPoint = "mail-sending" | "mail-sent";
+
+export type OutboxDeps = {
+    jobStore: JobStore;
+    /** The configured accounts, read at each send so a change to the file is seen. */
+    accounts: () => readonly MailAccount[];
+    notice: () => MailNotice | undefined;
+    credential(account: MailAccount): Promise<Credential>;
+    /** Whether the account is `ready`: an account in any other status sends nothing. */
+    isReady(name: string): boolean;
+    /** The server failed before taking a message: the account turns `failing` and is `ready` again by its retry. */
+    fail(name: string, message: string): void;
+    logger: Logger;
+    afterWrite?: (point: OutboxPoint) => Promise<void>;
+};
+
+export type Outbox = {
+    /** Wakes every started sender, after a commit that adds an owed row. */
+    wake(): void;
+    /** Starts the account's sender, which at once takes the account's owed rows. The account is `ready`. */
+    startAccount(account: MailAccount): void;
+    /** Ends the account's sender after the send in flight. */
+    stopAccount(name: string): void;
+    /** Ends every sender and waits for the sends in flight, within the stop bound. */
+    stopAll(): Promise<void>;
+};
+
+const STOP_BOUND_MS = 10_000;
+const DAEMON_AUTHOR: JobAuthor = { kind: "daemon" };
+
+type Sender = { name: string; isStopped: boolean; isQueued: boolean };
+
+const sameAddress = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
+
+const REFERENCE_PATTERN = /<[^<>\s]+>/g;
+
+const referencesOf = (references: string | null): string[] | undefined =>
+    references?.match(REFERENCE_PATTERN) ?? undefined;
+
+export function createOutbox(deps: OutboxDeps): Outbox {
+    const { jobStore, logger } = deps;
+    const senders = new Map<string, Sender>();
+    // The newest pass of each account by name, so a sender started again waits for the one before it.
+    const tails = new Map<string, Promise<void>>();
+
+    const accountNamed = (name: string) => deps.accounts().find((account) => account.name === name);
+
+    const wentToNotice = (row: OutboxRow): boolean => {
+        const notice = deps.notice();
+        return notice !== undefined && row.recipients.some((to) => sameAddress(to, notice.to));
+    };
+
+    // The row of a notice to the notice address, owed in the transaction that writes what it tells; none without one.
+    async function oweNotice(tx: MailTx, row: OutboxRow, text: MailNoticeText, key: string) {
+        const notice = deps.notice();
+        const from = notice === undefined ? undefined : accountNamed(notice.from);
+        if (notice === undefined || from === undefined) return;
+        const owed: NewOutboxRow = {
+            key,
+            job: row.job,
+            account: from.name,
+            kind: "notice",
+            recipients: [notice.to],
+            subject: text.subject,
+            mailText: text.text,
+            inReplyTo: null,
+            references: null,
+        };
+        await tx.insertOutbox(owed);
+    }
+
+    async function holdBack(row: OutboxRow, account: MailAccount, notAllowed: string[]): Promise<void> {
+        const subject = row.subject ?? "";
+        await jobStore.writeMail(async (tx) => {
+            await tx.setOutboxState(row.id, "held_back");
+            const entry = {
+                mail: "held_back" as const,
+                from: account.address,
+                to: row.recipients,
+                subject,
+                notAllowed,
+            };
+            await tx.addMailHistory(row.job, entry, DAEMON_AUTHOR);
+            await oweNotice(
+                tx,
+                row,
+                heldBackNotice({ account: account.name, recipients: notAllowed, subject }),
+                `notice:${row.id}`,
+            );
+        });
+    }
+
+    async function markSending(row: OutboxRow, account: MailAccount): Promise<{ raw: Buffer }> {
+        const composed = await composeMessage({
+            from: account.address,
+            to: row.recipients,
+            subject: row.subject ?? "",
+            text: row.mailText ?? "",
+            ...(row.inReplyTo !== null && { inReplyTo: row.inReplyTo }),
+            ...(referencesOf(row.references) !== undefined && { references: referencesOf(row.references) as string[] }),
+        });
+        await jobStore.writeMail(async (tx) => {
+            await tx.setOutboxState(row.id, "sending", { messageId: composed.messageId, raw: composed.raw });
+            await tx.addThread({ messageId: composed.messageId, job: row.job, direction: "out" });
+        });
+        await deps.afterWrite?.("mail-sending");
+        return { raw: composed.raw };
+    }
+
+    // Writes the refusals of a server: the `refused` entry with the answers and, unless the row went to the notice address, one notice.
+    async function writeRefusal(
+        tx: MailTx,
+        row: OutboxRow,
+        account: MailAccount,
+        refused: { addresses: string[]; answer: string },
+    ) {
+        const subject = row.subject ?? "";
+        const entry = {
+            mail: "refused" as const,
+            from: account.address,
+            to: refused.addresses,
+            subject,
+            serverAnswer: refused.answer,
+        };
+        await tx.addMailHistory(row.job, entry, DAEMON_AUTHOR);
+        if (wentToNotice(row)) return;
+        const text = refusedNotice({
+            account: account.name,
+            recipients: refused.addresses,
+            subject,
+            serverAnswer: refused.answer,
+        });
+        await oweNotice(tx, row, text, `refused:${row.id}`);
+    }
+
+    async function record(row: OutboxRow, account: MailAccount, outcome: SmtpOutcome): Promise<void> {
+        const subject = row.subject ?? "";
+        if (outcome.kind === "sent") {
+            await jobStore.writeMail(async (tx) => {
+                await tx.setOutboxState(row.id, "sent");
+                const entry = { mail: "sent" as const, from: account.address, to: outcome.accepted, subject };
+                await tx.addMailHistory(row.job, entry, DAEMON_AUTHOR);
+                if (outcome.refused.length === 0) return;
+                const addresses = outcome.refused.map((refusal) => refusal.address);
+                const answer = outcome.refused.map((refusal) => refusal.answer).join("; ");
+                await writeRefusal(tx, row, account, { addresses, answer });
+            });
+            await deps.afterWrite?.("mail-sent");
+        } else if (outcome.kind === "unknown") {
+            await jobStore.writeMail(async (tx) => {
+                await tx.setOutboxState(row.id, "may_not_have_gone_out");
+                const entry = {
+                    mail: "may_not_have_gone_out" as const,
+                    from: account.address,
+                    to: row.recipients,
+                    subject,
+                };
+                await tx.addMailHistory(row.job, entry, DAEMON_AUTHOR);
+            });
+        } else if (outcome.kind === "refused") {
+            await jobStore.writeMail(async (tx) => {
+                await tx.setOutboxState(row.id, "refused", { serverAnswer: outcome.answer });
+                await writeRefusal(tx, row, account, { addresses: row.recipients, answer: outcome.answer });
+            });
+        }
+    }
+
+    // Sends one row. Returns false when the pass must stop: the server failed before taking the message.
+    async function send(row: OutboxRow, account: MailAccount): Promise<boolean> {
+        const notAllowed = notAllowedRecipients(account, row.recipients, deps.notice()?.to);
+        if (notAllowed.length > 0) {
+            await holdBack(row, account, notAllowed);
+            return true;
+        }
+        const credential = await deps.credential(account);
+        const { raw } = await markSending(row, account);
+        const outcome = await sendRaw({
+            host: account.smtpHost as string,
+            port: account.smtpPort as number,
+            security: account.smtpSecurity,
+            credential,
+            envelope: { from: account.address, to: row.recipients },
+            raw,
+        });
+        if (outcome.kind === "not_taken") {
+            await jobStore.writeMail((tx) => tx.setOutboxState(row.id, "owed"));
+            deps.fail(account.name, outcome.message);
+            return false;
+        }
+        await record(row, account, outcome);
+        return true;
+    }
+
+    async function pass(sender: Sender): Promise<void> {
+        while (!sender.isStopped && deps.isReady(sender.name)) {
+            const account = accountNamed(sender.name);
+            if (account?.smtpHost === undefined) return;
+            const [row] = await jobStore.readMail((tx) => tx.owedRows(sender.name));
+            if (row === undefined) return;
+            if (!(await send(row, account))) return;
+            // The notice a row owed may belong to another account's sender.
+            wake();
+        }
+    }
+
+    function enqueue(sender: Sender): void {
+        if (sender.isQueued) return;
+        sender.isQueued = true;
+        const next = (tails.get(sender.name) ?? Promise.resolve()).then(async () => {
+            sender.isQueued = false;
+            await pass(sender);
+        });
+        tails.set(
+            sender.name,
+            next.catch((error: unknown) => {
+                const message = error instanceof Error ? error.message : "the send failed";
+                logger.error("mail sender failed", { account: sender.name, cause: message });
+                deps.fail(sender.name, message);
+            }),
+        );
+    }
+
+    function wake(): void {
+        for (const sender of senders.values()) enqueue(sender);
+    }
+
+    function stopAccount(name: string): void {
+        const sender = senders.get(name);
+        if (sender === undefined) return;
+        sender.isStopped = true;
+        senders.delete(name);
+    }
+
+    return {
+        wake,
+        startAccount(account) {
+            const sender = senders.get(account.name) ?? { name: account.name, isStopped: false, isQueued: false };
+            senders.set(account.name, sender);
+            enqueue(sender);
+        },
+        stopAccount,
+        async stopAll() {
+            for (const name of [...senders.keys()]) stopAccount(name);
+            let timer: NodeJS.Timeout | undefined;
+            const bound = new Promise<void>((resolve) => {
+                timer = setTimeout(resolve, STOP_BOUND_MS);
+            });
+            await Promise.race([Promise.all(tails.values()), bound]);
+            clearTimeout(timer);
+        },
+    };
 }

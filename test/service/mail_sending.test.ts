@@ -4,13 +4,13 @@
  * accounts and the notice settings are given directly.
  */
 import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
+import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { type FauxProviderRegistration, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
@@ -235,7 +235,9 @@ async function start(): Promise<World> {
             await ctx.jobStore.applyAction(job.id, "block", { blockedReason: "needs input", owedMail }, lead);
             policy.committed();
         },
-        async complete(job, mailText) {
+        async complete(started, mailText) {
+            await ctx.jobStore.updateFields(started.id, { definitionOfDone: "Answered" }, teamMember);
+            const job = await ctx.jobStore.getJob(started.id);
             const decision = await policy.forComplete({ job, author: lead, mailText });
             const owedMail = decision.kind === "owe" ? decision.row : undefined;
             await ctx.jobStore.applyAction(
@@ -317,13 +319,13 @@ describe("sending owed mail", () => {
         timeout: TEST_TIMEOUT_MS,
     }, async () => {
         const world = await start();
-        world.outbox.startAccount(world.accounts[0] as MailAccount);
-        world.outbox.startAccount(world.accounts[1] as MailAccount);
         const job = await world.emailJob();
+        await world.block(job, "Which schema?");
         const owner = world.accounts[0] as MailAccount;
         owner.allow = ["@other.test"];
 
-        await world.block(job, "Which schema?");
+        world.outbox.startAccount(owner);
+        world.outbox.startAccount(world.accounts[1] as MailAccount);
 
         await untilReceived(world, 1);
         const [mail] = received(world);

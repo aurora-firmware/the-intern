@@ -26,7 +26,7 @@ import { createIntake } from "./intake.ts";
 import { accountKey, checkNotice, type MailAccount, MailRuleError } from "./mail_model.ts";
 import { mailAccountSection, mailSection } from "./mail_section.ts";
 import { createMailToolsExtension } from "./mail_tools_extension.ts";
-import { createMailPolicy } from "./outbox.ts";
+import { createMailPolicy, createOutbox, type Outbox } from "./outbox.ts";
 import { checkSmtpLogin } from "./smtp_client.ts";
 import { createToolConnections } from "./tool_connection.ts";
 
@@ -135,6 +135,8 @@ export async function createMailComponent(options: MailComponentOptions): Promis
     const checks = new Map<string, AbortController>();
     let context: ServiceContext | undefined;
     let removeMailPolicy: (() => void) | undefined;
+    // The senders run only while the component is started: they write through the job store of the context.
+    let outbox: Outbox | undefined;
 
     const toolConnections = createToolConnections({
         account: (name) => context?.config.current(mailAccountSection).find((entry) => entry.name === name),
@@ -200,7 +202,9 @@ export async function createMailComponent(options: MailComponentOptions): Promis
             if (controller.signal.aborted) return;
             checks.delete(account.name);
             accountStatus.report(MAIL_OWNER, account.name, outcome);
-            if (outcome.kind === "ready" && account.kind === "owned") intake.start(account);
+            if (outcome.kind !== "ready" || account.kind !== "owned") return;
+            intake.start(account);
+            outbox?.startAccount(account);
         });
     }
 
@@ -217,6 +221,7 @@ export async function createMailComponent(options: MailComponentOptions): Promis
     const stopAccount = (name: string): void => {
         endCheck(name);
         void intake.stop(name);
+        outbox?.stopAccount(name);
         void toolConnections.close(name);
         accountStatus.stop(MAIL_OWNER, name);
     };
@@ -245,6 +250,7 @@ export async function createMailComponent(options: MailComponentOptions): Promis
                     accounts: () => ctx.config.current(mailAccountSection),
                     notice: () => ctx.config.current(mailSection),
                     mailDir: ctx.dirs.mailDir,
+                    committed: () => outbox?.wake(),
                 }),
             );
             agents.runtime().catalog.addReferenceSource({
@@ -281,6 +287,16 @@ export async function createMailComponent(options: MailComponentOptions): Promis
         },
         async start(ctx) {
             context = ctx;
+            outbox = createOutbox({
+                jobStore: ctx.jobStore,
+                accounts: () => ctx.config.current(mailAccountSection),
+                notice: () => ctx.config.current(mailSection),
+                credential: (account) => accounts.credentialFor(authOf(account), SCOPES[account.auth] ?? []),
+                isReady: (name) => accountStatus.get(MAIL_OWNER, name)?.status === "ready",
+                fail: (name, message) => accountStatus.report(MAIL_OWNER, name, { kind: "failing", message }),
+                logger,
+                ...(options.afterWrite && { afterWrite: options.afterWrite }),
+            });
             const configured = ctx.config.current(mailAccountSection);
             await accounts.removeUnknownAccounts(configured.map((account) => accountKey(account.name)));
             for (const account of configured) await startAccount(account);
@@ -288,6 +304,8 @@ export async function createMailComponent(options: MailComponentOptions): Promis
         async stop() {
             for (const name of [...checks.keys()]) endCheck(name);
             await intake.stopAll();
+            await outbox?.stopAll();
+            outbox = undefined;
             await toolConnections.closeAll();
             for (const account of accountStatus.list(MAIL_OWNER)) accountStatus.stop(MAIL_OWNER, account.name);
             removeMailPolicy?.();
