@@ -3,7 +3,9 @@
  * each new email of an owned inbox becomes a triage job or input to the open job of its thread, on the mail rig.
  */
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { afterEach, describe, it } from "node:test";
+import { composeMessage } from "../../src/mail/mime.ts";
 import type { FakeMailServer } from "../support/fake_mail_server.ts";
 import { type MailRig, startMailRig } from "../support/mail_rig.ts";
 import { scaled } from "../support/time_scale.ts";
@@ -66,6 +68,13 @@ async function startWatching(existing: (server: FakeMailServer) => void = () => 
     return rig;
 }
 
+async function untilJobs(rig: MailRig, count: number): Promise<Job[]> {
+    return until(`${count} jobs`, async () => {
+        const jobs = await jobsOf(rig);
+        return jobs.length >= count ? jobs : undefined;
+    });
+}
+
 const rawMail = (subject: string, text: string, headers: string[] = []): string =>
     [
         `From: ${SENDER}`,
@@ -90,5 +99,63 @@ describe("intake", { timeout: TEST_TIMEOUT_MS }, () => {
         const jobs = await jobsOf(rig);
         assert.equal(jobs.length, 1);
         assert.match(jobs[0]?.request.text ?? "", /Subject: new one/);
+    });
+
+    it("makes one job for each of an ordinary email, an auto-reply, a failure report and a list message (AC-2)", async () => {
+        const rig = await startWatching();
+        const subjects = ["ordinary", "out of office", "delivery failure", "list message"];
+        const headers: Record<string, string[]> = {
+            "out of office": ["Auto-Submitted: auto-replied", "Precedence: auto_reply"],
+            "delivery failure": ["Content-Type: multipart/report; report-type=delivery-status; boundary=b"],
+            "list message": ["List-Id: <news.example.test>", "Precedence: bulk"],
+        };
+
+        for (const subject of subjects) rig.deliver(ADDRESS, rawMail(subject, "body", headers[subject]));
+
+        const jobs = await untilJobs(rig, subjects.length);
+        assert.equal(jobs.length, subjects.length);
+        for (const subject of subjects) {
+            assert.equal(jobs.filter((job) => job.request.text.includes(`Subject: ${subject}`)).length, 1, subject);
+        }
+        assert.deepEqual(rig.server.received(), []);
+    });
+
+    it("saves the message and its attachments and leaves the message in INBOX unflagged (AC-3)", async () => {
+        const rig = await startWatching();
+        const pdf = Buffer.from(Array.from({ length: 10_240 }, (_, index) => (index * 31 + 7) % 256));
+        const note = Buffer.from("remember the milk");
+        const sent = await composeMessage({
+            from: SENDER,
+            to: [ADDRESS],
+            subject: "with files",
+            text: "see attached",
+            attachments: [
+                { filename: "report.pdf", contentType: "application/pdf", content: pdf },
+                { filename: "note.txt", contentType: "text/plain", content: note },
+            ],
+        });
+
+        rig.deliver(ADDRESS, sent.raw);
+
+        const [job] = await untilJobs(rig, 1);
+        assert.deepEqual(job?.request.origin, {
+            kind: "request",
+            wayIn: "email",
+            observed: { account: "work", messageId: sent.messageId, sender: SENDER },
+        });
+        const view = (await rig.process().invoke("jobs.get", { job: job?.id })) as { leadConversation: string };
+        const lead = (await rig.process().invoke("conversations.get", { conversationId: view.leadConversation })) as {
+            seat: { role: string };
+        };
+        assert.equal(lead.seat.role, "triage");
+        const paths = [...(job?.request.text.matchAll(/^(?:Saved message: |- )(\/.+)$/gm) ?? [])].map(
+            (match) => match[1],
+        );
+        assert.equal(paths.length, 3);
+        const [message, ...attachments] = await Promise.all(paths.map((path) => readFile(path as string)));
+        assert.deepEqual(message, sent.raw);
+        assert.deepEqual(attachments, [pdf, note]);
+        const [stored] = rig.server.mailbox(ADDRESS, "INBOX");
+        assert.deepEqual([stored?.flags, stored?.raw], [[], sent.raw]);
     });
 });
