@@ -122,32 +122,48 @@ describe("intake's timeliness and starting points", () => {
     it("creates no job and gives no input for a reply arriving in a monitored account (AC-2)", {
         timeout: TEST_TIMEOUT_MS,
     }, async () => {
-        const rig = await startRig([ownedAccount("intern", "intern@example.test")]);
-        await rig.waitForStatus("intern", "ready");
-        await watching(rig);
+        const rig = await startRig([]);
         const monitored = await startServer();
+        const owned = await startServer();
         await createAccount(rig, monitored, "monitored", "watch");
         await rig.waitForStatus("watch", "ready");
+        // The owned account starts after the monitored one, so a monitored intake, were there one, has recorded its
+        // starting point by the time the owned one watches; the owned inbox's job then comes after the reply.
+        await createAccount(rig, owned, "owned");
+        await rig.waitForStatus("work", "ready");
+        await watching(rig);
         monitored.deliver(ADDRESS, withId("question"));
         monitored.deliver(ADDRESS, withId("Re: question", ["In-Reply-To: <question@example.test>"]));
-        // The owned inbox is the event that comes after the reply: its job proves intake ran meanwhile.
-        rig.server.deliver("intern@example.test", withId("marker", [], "intern@example.test"));
-        await rig.waitForJob(forSubject("marker"));
+        owned.deliver(ADDRESS, withId("marker"));
+        const marker = await rig.waitForJob(forSubject("marker"));
+        await until("the marker job to block", async () => {
+            const job = (await rig.process().invoke("jobs.get", { job: marker.id })) as { status: string };
+            return job.status === "blocked" ? true : undefined;
+        });
         assert.deepEqual((await jobsOf(rig)).map(subjectOf), ["marker"]);
+        const status = (await rig.process().invoke("daemon.status", {})) as {
+            mailAccounts: { name: string; status: string; lastError?: unknown }[];
+        };
+        const watch = status.mailAccounts.find((account) => account.name === "watch");
+        assert.deepEqual([watch?.status, watch?.lastError], ["ready", undefined]);
         assert.deepEqual(monitored.received(), []);
     });
 
     it("leaves the mail present at the next connection alone after a new imap_host (AC-3)", {
         timeout: TEST_TIMEOUT_MS,
     }, async () => {
-        const rig = await startRig([{ ...ownedAccount("work", ADDRESS), isKnownToServer: false }]);
-        await rig.waitForStatus("work", "failing");
-        rig.server.addAccount({ address: ADDRESS, login: ADDRESS, password: PASSWORD });
-        rig.server.deliver(ADDRESS, withId("present"));
-        await rig.process().invoke("mail.accounts.change", { name: "work", imap_host: OTHER_IMAP_HOST });
+        // A server without IDLE, so the first connection takes nothing until the clock moves and `present` waits.
+        const polled = await startServer({ idle: false });
+        const rig = await startRig([]);
+        await createAccount(rig, polled, "owned");
         await rig.waitForStatus("work", "ready");
         await watching(rig);
-        rig.deliver(ADDRESS, withId("later"));
+        polled.deliver(ADDRESS, withId("present"));
+        await rig.process().invoke("mail.accounts.change", { name: "work", imap_host: OTHER_IMAP_HOST });
+        await rig.waitForStatus("work", "ready");
+        await watching(rig, 2);
+        polled.deliver(ADDRESS, withId("later"));
+        await rig.setClock(new Date(CLOCK_START + CHECK_INTERVAL_MS));
         await rig.waitForJob(forSubject("later"));
         assert.deepEqual((await jobsOf(rig)).map(subjectOf), ["later"]);
     });
