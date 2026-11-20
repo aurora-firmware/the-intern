@@ -3,18 +3,20 @@
  * trusts the fake servers' certificate authority and runs the mail component on a clock the test moves, so a test
  * drives the account checks and their retries without waiting for real time.
  */
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type DaemonProcess, startDaemon } from "./daemon_process.ts";
 import { type FakeMailServer, startFakeMailServer, TEST_CA_FILE } from "./fake_mail_server.ts";
-import { type FakeOAuthProvider, startFakeOAuthProvider } from "./fake_oauth_provider.ts";
+import { FAKE_OAUTH_CLIENT_SECRET, type FakeOAuthProvider, startFakeOAuthProvider } from "./fake_oauth_provider.ts";
 import { createHermeticEnv, type HermeticEnv } from "./hermetic_env.ts";
 import { scaled } from "./time_scale.ts";
 
 const WAIT_TIMEOUT_MS = scaled(20_000);
 const STOP_TIMEOUT_MS = scaled(20_000);
 const POLL_INTERVAL_MS = 10;
+const OWNER_ONLY_DIR_MODE = 0o700;
+const OWNER_ONLY_FILE_MODE = 0o600;
 const ACCESS_TOKEN_SECONDS = 3600;
 const LOOPBACK = "127.0.0.1";
 const DEFAULT_CLOCK_START = "2026-03-02T09:00:00.000Z";
@@ -22,8 +24,13 @@ const DEFAULT_CLOCK_START = "2026-03-02T09:00:00.000Z";
 export type MailRigAccount = {
     name: string;
     address: string;
-    /** The password the account's `password_command` prints, and the fake server accepts. */
-    password: string;
+    /** The password the account's `password_command` prints, and the fake server accepts. Not used with `microsoftApp`. */
+    password?: string;
+    /**
+     * Signs the account in with the Microsoft app flow against the fake provider: the rig stores the provider's client
+     * secret for it before the start, so each check asks the provider for a token.
+     */
+    microsoftApp?: { clientId: string; tenant: string };
     /** `false` leaves the address out of the fake server, so its logins fail (true by default). */
     isKnownToServer?: boolean;
 };
@@ -57,6 +64,19 @@ export type MailRig = {
     stop(): Promise<void>;
 };
 
+function authToml(account: MailRigAccount): string {
+    if (account.microsoftApp) {
+        const { clientId, tenant } = account.microsoftApp;
+        return `auth = "microsoft_app"
+client_id = ${JSON.stringify(clientId)}
+tenant = ${JSON.stringify(tenant)}
+`;
+    }
+    return `auth = "password_command"
+password_command = ${JSON.stringify(["printf", "%s", account.password ?? ""])}
+`;
+}
+
 function accountToml(account: MailRigAccount, server: FakeMailServer): string {
     const text = (value: string) => JSON.stringify(value);
     return `[[mail_account]]
@@ -69,9 +89,15 @@ imap_security = "none"
 smtp_host = "${LOOPBACK}"
 smtp_port = ${server.smtpPort}
 smtp_security = "none"
-auth = "password_command"
-password_command = ${JSON.stringify(["printf", "%s", account.password])}
-`;
+${authToml(account)}`;
+}
+
+async function writeClientSecret(env: HermeticEnv, name: string): Promise<void> {
+    const directory = join(env.stateDir, "secrets", "mail");
+    await mkdir(directory, { recursive: true, mode: OWNER_ONLY_DIR_MODE });
+    await writeFile(join(directory, `${name}.json`), JSON.stringify({ clientSecret: FAKE_OAUTH_CLIENT_SECRET }), {
+        mode: OWNER_ONLY_FILE_MODE,
+    });
 }
 
 async function until<T>(description: string, timeoutMs: number, attempt: () => Promise<T | undefined>): Promise<T> {
@@ -93,7 +119,10 @@ export async function startMailRig(options: MailRigOptions): Promise<MailRig> {
 
     for (const account of options.accounts) {
         if (account.isKnownToServer === false) continue;
-        server.addAccount({ address: account.address, login: account.address, password: account.password });
+        server.addAccount({ address: account.address, login: account.address, password: account.password ?? "" });
+    }
+    for (const account of options.accounts) {
+        if (account.microsoftApp) await writeClientSecret(env, account.name);
     }
     await writeFile(
         join(env.configDir, "config.toml"),
