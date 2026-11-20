@@ -197,7 +197,7 @@ describe("turn-end rule", () => {
 });
 
 describe("JOB_TOOL_NAMES", () => {
-    it("names the eight tools", () => {
+    it("names the nine tools", () => {
         assert.deepEqual(
             [...JOB_TOOL_NAMES],
             [
@@ -208,6 +208,7 @@ describe("JOB_TOOL_NAMES", () => {
                 "relate_jobs",
                 "block_job",
                 "complete_job",
+                "mark_request",
                 "read_schedule_runs",
             ],
         );
