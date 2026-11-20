@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import net from "node:net";
 import { afterEach, describe, it } from "node:test";
 import { checkSmtpLogin, type SmtpOptions, type SmtpOutcome, sendRaw } from "../../src/mail/smtp_client.ts";
 import { type FakeMailServer, startFakeMailServer } from "../support/fake_mail_server.ts";
@@ -146,6 +147,39 @@ describe("smtp client", () => {
             assert.match(outcome.refused[0]?.answer ?? "", /^550 .*no such user cy/);
             assert.deepEqual(server.received()[0]?.envelope.to, ["bo@example.test"]);
         });
+    });
+
+    describe("a connection lost before the data", () => {
+        /** A bare SMTP server that answers up to MAIL FROM, then destroys the socket when `dropOn` arrives. */
+        async function serveAndDropOn(dropOn: "RCPT" | "DATA"): Promise<number> {
+            const server = net.createServer((socket) => {
+                socket.on("error", () => undefined);
+                socket.write("220 bare ready\r\n");
+                socket.on("data", (chunk) => {
+                    for (const line of chunk.toString().split("\r\n")) {
+                        if (line.startsWith("EHLO")) socket.write("250-bare\r\n250 AUTH PLAIN\r\n");
+                        else if (line.startsWith("AUTH")) socket.write("235 ok\r\n");
+                        else if (line.startsWith("MAIL")) socket.write("250 ok\r\n");
+                        else if (line.startsWith("RCPT") && dropOn === "DATA") socket.write("250 ok\r\n");
+                        else if (line.startsWith(dropOn)) socket.destroy();
+                    }
+                });
+            });
+            await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+            cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+            return (server.address() as net.AddressInfo).port;
+        }
+
+        for (const dropOn of ["RCPT", "DATA"] as const) {
+            it(`reports not_taken when the connection is lost at ${dropOn}`, async () => {
+                const port = await serveAndDropOn(dropOn);
+                const server = await serve();
+
+                const outcome = await send(server, { port });
+
+                assert.equal(outcome.kind, "not_taken");
+            });
+        }
     });
 
     describe("a connection lost after the data", () => {
