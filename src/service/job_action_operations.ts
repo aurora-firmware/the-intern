@@ -26,6 +26,7 @@ export const RESUMED_NOTE = "A team member resumed the job.";
 
 type ResumeInput = { job: string; text?: string };
 type FinishInput = { job: string; justification: string };
+type CompleteInput = FinishInput & { mailText?: string };
 
 // The steer's actor is the author, who is a team member or an agent: authorOf refuses a job source.
 function actorOfAuthor(author: JobAuthor) {
@@ -44,6 +45,13 @@ function parseResume(raw: unknown): ResumeInput {
 function parseFinish(raw: unknown): FinishInput {
     const record = asRecord(raw);
     return { job: requireString(record, "job"), justification: requireString(record, "justification") };
+}
+
+function parseComplete(raw: unknown): CompleteInput {
+    const input: CompleteInput = parseFinish(raw);
+    const record = asRecord(raw);
+    if (record.mailText !== undefined) input.mailText = requireString(record, "mailText");
+    return input;
 }
 
 // A cancel or complete that lands after the resume read the job Blocked closes the lead, and the steer finds it so.
@@ -85,22 +93,29 @@ export function jobActionOperations(options: JobsComponentOptions) {
             return refusing(resumeJob({ ctx, options }, job.id, author));
         },
     });
-    const finish = (name: "jobs.complete" | "jobs.cancel", act: typeof completeJob) =>
-        defineOperation<ServiceContext, FinishInput, Job>({
-            name,
-            kind: "control",
-            parse: parseFinish,
-            async run(ctx, input, caller) {
-                await refuseFrontDesk(ctx.host, input.job);
-                const author = await authorOf(caller, ctx.host);
-                return refusing(act({ ctx, options }, input.job, input.justification, author));
-            },
-        });
+    const complete = defineOperation<ServiceContext, CompleteInput, Job>({
+        name: "jobs.complete",
+        kind: "control",
+        parse: parseComplete,
+        async run(ctx, input, caller) {
+            await refuseFrontDesk(ctx.host, input.job);
+            const author = await authorOf(caller, ctx.host);
+            return refusing(
+                completeJob({ ctx, options }, input.job, input.justification, author, undefined, input.mailText),
+            );
+        },
+    });
+    const cancel = defineOperation<ServiceContext, FinishInput, Job>({
+        name: "jobs.cancel",
+        kind: "control",
+        parse: parseFinish,
+        async run(ctx, input, caller) {
+            await refuseFrontDesk(ctx.host, input.job);
+            const author = await authorOf(caller, ctx.host);
+            return refusing(cancelJob({ ctx, options }, input.job, input.justification, author));
+        },
+    });
     // biome-ignore lint/suspicious/noExplicitAny: heterogeneous operations cannot share a narrower type
-    const operations: Operation<ServiceContext, any, any>[] = [
-        resume,
-        finish("jobs.complete", completeJob),
-        finish("jobs.cancel", cancelJob),
-    ];
+    const operations: Operation<ServiceContext, any, any>[] = [resume, complete, cancel];
     return operations;
 }

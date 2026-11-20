@@ -116,7 +116,10 @@ async function start() {
     const ctx = captured as ServiceContext;
     const asked: Asked[] = [];
     let key = "";
-    setMailPolicy(ctx.host, stubPolicy(asked, () => key));
+    setMailPolicy(
+        ctx.host,
+        stubPolicy(asked, () => key),
+    );
     return {
         ctx,
         asked,
