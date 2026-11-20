@@ -3,8 +3,10 @@
  * each new email of an owned inbox becomes a triage job or input to the open job of its thread, on the mail rig.
  */
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { type MessageRef, openImap } from "../../src/mail/imap_client.ts";
 import { composeMessage } from "../../src/mail/mime.ts";
 import type { FakeMailServer } from "../support/fake_mail_server.ts";
 import { type MailRig, startMailRig } from "../support/mail_rig.ts";
@@ -28,6 +30,14 @@ type Job = {
     related: string[];
     request: { text: string; origin: { kind: string; wayIn: string; observed?: Record<string, string> } };
 };
+
+const CREDENTIAL = { user: ADDRESS, password: PASSWORD };
+const IMAP_OPTIONS = (rig: MailRig) => ({
+    host: "127.0.0.1",
+    port: rig.server.imapPort,
+    security: "none" as const,
+    idleSeconds: 60,
+});
 
 const rigs: MailRig[] = [];
 
@@ -213,5 +223,72 @@ describe("intake", { timeout: TEST_TIMEOUT_MS }, () => {
         assert.deepEqual(steer?.data.actor, { kind: "team_member", wayIn: "email" });
         assert.match(steer?.data.content ?? "", /From: ann@example\.test[\s\S]*use the staging one/);
         assert.equal((await jobsOf(rig)).length, 1);
+    });
+
+    describe("on the mail that arrived while the daemon was down", () => {
+        async function whileDown(rig: MailRig, work: () => Promise<void> | void): Promise<void> {
+            rig.process().kill9();
+            await rig.process().exited;
+            await work();
+            await rig.restart();
+            await until("intake to watch again", () =>
+                rig.process().stderr().includes("mail intake watching") ? true : undefined,
+            );
+        }
+
+        const subjectsOf = async (rig: MailRig, count: number) =>
+            (await untilJobs(rig, count)).map((job) => /Subject: (.*)/.exec(job.request.text)?.[1]);
+
+        it("takes it in order and passes over a UID that left the inbox (REQ-021)", async () => {
+            const rig = await startWatching();
+
+            await whileDown(rig, async () => {
+                for (const subject of ["a", "b", "c"]) rig.deliver(ADDRESS, rawMail(subject, "body"));
+                const imap = await openImap({ ...IMAP_OPTIONS(rig), credential: CREDENTIAL });
+                const [ref] = await imap.search("INBOX", { subject: "b" }, 1);
+                await imap.move([ref as MessageRef], "Trash");
+                await imap.logout();
+            });
+
+            assert.deepEqual(await subjectsOf(rig, 2), ["a", "c"]);
+        });
+
+        it("takes nothing and says so in the last error when the server's UIDVALIDITY changed (REQ-021)", async () => {
+            const rig = await startWatching();
+
+            await whileDown(rig, () => {
+                rig.server.setUidValidity(ADDRESS, 4242);
+                rig.deliver(ADDRESS, rawMail("lost", "body"));
+            });
+
+            const lastError = await until("the last error", async () => {
+                const status = (await rig.process().invoke("daemon.status", {})) as {
+                    mailAccounts: { status: string; lastError?: { message: string } }[];
+                };
+                return status.mailAccounts[0]?.lastError?.message;
+            });
+            assert.match(lastError, /could no longer tell old mail from new/);
+            rig.deliver(ADDRESS, rawMail("found", "body"));
+            assert.deepEqual(await subjectsOf(rig, 1), ["found"]);
+            assert.equal((await jobsOf(rig)).length, 1);
+        });
+
+        it("starts afresh when the account's identity changed (REQ-006)", async () => {
+            const rig = await startWatching();
+            const file = join(rig.env.configDir, "config.toml");
+
+            await whileDown(rig, async () => {
+                const kept = (await readFile(file, "utf8")).replace(
+                    `address = "${ADDRESS}"`,
+                    `login = "${ADDRESS}"\naddress = "other@example.test"`,
+                );
+                await writeFile(file, kept);
+                rig.deliver(ADDRESS, rawMail("before", "body"));
+            });
+            rig.deliver(ADDRESS, rawMail("after", "body"));
+
+            assert.deepEqual(await subjectsOf(rig, 1), ["after"]);
+            assert.equal((await jobsOf(rig)).length, 1);
+        });
     });
 });

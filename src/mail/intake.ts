@@ -13,7 +13,7 @@ import { steerConversation } from "../host/steering.ts";
 import type { JobsComponentOptions } from "../jobs/jobs_component.ts";
 import { createJob, leadConversationOf } from "../service/job_operations.ts";
 import type { Caller } from "../service/operations.ts";
-import { type ImapConnection, openImap } from "./imap_client.ts";
+import { type ImapConnection, ImapFailure, openImap } from "./imap_client.ts";
 import { type MailAccount, type MailRoute, requestText, routeFor, threadParentOf } from "./mail_model.ts";
 import type { MailMessageRow } from "./mail_store.ts";
 import { type ParsedMessage, parseMessage } from "./mime.ts";
@@ -154,10 +154,31 @@ async function route(session: Session, saved: MailMessageRow, parsed: ParsedMess
     }
 }
 
+/** The email's bytes, or undefined for a UID the inbox no longer holds: moved or deleted before intake got to it. */
+async function fetchRaw(session: Session, uid: number): Promise<Uint8Array | undefined> {
+    try {
+        return await session.imap.fetchRaw(uid);
+    } catch (error) {
+        // `fetchRaw` words the failure for a UID the server has no message for; any other failure is the connection's.
+        if (
+            error instanceof ImapFailure &&
+            error.kind === "protocol" &&
+            error.message.startsWith("no message with UID")
+        ) {
+            return undefined;
+        }
+        throw error;
+    }
+}
+
 /** Takes in one email by the four steps of the architecture: save, copy, route, record. */
 async function takeIn(session: Session, uid: number, uidvalidity: number): Promise<void> {
     const { account, deps, ctx } = session;
-    const raw = await session.imap.fetchRaw(uid);
+    const raw = await fetchRaw(session, uid);
+    if (raw === undefined) {
+        const next = { uidvalidity, nextUid: uid + 1, identity: identityOf(account) };
+        return ctx.jobStore.writeMail((tx) => tx.writeIntake(account.name, next));
+    }
     const parsed = await parseMessage(raw);
     const saved = await save(session, uid, uidvalidity, raw, parsed);
     await deps.afterWrite?.("mail-saved");
