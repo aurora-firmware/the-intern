@@ -79,9 +79,7 @@ describe("the mail account operations", () => {
         ];
 
         for (const [key, change] of cases) {
-            const error = await refusal(
-                rig.process().invoke("mail.accounts.create", ownedInput(rig, "extra", change)),
-            );
+            const error = await refusal(rig.process().invoke("mail.accounts.create", ownedInput(rig, "extra", change)));
 
             assert.equal(error.code, "invalid_input", key);
             assert.match(error.message, new RegExp(key), key);
@@ -156,7 +154,9 @@ describe("the mail account operations", () => {
         await appendFile(configFile(rig), "\n# a hand edit\n");
         const edited = await readConfig(rig);
 
-        const error = await refusal(daemon.invoke("mail.accounts.change", { name: "intern", check_interval_seconds: 30 }));
+        const error = await refusal(
+            daemon.invoke("mail.accounts.change", { name: "intern", check_interval_seconds: 30 }),
+        );
 
         assert.equal(error.code, "conflict");
         assert.ok(error.message.includes(configFile(rig)), error.message);

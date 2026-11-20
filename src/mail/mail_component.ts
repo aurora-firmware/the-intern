@@ -18,6 +18,7 @@ import { ConfigError, type ConfigSection } from "../config/config_file.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
 import type { JobsComponent } from "../jobs/jobs_component.ts";
+import { mailOperations } from "../service/mail_operations.ts";
 import type { Operation } from "../service/operations.ts";
 import { openImap } from "./imap_client.ts";
 import { accountKey, checkNotice, type MailAccount, MailRuleError } from "./mail_model.ts";
@@ -254,7 +255,7 @@ export async function createMailComponent(options: MailComponentOptions): Promis
     return {
         component,
         sections: [mailSection, mailAccountSection],
-        operations: [],
+        operations: mailOperations({ agents, accounts, accountStatus, control }),
         accountStatus,
         accounts,
         control,
