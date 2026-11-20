@@ -40,7 +40,7 @@ export type MailOperationsDeps = {
     accounts: Pick<AccountsLayer, "setSecret" | "removeAccount" | "credentialFor" | "startSignIn">;
     /** The store the secrets are kept in; a refused write puts back what it held before the call. */
     secrets: Pick<SecretsStore, "read" | "write">;
-    accountStatus: Pick<AccountStatusHub, "get">;
+    accountStatus: Pick<AccountStatusHub, "get" | "report">;
     control: { restartAccount(name: string): Promise<void>; stopAccount(name: string): void };
 };
 
@@ -355,7 +355,10 @@ export function mailOperations({ agents, accounts, secrets, accountStatus, contr
                 );
             }
             return accounts.startSignIn(authOf(account), SCOPES[account.auth] ?? [], () => {
-                void control.restartAccount(name);
+                // Nobody awaits the callback, so a failed restart goes to the account's status, where the team member sees it.
+                control.restartAccount(name).catch((error: unknown) => {
+                    accountStatus.report(MAIL_OWNER, name, { kind: "failing", message: failureMessage(error) });
+                });
             });
         },
     });
