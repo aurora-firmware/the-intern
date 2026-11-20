@@ -22,11 +22,11 @@ import { onInputSubmitted, submissionIdFor, submissionState } from "../../src/ho
 import type { Models, Storage } from "../../src/host/harness_host.ts";
 import { readConversationMeta, SEAT_RECORD_KIND } from "../../src/host/seating.ts";
 import { blockJob, cancelJob } from "../../src/jobs/job_actions.ts";
-import { createJobsComponent, type JobsComponentOptions, type WritePoint } from "../../src/jobs/jobs_component.ts";
+import { createJobsComponent, type JobsComponentOptions } from "../../src/jobs/jobs_component.ts";
 import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
 import { createNetworkListenerComponent, type NetworkListenerComponent } from "../../src/listeners/network_listener.ts";
 import { networkSection } from "../../src/listeners/network_section.ts";
-import { createMailComponent } from "../../src/mail/mail_component.ts";
+import { createMailComponent, type MailComponentOptions, type MailWritePoint } from "../../src/mail/mail_component.ts";
 import type { InternModels } from "../../src/models/model_runtime.ts";
 import { createSchedulesComponent } from "../../src/schedules/schedules_component.ts";
 import { createJob, type JobView } from "../../src/service/job_operations.ts";
@@ -420,6 +420,14 @@ function killingDeskAt(
     };
 }
 
+/** Kills the process at the mail component's write point `crashAt`; its `afterWrite` always returns a promise. */
+function killingMailAt(crashAt: MailWritePoint): NonNullable<MailComponentOptions["afterWrite"]> {
+    const kill = killingAt(crashAt);
+    return async (point) => {
+        await kill(point);
+    };
+}
+
 /** Blocks a job as a team member at the command line, so a test drives a block without scripting the model. */
 function blockJobOperation(jobs: { options: JobsComponentOptions }) {
     return defineOperation<ServiceContext, { job: string; reason: string }, Record<string, never>>({
@@ -660,7 +668,7 @@ async function main(): Promise<void> {
         jobs,
         logger,
         ...(mailClock && { clock: mailClock }),
-        ...(switches.mailCrashAt !== undefined && { afterWrite: killingAt(switches.mailCrashAt) }),
+        ...(switches.mailCrashAt !== undefined && { afterWrite: killingMailAt(switches.mailCrashAt) }),
         ...(switches.oauthEndpoints && { oauthEndpoints: switches.oauthEndpoints }),
     });
     const schedules = await createSchedulesComponent({
