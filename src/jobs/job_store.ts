@@ -6,7 +6,6 @@ import { randomUUID } from "node:crypto";
 import type { HostDatabase, HostSqlExecutor, HostSqlValue } from "../host/harness_host.ts";
 import { bindMailStore, type MailStoreFunctions } from "../mail/mail_store.ts";
 import {
-    type ActionInput,
     checkAction,
     checkEdit,
     type EditableField,
@@ -16,9 +15,11 @@ import {
     type JobOrigin,
     type JobStatus,
     type Letter,
+    type ActionInput as ModelActionInput,
     parseJobRef,
     type Resolution,
 } from "./job_model.ts";
+import type { OwedMail } from "./mail_policy.ts";
 import {
     FIRED_INSTANT_SQL,
     insertSkip,
@@ -29,6 +30,14 @@ import {
 } from "./schedule_history.ts";
 
 export type { ScheduleRunItem, ScheduleSkip };
+
+/** The input of an action: the model's, and the mail the same write owes (S-004 REQ-018). */
+export type ActionInput = ModelActionInput & {
+    /** The email the status change owes: its outbox row is inserted in the same transaction. */
+    owedMail?: OwedMail;
+    /** A completion whose result reply is not sent for lack of a mail text: its `not_sent` entry is written with it. */
+    mailNotSent?: boolean;
+};
 
 export const JOB_SCHEMA_VERSION = 6;
 
@@ -840,6 +849,14 @@ const ACTION_RESOLUTIONS: Readonly<Partial<Record<JobAction, Resolution["kind"]>
     cancel: "cancelled",
 };
 
+async function writeOwedMail(tx: HostSqlExecutor, row: JobRow, input: ActionInput, author: JobAuthor): Promise<void> {
+    if (input.owedMail !== undefined) await mailTxOf(tx).insertOutbox({ ...input.owedMail, job: row.id });
+    if (input.mailNotSent === true) {
+        const entry: MailHistoryEntry = { mail: "not_sent", from: row.mail_account ?? "", to: [], subject: row.title };
+        await addMailHistory(tx, row.id, entry, author);
+    }
+}
+
 async function applyActionIn(
     tx: HostSqlExecutor,
     ref: string,
@@ -868,6 +885,7 @@ async function applyActionIn(
         const entry = action === "block" ? (input.blockedAfterEntry ?? null) : null;
         await tx.run("UPDATE intern_jobs SET blocked_after_entry = ? WHERE id = ?", entry, row.id);
     }
+    await writeOwedMail(tx, row, input, author);
     const kind = ACTION_RESOLUTIONS[action];
     let change: JobChange;
     if (kind === undefined) {

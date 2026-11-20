@@ -10,6 +10,7 @@ import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContex
 import { createLogger } from "../../src/daemon/logger.ts";
 import { blockJob, cancelJob, completeJob, type JobActionDeps } from "../../src/jobs/job_actions.ts";
 import type { JobAuthor } from "../../src/jobs/job_model.ts";
+import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import {
     type MailDecision,
     type MailPolicy,
@@ -18,7 +19,6 @@ import {
     type OwedMail,
     setMailPolicy,
 } from "../../src/jobs/mail_policy.ts";
-import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { scaled } from "../support/time_scale.ts";
@@ -109,6 +109,7 @@ async function start(): Promise<Started> {
         async create() {
             const job = (await daemon.catalogue.invoke("jobs.create", { text: "do it" }, webCaller)) as CreatedJob;
             await waitFor(() => isIdle(ctx, job.leadConversation), "the lead's first run to end");
+            await ctx.jobStore.updateFields(job.id, { definitionOfDone: "it is done" }, author);
             return job;
         },
     };
@@ -118,7 +119,7 @@ async function isIdle(ctx: ServiceContext, conversationId: string): Promise<bool
     return (await ctx.host.conversationInfo(conversationId))?.busy === false;
 }
 
-const owed = (job: { id: string }, key: string): OwedMail => ({
+const owed = (key: string): OwedMail => ({
     key,
     account: "work",
     kind: "question",
@@ -181,7 +182,7 @@ describe("the mail policy asked by block and complete", () => {
         const started = await start();
         const job = await started.create();
         const key = `question:${job.id}:1`;
-        const stub = stubPolicy(started.ctx, { block: { kind: "owe", row: owed(job, key) } }, key);
+        const stub = stubPolicy(started.ctx, { block: { kind: "owe", row: owed(key) } }, key);
         setMailPolicy(started.ctx.host, stub.policy);
 
         const blocked = await blockJob(started.deps, job.id, "stuck", author, "Which schema?");
@@ -201,7 +202,7 @@ describe("the mail policy asked by block and complete", () => {
         const started = await start();
         const job = await started.create();
         const key = `result:${job.id}`;
-        const row = { ...owed(job, key), kind: "result" as const, mailText: "All done" };
+        const row = { ...owed(key), kind: "result" as const, mailText: "All done" };
         const stub = stubPolicy(started.ctx, { complete: { kind: "owe", row } }, key);
         setMailPolicy(started.ctx.host, stub.policy);
 
@@ -254,8 +255,8 @@ describe("the mail policy asked by block and complete", () => {
         const started = await start();
         const job = await started.create();
         const key = `question:${job.id}:1`;
-        await started.ctx.jobStore.writeMail((tx) => tx.insertOutbox({ ...owed(job, key), job: job.id }));
-        const stub = stubPolicy(started.ctx, { block: { kind: "owe", row: owed(job, key) } }, key);
+        await started.ctx.jobStore.writeMail((tx) => tx.insertOutbox({ ...owed(key), job: job.id }));
+        const stub = stubPolicy(started.ctx, { block: { kind: "owe", row: owed(key) } }, key);
         setMailPolicy(started.ctx.host, stub.policy);
         const before = (await started.ctx.jobStore.listHistory(job.id, {})).entries.length;
 
