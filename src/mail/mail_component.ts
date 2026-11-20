@@ -18,6 +18,7 @@ import { ConfigError, type ConfigSection } from "../config/config_file.ts";
 import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
 import type { Logger } from "../daemon/logger.ts";
 import type { JobsComponent } from "../jobs/jobs_component.ts";
+import { setMailPolicy } from "../jobs/mail_policy.ts";
 import { mailOperations } from "../service/mail_operations.ts";
 import type { Operation } from "../service/operations.ts";
 import { openImap } from "./imap_client.ts";
@@ -25,6 +26,7 @@ import { createIntake } from "./intake.ts";
 import { accountKey, checkNotice, type MailAccount, MailRuleError } from "./mail_model.ts";
 import { mailAccountSection, mailSection } from "./mail_section.ts";
 import { createMailToolsExtension } from "./mail_tools_extension.ts";
+import { createMailPolicy } from "./outbox.ts";
 import { checkSmtpLogin } from "./smtp_client.ts";
 import { createToolConnections } from "./tool_connection.ts";
 
@@ -132,6 +134,7 @@ export async function createMailComponent(options: MailComponentOptions): Promis
     });
     const checks = new Map<string, AbortController>();
     let context: ServiceContext | undefined;
+    let removeMailPolicy: (() => void) | undefined;
 
     const toolConnections = createToolConnections({
         account: (name) => context?.config.current(mailAccountSection).find((entry) => entry.name === name),
@@ -235,6 +238,15 @@ export async function createMailComponent(options: MailComponentOptions): Promis
             return undefined;
         },
         async checkModels(ctx) {
+            removeMailPolicy = setMailPolicy(
+                ctx.host,
+                createMailPolicy({
+                    jobStore: ctx.jobStore,
+                    accounts: () => ctx.config.current(mailAccountSection),
+                    notice: () => ctx.config.current(mailSection),
+                    mailDir: ctx.dirs.mailDir,
+                }),
+            );
             agents.runtime().catalog.addReferenceSource({
                 name: "mail",
                 referrersOf: (role) =>
@@ -278,6 +290,8 @@ export async function createMailComponent(options: MailComponentOptions): Promis
             await intake.stopAll();
             await toolConnections.closeAll();
             for (const account of accountStatus.list(MAIL_OWNER)) accountStatus.stop(MAIL_OWNER, account.name);
+            removeMailPolicy?.();
+            removeMailPolicy = undefined;
             context = undefined;
         },
     };

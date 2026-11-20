@@ -17,8 +17,8 @@ import type { JobAuthor } from "../../src/jobs/job_model.ts";
 import type { Job } from "../../src/jobs/job_store.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
 import type { MailDecision, OwedMail } from "../../src/jobs/mail_policy.ts";
-import type { NewOutboxRow } from "../../src/mail/mail_store.ts";
 import type { MailAccount, MailNotice } from "../../src/mail/mail_model.ts";
+import type { NewOutboxRow } from "../../src/mail/mail_store.ts";
 import { createMailPolicy } from "../../src/mail/outbox.ts";
 import { writeSavedCopy } from "../../src/mail/saved_copy.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
@@ -163,7 +163,9 @@ async function start(): Promise<Started> {
                 email,
                 leadStart: {},
             });
-            await ctx.jobStore.writeMail((tx) => tx.recordIntakeOutcome(saved.id, { outcome: "job_created", job: job.id }));
+            await ctx.jobStore.writeMail((tx) =>
+                tx.recordIntakeOutcome(saved.id, { outcome: "job_created", job: job.id }),
+            );
             await writeSavedCopy(ctx.dirs.mailDir, saved.id, Buffer.from(raw));
             await ctx.jobStore.applyAction(job.id, "start", {}, daemon);
             return job;
@@ -457,7 +459,8 @@ describe("the email details of a job", () => {
         await started.owe(job, { recipients: [SENDER], subject: "Re: question" });
         const row = await started.ctx.jobStore.readMail((tx) => tx.outboxByKey(`question:${job.id}:1`));
         const sentBefore = await started.policy([account()], NOTICE).emailDetails(job);
-        const composed = "From: bob@example.test\r\nDate: Fri, 20 Nov 2026 08:30:00 +0000\r\nSubject: Re: question\r\n\r\nx";
+        const composed =
+            "From: bob@example.test\r\nDate: Fri, 20 Nov 2026 08:30:00 +0000\r\nSubject: Re: question\r\n\r\nx";
         await started.ctx.jobStore.writeMail((tx) =>
             tx.setOutboxState(row?.id as string, "sent", { messageId: "<s@example.test>", raw: Buffer.from(composed) }),
         );
