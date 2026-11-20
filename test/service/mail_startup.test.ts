@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { type AddressInfo, createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
@@ -26,10 +27,12 @@ const PASSWORD = "s3cret";
 const envs: HermeticEnv[] = [];
 const daemons: RunningDaemon[] = [];
 const servers: FakeMailServer[] = [];
+const closers: (() => Promise<void>)[] = [];
 
 afterEach(async () => {
     for (const daemon of daemons.splice(0)) await daemon.stop();
     for (const server of servers.splice(0)) await server.stop();
+    for (const close of closers.splice(0)) await close();
     for (const env of envs.splice(0)) await env.dispose();
 });
 
@@ -38,6 +41,22 @@ async function mailServer(): Promise<FakeMailServer> {
     server.addAccount({ address: ADDRESS, login: ADDRESS, password: PASSWORD });
     servers.push(server);
     return server;
+}
+
+/** A server that accepts connections and never answers, so a client waits for its greeting. */
+async function silentServer(): Promise<{ port: number; open: Set<Socket> }> {
+    const open = new Set<Socket>();
+    const server = createServer((socket) => {
+        open.add(socket);
+        socket.on("error", () => undefined);
+        socket.once("close", () => open.delete(socket));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    closers.push(async () => {
+        for (const socket of open) socket.destroy();
+        await new Promise((resolve) => server.close(resolve));
+    });
+    return { port: (server.address() as AddressInfo).port, open };
 }
 
 const accountToml = (server: FakeMailServer, extra = ""): string =>
@@ -245,12 +264,28 @@ describe("the mail component at startup", () => {
         assert.equal(existsSync(staleFile(rig.env)), false);
     });
 
-    it("ends the checks and connections within the stop bound when the daemon stops", async () => {
+    it("closes the IMAP connection a check is still making when the daemon stops", async () => {
         const server = await mailServer();
         server.pause();
         const rig = await startRig(() => accountToml(server));
-        await rig.until("the daemon to be ready", () => rig.daemon.phase() === "ready");
+        await rig.until("the check to hold a connection", () => server.openConnections() > 0);
 
         assert.equal(await rig.daemon.stop(), 0);
+
+        await rig.until("the connection to close", () => server.openConnections() === 0);
+    });
+
+    it("closes the SMTP connection a check is still using when the daemon stops", async () => {
+        const imapServer = await mailServer();
+        const silent = await silentServer();
+        const rig = await startRig(() =>
+            accountToml(imapServer).replace(`smtp_port = ${imapServer.smtpPort}`, `smtp_port = ${silent.port}`),
+        );
+        await rig.until("the check to hold the SMTP connection", () => silent.open.size > 0);
+
+        assert.equal(await rig.daemon.stop(), 0);
+
+        await rig.until("the connection to close", () => silent.open.size === 0);
+        assert.equal(imapServer.openConnections(), 0);
     });
 });
