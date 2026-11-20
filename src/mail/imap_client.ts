@@ -22,6 +22,8 @@ export type ImapOptions = {
     credential: Credential;
     /** How long a quiet connection waits before it restarts IDLE, or polls on a server without IDLE. */
     idleSeconds: number;
+    /** An abort closes the connection being made or held; a connect in progress then fails. */
+    signal?: AbortSignal;
 };
 
 /** Names one message for good: UIDs mean nothing once the folder's UIDVALIDITY changes. */
@@ -177,6 +179,12 @@ export async function openImap(options: ImapOptions): Promise<ImapConnection> {
     // imapflow emits `error` for a lost connection and throws when nobody listens. The command that was running
     // rejects with the same error, and that rejection is what the caller sees.
     client.on("error", () => undefined);
+    const { signal } = options;
+    if (signal !== undefined) {
+        const close = () => client.close();
+        signal.addEventListener("abort", close, { once: true });
+        if (signal.aborted) close();
+    }
     await guarded(() => client.connect());
 
     async function openFolder(folder: string, readOnly: boolean) {
