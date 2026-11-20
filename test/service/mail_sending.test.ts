@@ -404,4 +404,68 @@ describe("sending owed mail", () => {
         assert.equal((await world.rowsIn("owed")).length, 0);
         assert.equal(received(world).length, 1);
     });
+
+    it("records a partly refused send as sent for the accepted recipient, with the refusal and one notice", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const world = await start();
+        world.outbox.startAccount(world.accounts[0] as MailAccount);
+        world.outbox.startAccount(world.accounts[1] as MailAccount);
+        world.server.refuseRecipient("nobody@example.test", "550 5.1.1 no such user");
+        const job = await world.emailJob();
+        const row = await world.ctx.jobStore.writeMail((tx) =>
+            tx.insertOutbox({
+                key: `question:${job.id}:1`,
+                job: job.id,
+                account: "work",
+                kind: "question",
+                recipients: [SENDER, "nobody@example.test"],
+                subject: SUBJECT,
+                mailText: "Which schema?",
+                inReplyTo: null,
+                references: null,
+            }),
+        );
+
+        world.outbox.wake();
+
+        await untilTrue("the notice to be sent", async () => (await world.rowsIn("sent")).length === 2);
+        const sent = await world.rowsIn("sent");
+        assert.deepEqual(sent.map((entry) => entry.key).sort(), [`question:${job.id}:1`, `refused:${row.id}`].sort());
+        const history = await world.mailHistory(job);
+        assert.deepEqual(
+            history.filter((entry) => entry.mail === "sent" && entry.subject === SUBJECT),
+            [{ mail: "sent", from: ADDRESS, to: [SENDER], subject: SUBJECT }],
+        );
+        const refused = history.filter((entry) => entry.mail === "refused");
+        assert.equal(refused.length, 1);
+        assert.deepEqual(refused[0]?.to, ["nobody@example.test"]);
+        assert.match(refused[0]?.serverAnswer as string, /no such user/);
+        assert.deepEqual(
+            received(world)
+                .map((mail) => mail.envelope.to)
+                .sort(),
+            [[SENDER], [NOTICE.to]],
+        );
+    });
+
+    it("marks an email may_not_have_gone_out when the connection is lost after the data, and never sends it again", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const world = await start();
+        world.outbox.startAccount(world.accounts[0] as MailAccount);
+        world.server.dropAfterData(true);
+        const job = await world.emailJob();
+
+        await world.block(job, "Which schema?");
+
+        await untilTrue("the row to be marked", async () => (await world.rowsIn("may_not_have_gone_out")).length === 1);
+        const history = await world.mailHistory(job);
+        assert.deepEqual(
+            history.filter((entry) => entry.mail === "may_not_have_gone_out"),
+            [{ mail: "may_not_have_gone_out", from: ADDRESS, to: [SENDER], subject: SUBJECT }],
+        );
+        assert.equal((await world.rowsIn("owed")).length, 0);
+        assert.deepEqual(world.failures, []);
+    });
 });
