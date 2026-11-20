@@ -321,7 +321,7 @@ describe("mail.accounts.signin after the tokens are stored", () => {
         const operations = mailOperations({
             agents: {} as never,
             accounts: {
-                startSignIn: async (_auth, _scopes, onSignedIn) => {
+                startSignIn: async (_auth: unknown, _scopes: unknown, onSignedIn: () => void) => {
                     signedIn = onSignedIn;
                     return { kind: "device_code", code: "U1", address: "https://example.test/devicelogin" };
                 },
@@ -341,7 +341,7 @@ describe("mail.accounts.signin after the tokens are stored", () => {
         });
         const signIn = operations.find((operation) => operation.name === "mail.accounts.signin");
         const context = { config: { current: () => [account] } } as unknown as ServiceContext;
-        await signIn?.run(context, { name: "work" });
+        await signIn?.run(context, { name: "work" }, {} as never);
 
         signedIn();
         await new Promise((resolve) => setImmediate(resolve));
