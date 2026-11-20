@@ -13,7 +13,13 @@ import {
     type ToolExecutionApi,
     type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
-import { type ImapConnection, ImapFailure, type MessageRef, type SearchQuery } from "./imap_client.ts";
+import {
+    type FlagChanges,
+    type ImapConnection,
+    ImapFailure,
+    type MessageRef,
+    type SearchQuery,
+} from "./imap_client.ts";
 import { type ParsedMessage, parseMessage } from "./mime.ts";
 import { MailToolRefusal, type ToolConnections } from "./tool_connection.ts";
 
@@ -246,9 +252,82 @@ const saveAttachmentsTool = (options: MailToolsOptions) =>
         },
     });
 
+const uidsField = Type.Array(Type.Number(), {
+    description: "The UIDs of the messages, all in the folder, as mail_search returned them.",
+});
+
+function refsOf(args: { folder: string; uidValidity: number; uids: number[] }): MessageRef[] {
+    if (args.uids.length === 0) throw new MailToolRefusal("No message was named: uids is empty.");
+    return args.uids.map((uid) => ({ folder: args.folder, uidValidity: args.uidValidity, uid }));
+}
+
+const moveTool = (options: MailToolsOptions) =>
+    defineTool({
+        name: "mail_move",
+        description:
+            "Move messages to an existing folder of the account, Trash included. Nothing is deleted for good. " +
+            "Moving a message that is already gone from its folder changes nothing.",
+        parameters: Type.Object({
+            account: accountField,
+            folder: messageFields.folder,
+            uidValidity: messageFields.uidValidity,
+            uids: uidsField,
+            target: Type.String({ description: "The existing folder to move the messages to." }),
+        }),
+        async execute(args) {
+            return refusable("mail_move", () =>
+                options.connections().use(args.account, async (imap) => {
+                    await requireFolder(imap, args.target);
+                    await imap.move(refsOf(args), args.target);
+                    return jsonResult({ moved: args.uids.length, target: args.target });
+                }),
+            );
+        },
+    });
+
+const setFlagsTool = (options: MailToolsOptions) =>
+    defineTool({
+        name: "mail_set_flags",
+        description:
+            "Set a flag with true or clear it with false; the flags are seen, flagged and answered, and a flag " +
+            "left out stays as it is. Name at least one.",
+        parameters: Type.Object({
+            account: accountField,
+            folder: messageFields.folder,
+            uidValidity: messageFields.uidValidity,
+            uids: uidsField,
+            seen: Type.Optional(Type.Boolean()),
+            flagged: Type.Optional(Type.Boolean()),
+            answered: Type.Optional(Type.Boolean()),
+        }),
+        async execute(args) {
+            return refusable("mail_set_flags", () => {
+                const changes: FlagChanges = {};
+                for (const flag of ["seen", "flagged", "answered"] as const) {
+                    if (args[flag] !== undefined) changes[flag] = args[flag];
+                }
+                if (Object.keys(changes).length === 0) {
+                    throw new MailToolRefusal("No flag was named: give seen, flagged or answered.");
+                }
+                return options.connections().use(args.account, async (imap) => {
+                    await requireFolder(imap, args.folder);
+                    await imap.setFlags(refsOf(args), changes);
+                    return jsonResult({ changed: args.uids.length, flags: changes });
+                });
+            });
+        },
+    });
+
 export function createMailToolsExtension(options: MailToolsOptions): Extension {
     return defineExtension({
         name: MAIL_TOOLS_EXTENSION_NAME,
-        tools: [listFoldersTool(options), searchTool(options), readTool(options), saveAttachmentsTool(options)],
+        tools: [
+            listFoldersTool(options),
+            searchTool(options),
+            readTool(options),
+            saveAttachmentsTool(options),
+            moveTool(options),
+            setFlagsTool(options),
+        ],
     });
 }
