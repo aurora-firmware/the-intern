@@ -6,6 +6,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import type { ServiceContext } from "../../src/daemon/daemon.ts";
+import { mailOperations } from "../../src/service/mail_operations.ts";
 import { type MailRig, startMailRig } from "../support/mail_rig.ts";
 import { scaled } from "../support/time_scale.ts";
 
@@ -301,5 +303,51 @@ describe("mail.accounts.signin", () => {
         const error = await refusal(rig.process().invoke("mail.accounts.signin", { name: "nobody" }));
 
         assert.equal(error.code, "not_found");
+    });
+});
+
+describe("mail.accounts.signin after the tokens are stored", () => {
+    it("records a failed restart on the account's status instead of leaving it unhandled", async () => {
+        const reports: { owner: string; name: string; outcome: { kind: string; message?: string } }[] = [];
+        let signedIn: () => void = () => assert.fail("no sign-in started");
+        const account = {
+            name: "work",
+            kind: "owned",
+            auth: "microsoft",
+            login: "bob@contoso.test",
+            clientId: "client-1",
+            tenant: "contoso",
+        };
+        const operations = mailOperations({
+            agents: {} as never,
+            accounts: {
+                startSignIn: async (_auth, _scopes, onSignedIn) => {
+                    signedIn = onSignedIn;
+                    return { kind: "device_code", code: "U1", address: "https://example.test/devicelogin" };
+                },
+            } as never,
+            secrets: {} as never,
+            accountStatus: {
+                get: () => undefined,
+                report: (owner: string, name: string, outcome: { kind: string; message?: string }) =>
+                    reports.push({ owner, name, outcome }),
+            } as never,
+            control: {
+                restartAccount: async () => {
+                    throw new Error("the secrets store is unreadable");
+                },
+                stopAccount: () => {},
+            },
+        });
+        const signIn = operations.find((operation) => operation.name === "mail.accounts.signin");
+        const context = { config: { current: () => [account] } } as unknown as ServiceContext;
+        await signIn?.run(context, { name: "work" });
+
+        signedIn();
+        await new Promise((resolve) => setImmediate(resolve));
+
+        assert.deepEqual(reports, [
+            { owner: "mail", name: "work", outcome: { kind: "failing", message: "the secrets store is unreadable" } },
+        ]);
     });
 });
