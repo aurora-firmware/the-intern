@@ -526,7 +526,7 @@ describe("the mail tools that read", { timeout: TEST_TIMEOUT_MS }, () => {
 describe("the mail tools' connections", () => {
     const account = { name: "work", imapHost: "h", imapPort: 1, imapSecurity: "none", checkIntervalSeconds: 60 };
 
-    function connections(idleMs: number) {
+    function connections(idleMs: number, options: { inboxFails?: boolean } = {}) {
         const state = { opened: 0, loggedOut: 0, running: 0, mostRunning: 0, closed: new Set<ImapConnection>() };
         const tools = createToolConnections({
             account: () => account as never,
@@ -536,6 +536,10 @@ describe("the mail tools' connections", () => {
             open: async () => {
                 state.opened += 1;
                 const connection = {
+                    search: async () => {
+                        if (options.inboxFails === true) throw new ImapFailure("protocol", "no INBOX to examine");
+                        return [];
+                    },
                     logout: async () => {
                         state.loggedOut += 1;
                         state.closed.add(connection);
@@ -612,6 +616,14 @@ describe("the mail tools' connections", () => {
 
         assert.equal(state.mostRunning, 1);
         await tools.closeAll();
+    });
+
+    it("logs out of a connection that can't open INBOX and refuses the call", async () => {
+        const { state, call } = connections(scaled(60_000), { inboxFails: true });
+
+        await assert.rejects(call(), /no INBOX/);
+
+        assert.deepEqual([state.opened, state.loggedOut], [1, 1]);
     });
 
     it("keeps a connection that only listed folders open past the client's quiet-socket timeout", {

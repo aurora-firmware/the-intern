@@ -45,6 +45,17 @@ type Held = {
     idleTimer?: NodeJS.Timeout;
 };
 
+/**
+ * Leaves a folder open with EXAMINE, so the connection lasts its idle minutes. With a folder open the client idles,
+ * and it answers its own quiet-socket timeout with a NOOP; with none open, the timeout closes the connection after
+ * 30 quiet seconds. The search asks for messages received from tomorrow on, so the answer stays empty however large
+ * the INBOX is.
+ */
+async function openInboxReadOnly(imap: ImapConnection): Promise<void> {
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await imap.search("INBOX", { since: tomorrow }, 0);
+}
+
 export function createToolConnections(deps: ToolConnectionDeps): ToolConnections {
     const open = deps.open ?? openImap;
     const idleMs = deps.idleMs ?? TOOL_CONNECTION_IDLE_MS;
@@ -70,15 +81,22 @@ export function createToolConnections(deps: ToolConnectionDeps): ToolConnections
     }
 
     function hold(account: MailAccount): Held {
-        const imap = deps.credential(account).then((credential) =>
-            open({
+        const imap = deps.credential(account).then(async (credential) => {
+            const connection = await open({
                 host: account.imapHost,
                 port: account.imapPort,
                 security: account.imapSecurity,
                 credential,
                 idleSeconds: account.checkIntervalSeconds,
-            }),
-        );
+            });
+            try {
+                await openInboxReadOnly(connection);
+            } catch (error) {
+                await connection.logout();
+                throw error;
+            }
+            return connection;
+        });
         const entry: Held = { account, imap, tail: Promise.resolve() };
         held.set(account.name, entry);
         return entry;
