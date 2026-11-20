@@ -44,7 +44,14 @@ async function startDaemon(accountStatus: AccountStatusHub | undefined): Promise
         env: env.env,
         homeDir: env.root,
         logger: createLogger({ verbose: false, stream: { write: () => true } }),
-        components: [{ name: "capture", start: async (ctx) => void (captured = ctx) }],
+        components: [
+            {
+                name: "capture",
+                start: async (ctx) => {
+                    captured = ctx;
+                },
+            },
+        ],
         ...(accountStatus && { accountStatus }),
     });
     daemons.push(daemon);
