@@ -10,6 +10,7 @@ import type { WorkspaceRegistry } from "../workspaces/workspace_registry.ts";
 import {
     applyRoleChange,
     COORDINATION_TOOL_NAMES,
+    MAIL_TOOL_SET_ENTRY,
     isSkillName,
     type RoleChange,
     type RoleDefinition,
@@ -85,7 +86,12 @@ const describeValue = (value: unknown): string | undefined => {
     return Array.isArray(value) ? value.join(", ") : String(value);
 };
 
-const KNOWN_TOOLS: readonly string[] = [...SHIPPED_TOOL_NAMES, ...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES];
+const KNOWN_TOOLS: readonly string[] = [
+    ...SHIPPED_TOOL_NAMES,
+    MAIL_TOOL_SET_ENTRY,
+    ...COORDINATION_TOOL_NAMES,
+    ...JOB_TOOL_NAMES,
+];
 
 // For a list field the value is the offending entry, so the refusal names what to fix.
 const offendingValue = (role: RoleDefinition, field: string): string | undefined => {

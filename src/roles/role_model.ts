@@ -4,6 +4,18 @@ import { JOB_TOOL_NAMES } from "../jobs/job_model.ts";
 
 export const SHIPPED_TOOL_NAMES = ["read", "write", "edit", "bash"] as const;
 export const COORDINATION_TOOL_NAMES = ["handoff", "invoke", "steer"] as const;
+// `mail` is a tool-set entry that stands for the eight mail tools; a tool set never names one of them (S-001 REQ-003).
+export const MAIL_TOOL_SET_ENTRY = "mail";
+export const MAIL_TOOL_NAMES = [
+    "mail_list_folders",
+    "mail_search",
+    "mail_read",
+    "mail_save_attachments",
+    "mail_move",
+    "mail_set_flags",
+    "mail_save_draft",
+    "mail_send",
+] as const;
 
 const ROLE_NAME_PATTERN = /^[a-z][a-z0-9-]{0,39}$/;
 
@@ -48,6 +60,7 @@ export class RoleInvalidError extends Error {
 }
 
 const isKnownTool = (tool: string): boolean =>
+    tool === MAIL_TOOL_SET_ENTRY ||
     (SHIPPED_TOOL_NAMES as readonly string[]).includes(tool) ||
     (COORDINATION_TOOL_NAMES as readonly string[]).includes(tool) ||
     (JOB_TOOL_NAMES as readonly string[]).includes(tool);
@@ -76,6 +89,12 @@ export const applyRoleChange = (base: RoleDefinition, change: RoleChange): RoleD
 // Every seat is offered `skill`, whatever the role's tools are (S-008 REQ-008).
 export const SKILL_TOOL_NAME = "skill";
 
+const expandRoleTools = (tools: readonly string[], place: SeatPlace): string[] =>
+    tools.flatMap((tool) => {
+        if (tool !== MAIL_TOOL_SET_ENTRY) return [tool];
+        return place === "job" ? [...MAIL_TOOL_NAMES] : [];
+    });
+
 const placeTools = (place: SeatPlace): readonly string[] => [
     ...(place === "front_desk" ? FRONT_DESK_TOOL_NAMES : [...COORDINATION_TOOL_NAMES, ...JOB_TOOL_NAMES]),
     SKILL_TOOL_NAME,
@@ -96,7 +115,7 @@ export const resolveSeat = (
         model,
         thinkingLevel: overrides.thinkingLevel ?? role.thinkingLevel ?? defaults.thinkingLevel,
         workspace: overrides.workspace ?? role.workspace ?? defaults.workspace,
-        tools: [...new Set([...role.tools, ...placeTools(place)])],
+        tools: [...new Set([...expandRoleTools(role.tools, place), ...placeTools(place)])],
         skills: [...role.skills],
     };
 };
