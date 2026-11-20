@@ -69,7 +69,7 @@ export type ImapConnection = {
     hasMessageId(folder: string, messageId: string): Promise<boolean>;
     /** Selects INBOX and returns its UIDVALIDITY and UIDNEXT. */
     inboxState(): Promise<{ uidValidity: number; uidNext: number }>;
-    /** Reads a message's bytes with BODY.PEEK[], so no flag changes; undefined for a UID INBOX doesn't hold. */
+    /** Reads a message's bytes with BODY.PEEK[]; undefined for a UID INBOX doesn't hold, a failure for no source. */
     fetchRaw(uid: number): Promise<Uint8Array | undefined>;
     /** Calls the listener each time the server announces a message in INBOX. Register it once per connection. */
     onNewMail(listener: () => void): void;
@@ -128,8 +128,7 @@ const UNREACHABLE_CODES = new Set([
 
 /** The error imapflow wraps in `_err` keeps Node's own code, such as the certificate check's. */
 function codeOf(error: ImapFlowError): string | undefined {
-    const inner = error._err as ImapFlowError | undefined;
-    return inner?.code ?? error.code;
+    return (error._err as ImapFlowError | undefined)?.code ?? error.code;
 }
 
 function failureKindOf(error: ImapFlowError): ImapFailureKind {
@@ -278,7 +277,9 @@ export async function openImap(options: ImapOptions): Promise<ImapConnection> {
         fetchRaw: (uid) =>
             guarded(async () => {
                 const message = await client.fetchOne(String(uid), { source: true }, { uid: true });
-                return message === false ? undefined : message.source;
+                if (message === false) return undefined;
+                if (message.source === undefined) throw new ImapFailure("protocol", `no source for UID ${uid}`);
+                return message.source;
             }),
         onNewMail(listener) {
             client.on("exists", () => listener());
