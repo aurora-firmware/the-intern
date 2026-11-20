@@ -50,7 +50,11 @@ function parseFinish(raw: unknown): FinishInput {
 function parseComplete(raw: unknown): CompleteInput {
     const input: CompleteInput = parseFinish(raw);
     const record = asRecord(raw);
-    if (record.mailText !== undefined) input.mailText = requireString(record, "mailText");
+    // An empty text is a string: the mail policy decides what a blank text means.
+    if (record.mailText !== undefined) {
+        if (typeof record.mailText !== "string") throw new Error("mailText must be a string");
+        input.mailText = record.mailText;
+    }
     return input;
 }
 
