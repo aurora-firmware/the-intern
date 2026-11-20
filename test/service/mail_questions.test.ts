@@ -217,8 +217,13 @@ const reply = (world: World, question: Sent, from: string, text: string, extra: 
         ]),
     );
 
+// Read from the history: a lead that answers at once is blocked again by the turn-end rule, so the status is not held.
 const untilResumed = (world: World, jobId: string) =>
-    until("the job to resume", async () => ((await world.job(jobId)).status === "in_progress" ? true : undefined));
+    until("the job to resume", async () =>
+        (await world.statusEntries(jobId)).some((entry) => entry.old === "blocked" && entry.new === "in_progress")
+            ? true
+            : undefined,
+    );
 
 const emailJob = async (world: World, subject: string) => {
     world.server.deliver(OWNED, rawMail(ANA, OWNED, subject, "please look"));
