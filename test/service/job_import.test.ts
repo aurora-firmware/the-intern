@@ -197,6 +197,14 @@ describe("the import step", () => {
     it("migrates an imported version 2 file to the current version at its next start, with its jobs intact", async () => {
         const { file, jobs } = await exportedFile();
         const older = new DatabaseSync(file);
+        older.exec("DROP TABLE intern_mail_intake");
+        older.exec("DROP TABLE intern_mail_messages");
+        older.exec("DROP TABLE intern_mail_thread");
+        older.exec("DROP TABLE intern_mail_outbox");
+        older.exec("DROP INDEX intern_jobs_by_mail_account");
+        older.exec("ALTER TABLE intern_jobs DROP COLUMN mail_account");
+        older.exec("ALTER TABLE intern_jobs DROP COLUMN mail_message");
+        older.exec("ALTER TABLE intern_jobs DROP COLUMN request_mark");
         older.exec("DROP TABLE intern_job_keys");
         older.exec("DROP INDEX intern_jobs_by_schedule_instant");
         older.exec("DROP INDEX intern_jobs_by_schedule");

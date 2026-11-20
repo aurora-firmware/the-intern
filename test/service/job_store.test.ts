@@ -108,9 +108,17 @@ describe("job store migration 2", () => {
             [null, null],
         );
         assert.deepEqual(
-            after.map(({ blocked_after_entry: _a, schedule_entry: _b, schedule_fired_at: _c, ...rest }) => ({
-                ...rest,
-            })),
+            after.map(
+                ({
+                    blocked_after_entry: _a,
+                    schedule_entry: _b,
+                    schedule_fired_at: _c,
+                    mail_account: _d,
+                    mail_message: _e,
+                    request_mark: _f,
+                    ...rest
+                }) => ({ ...rest }),
+            ),
             before,
         );
         assert.equal(await createJobStore(db).blockedAfterEntryOf("id-1"), null);
@@ -224,8 +232,8 @@ describe("scoped idempotency", () => {
 });
 
 describe("job store schedule runs", () => {
-    it("is at schema version 5", () => {
-        assert.equal(JOB_SCHEMA_VERSION, 5);
+    it("is at schema version 6", () => {
+        assert.equal(JOB_SCHEMA_VERSION, 6);
     });
 
     it("orders the local-offset runs and UTC skips of a version 4 file by instant after migrating", async () => {
@@ -243,7 +251,7 @@ describe("job store schedule runs", () => {
             "2026-11-08T00:02:00.000Z",
         );
         await migrateJobStore(db);
-        assert.equal(await readJobSchemaVersion(db), 5);
+        assert.equal(await readJobSchemaVersion(db), JOB_SCHEMA_VERSION);
         const store = createJobStore(db);
         const kinds = async (limit: number) =>
             (await store.listScheduleRuns("e", { limit })).items.map((item) =>
