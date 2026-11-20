@@ -5,9 +5,10 @@
  * same directories and settles it before the host resumes.
  */
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import { type FauxProviderRegistration, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { getApiProvider, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { createProvider } from "@earendil-works/pi-ai/models";
@@ -17,12 +18,13 @@ import { createLogger } from "../../src/daemon/logger.ts";
 import type { JobAuthor } from "../../src/jobs/job_model.ts";
 import type { Job } from "../../src/jobs/job_store.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
-import { createMailComponent, type MailComponent } from "../../src/mail/mail_component.ts";
+import { createMailComponent, type MailComponent, type MailWritePoint } from "../../src/mail/mail_component.ts";
 import type { MailAccount } from "../../src/mail/mail_model.ts";
 import type { OutboxRow, OutboxState } from "../../src/mail/mail_store.ts";
 import { createMailPolicy } from "../../src/mail/outbox.ts";
 import { hasSavedCopy, writeSavedCopy } from "../../src/mail/saved_copy.ts";
-import { type FakeMailServer, startFakeMailServer } from "../support/fake_mail_server.ts";
+import { type DaemonProcess, startDaemon as startChildDaemon } from "../support/daemon_process.ts";
+import { type FakeMailServer, startFakeMailServer, TEST_CA_FILE } from "../support/fake_mail_server.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { scaled } from "../support/time_scale.ts";
 
@@ -33,6 +35,7 @@ const quietLogger = createLogger({ stream: { write: () => true } });
 const lead: JobAuthor = { kind: "agent", conversationId: "c-1", role: "lead" };
 const teamMember: JobAuthor = { kind: "team_member", wayIn: "web interface" };
 const PASSWORD = "pw";
+const CLOCK_START = "2026-03-02T09:00:00.000Z";
 const SENDER = "ana@example.test";
 const SUBJECT = "Please look at this";
 const RAW_EMAIL = `From: ${SENDER}\r\nSubject: ${SUBJECT}\r\n\r\nhello`;
@@ -43,8 +46,13 @@ const envs: HermeticEnv[] = [];
 const daemons: RunningDaemon[] = [];
 const fakes: FauxProviderRegistration[] = [];
 const servers: FakeMailServer[] = [];
+const children: DaemonProcess[] = [];
 
 afterEach(async () => {
+    for (const child of children.splice(0)) {
+        child.kill9();
+        await child.exited;
+    }
     for (const running of daemons.splice(0)) await running.stop();
     for (const fake of fakes.splice(0)) fake.unregister();
     for (const server of servers.splice(0)) await server.stop();
@@ -67,10 +75,6 @@ async function startRig(accountNames: string[]): Promise<Rig> {
     const fake = registerFauxProvider({ models: [{ id: "model-one", reasoning: true }] });
     fake.setResponses([async () => fauxAssistantMessage("done")]);
     fakes.push(fake);
-    await writeFile(
-        join(env.piAgentDir, "settings.json"),
-        JSON.stringify({ defaultProvider: fake.getModel().provider, defaultModel: "model-one" }),
-    );
     const server = await startFakeMailServer();
     servers.push(server);
     for (const name of accountNames) {
@@ -122,6 +126,11 @@ async function startDaemon(rig: Rig, withMail: boolean): Promise<Started> {
         },
     };
     const { env, fake } = rig;
+    // A child writes its own fake model as the default and leaves one that exists, so each owner writes it afresh.
+    await writeFile(
+        join(env.piAgentDir, "settings.json"),
+        JSON.stringify({ defaultProvider: fake.getModel().provider, defaultModel: "model-one" }),
+    );
     const running = runDaemon({
         flags: { configDir: env.configDir, stateDir: env.stateDir, dataDir: env.dataDir, runtimeDir: env.runtimeDir },
         env: env.env,
@@ -223,13 +232,27 @@ async function completeWithReply(
     );
 }
 
-/** What `markSending` commits: the row `sending` with its composed message and its thread entry. */
-async function leaveSending(ctx: ServiceContext, row: OutboxRow): Promise<void> {
-    const messageId = `<sending-${row.id}@example.test>`;
-    await ctx.jobStore.writeMail(async (tx) => {
-        await tx.setOutboxState(row.id, "sending", { messageId, raw: Buffer.from("composed") });
-        await tx.addThread({ messageId, job: row.job, direction: "out" });
+/** Starts a child daemon on the rig's directories; it kills itself with `SIGKILL` at `mailCrashAt` when given. */
+async function startChild(rig: Rig, mailCrashAt?: MailWritePoint): Promise<DaemonProcess> {
+    await rm(join(rig.env.piAgentDir, "settings.json"), { force: true });
+    const child = startChildDaemon({
+        hermetic: { ...rig.env, env: { ...rig.env.env, NODE_EXTRA_CA_CERTS: TEST_CA_FILE } },
+        mailClock: CLOCK_START,
+        ...(mailCrashAt !== undefined && { mailCrashAt }),
     });
+    children.push(child);
+    await child.ready;
+    return child;
+}
+
+async function untilKilled(child: DaemonProcess): Promise<void> {
+    // The timer is cancelled once the child exits, or it would hold the test process open for the whole wait.
+    const timer = new AbortController();
+    const timeout = sleep(WAIT_MS, "timeout" as const, { signal: timer.signal }).catch(() => undefined);
+    const outcome = await Promise.race([child.exited, timeout]);
+    timer.abort();
+    assert.notEqual(outcome, "timeout", "the daemon was never killed");
+    assert.equal((outcome as { signal: string | null }).signal, "SIGKILL");
 }
 
 const rowsIn = (ctx: ServiceContext, state: OutboxState): Promise<OutboxRow[]> =>
@@ -248,13 +271,13 @@ describe("the mail repair at startup", () => {
         const seed = await startDaemon(rig, false);
         const cut = await emailJob(seed.ctx, "work");
         await completeWithReply(rig, seed.ctx, cut, "work", "Cut short.");
-        const [row] = await rowsIn(seed.ctx, "owed");
-        await leaveSending(seed.ctx, row as OutboxRow);
-        // The marker is owed after the row that was cut short, so a sender that took that row would take it first.
+        // The marker is owed after the row that is cut short, so a sender that took that row would take it first.
         const marker = await emailJob(seed.ctx, "work");
         await completeWithReply(rig, seed.ctx, marker, "work", "Marker.");
         await stopDaemon(seed);
         await writeConfig(rig, ["work"]);
+        await untilKilled(await startChild(rig, "mail-sending"));
+        assert.equal(rig.server.received().length, 0);
 
         const started = await startDaemon(rig, true);
         await untilTrue("the marker to be sent", async () => (await rowsIn(started.ctx, "sent")).length === 1);
@@ -272,6 +295,12 @@ describe("the mail repair at startup", () => {
         await completeWithReply(rig, seed.ctx, job, "work", "All done.");
         await stopDaemon(seed);
         await writeConfig(rig, ["work"]);
+        // The paused server keeps the account from being ready, so the killed daemon never began to send.
+        rig.server.pause();
+        const child = await startChild(rig);
+        child.kill9();
+        await untilKilled(child);
+        rig.server.resume();
 
         const started = await startDaemon(rig, true);
         await untilTrue("the reply to be sent", async () => (await rowsIn(started.ctx, "sent")).length === 1);
