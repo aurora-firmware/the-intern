@@ -26,6 +26,7 @@ import { createJobsComponent, type JobsComponentOptions, type WritePoint } from 
 import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
 import { createNetworkListenerComponent, type NetworkListenerComponent } from "../../src/listeners/network_listener.ts";
 import { networkSection } from "../../src/listeners/network_section.ts";
+import { createMailComponent } from "../../src/mail/mail_component.ts";
 import type { InternModels } from "../../src/models/model_runtime.ts";
 import { createSchedulesComponent } from "../../src/schedules/schedules_component.ts";
 import { createJob, type JobView } from "../../src/service/job_operations.ts";
@@ -523,15 +524,15 @@ function submissionStateOperation() {
     });
 }
 
-/** Moves the schedules' test clock to a time, forward or back. */
-function setClockOperation(clock: TestClock) {
+/** Moves a test clock to a time, forward or back, as the operation of the given name. */
+function setClockOperation(name: string, clock: TestClock) {
     return defineOperation<ServiceContext, { time: string }, Record<string, never>>({
-        name: "test.setClock",
+        name,
         kind: "control",
         parse: (raw) => raw as { time: string },
         async run(_ctx, { time }) {
             const moved = new Date(time);
-            if (Number.isNaN(moved.getTime())) throw new Error(`test.setClock needs an ISO time, got ${time}`);
+            if (Number.isNaN(moved.getTime())) throw new Error(`${name} needs an ISO time, got ${time}`);
             clock.set(moved);
             return {};
         },
@@ -653,6 +654,14 @@ async function main(): Promise<void> {
     });
     const testClock =
         switches.scheduleClock === undefined ? undefined : createTestClock(new Date(switches.scheduleClock));
+    const mailClock = switches.mailClock === undefined ? undefined : createTestClock(new Date(switches.mailClock));
+    const mail = await createMailComponent({
+        agents,
+        jobs,
+        logger,
+        ...(mailClock && { clock: mailClock }),
+        ...(switches.oauthEndpoints && { oauthEndpoints: switches.oauthEndpoints }),
+    });
     const schedules = await createSchedulesComponent({
         agents,
         jobs,
@@ -664,7 +673,7 @@ async function main(): Promise<void> {
         env: process.env,
         homeDir: process.env.HOME ?? "",
         logger,
-        sections: [...agents.sections, ...schedules.sections, networkSection],
+        sections: [...agents.sections, ...mail.sections, ...schedules.sections, networkSection],
         // The jobs and desk components and the local socket follow the agents component, as in `src/cli/bob.ts`.
         components: [
             // First, so its hook runs in the tick that resumes the host, before any model request can start.
@@ -677,6 +686,7 @@ async function main(): Promise<void> {
             ...(switches.killAfterResume ? [killAfterResumeComponent()] : []),
             jobs.component,
             desk.component,
+            mail.component,
             schedules.component,
             createLocalSocketComponent(),
             ...(network ? [network.component] : []),
@@ -686,8 +696,10 @@ async function main(): Promise<void> {
             ...agents.operations,
             ...jobs.operations,
             ...desk.operations,
+            ...mail.operations,
             ...schedules.operations,
-            ...(testClock ? [setClockOperation(testClock)] : []),
+            ...(testClock ? [setClockOperation("test.setClock", testClock)] : []),
+            ...(mailClock ? [setClockOperation("test.mail.clock.set", mailClock)] : []),
             blockJobOperation(jobs),
             createJobCancelledBeforeLeadOperation(jobs),
             cancelJobsThenKillOperation(jobs),
@@ -700,6 +712,7 @@ async function main(): Promise<void> {
                 modelFor: (ctx) => modelFor(ctx, fakeModelId, switches.model),
             }),
         ],
+        accountStatus: mail.accountStatus,
         ...(switches.workerThreads !== undefined && { workerThreadCount: switches.workerThreads }),
         ...(fake && { prepareModels: (runtime: InternModels) => modelsWithFake(runtime, fake) }),
         openStorage: async (database) => {
