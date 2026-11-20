@@ -35,19 +35,25 @@ function isAlive(pid: number): boolean {
 }
 
 describe("the mail test rig", () => {
-    it("runs the mail component with the test clock in the daemon process (AC-1)", { timeout: TEST_TIMEOUT_MS }, async () => {
+    it("runs the mail component with the test clock in the daemon process (AC-1)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
         const rig = await start({ accounts: [{ name: "work", address: ADDRESS, password: PASSWORD }] });
 
         await rig.setClock(new Date(AFTER_RETRY_PAUSE));
     });
 
-    it("turns an owned account on the fake server ready in daemon.status (AC-2)", { timeout: TEST_TIMEOUT_MS }, async () => {
+    it("turns an owned account on the fake server ready in daemon.status (AC-2)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
         const rig = await start({ accounts: [{ name: "work", address: ADDRESS, password: PASSWORD }] });
 
         await rig.waitForStatus("work", "ready");
     });
 
-    it("retries a failing account when the mail clock passes its pause (AC-3)", { timeout: TEST_TIMEOUT_MS }, async () => {
+    it("retries a failing account when the mail clock passes its pause (AC-3)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
         const rig = await start({
             clockStart: new Date(START_TIME),
             accounts: [{ name: "work", address: ADDRESS, password: PASSWORD, isKnownToServer: false }],
@@ -60,7 +66,9 @@ describe("the mail test rig", () => {
         await rig.waitForStatus("work", "ready");
     });
 
-    it("keeps the account's mail across a restart on the same directories", { timeout: TEST_TIMEOUT_MS }, async () => {
+    it("turns the account ready again after a restart on the same directories", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
         const rig = await start({ accounts: [{ name: "work", address: ADDRESS, password: PASSWORD }] });
         await rig.waitForStatus("work", "ready");
 
@@ -73,10 +81,15 @@ describe("the mail test rig", () => {
         const rig = await start({ accounts: [{ name: "work", address: ADDRESS, password: PASSWORD }] });
         await rig.waitForStatus("work", "ready");
 
-        await assert.rejects(rig.waitForJob(() => false, { timeoutMs: scaled(300) }), /timed out/);
+        await assert.rejects(
+            rig.waitForJob(() => false, { timeoutMs: scaled(300) }),
+            /timed out/,
+        );
     });
 
-    it("stops the daemon, the fake server and the provider, leaving no process behind (AC-4)", { timeout: TEST_TIMEOUT_MS }, async () => {
+    it("stops the daemon, the fake server and the provider, leaving no process behind (AC-4)", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
         const rig = await start({ accounts: [{ name: "work", address: ADDRESS, password: PASSWORD }] });
         await rig.waitForStatus("work", "ready");
         const { pid } = rig.process();

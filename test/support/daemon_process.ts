@@ -6,6 +6,7 @@
 import { fork } from "node:child_process";
 import { createServer } from "node:net";
 import { join } from "node:path";
+import type { ProviderEndpoints } from "../../src/accounts/providers.ts";
 import type { DeskCreatePoint } from "../../src/desk/desk_component.ts";
 import type { WritePoint } from "../../src/jobs/jobs_component.ts";
 import { ServiceError, type ServiceErrorCode } from "../../src/service/operations.ts";
@@ -137,6 +138,13 @@ export type StartDaemonOptions = {
      * moves the clock forward or back; without it, the real clock runs.
      */
     scheduleClock?: string;
+    /**
+     * The time (an ISO instant) the mail component's test clock starts at. With it, the child's operation
+     * `test.mail.clock.set` moves the clock forward or back; without it, the real clock runs.
+     */
+    mailClock?: string;
+    /** The OAuth endpoints the mail component uses, in place of the providers' own: the fake provider's. */
+    oauthEndpoints?: ProviderEndpoints;
 };
 
 export type DaemonProcess = {
