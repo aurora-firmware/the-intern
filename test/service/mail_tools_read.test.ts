@@ -23,10 +23,10 @@ import { createDeskComponent } from "../../src/desk/desk_component.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
 import { createSeatedConversation } from "../../src/host/seating.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
-import type { ImapConnection } from "../../src/mail/imap_client.ts";
+import { type ImapConnection, ImapFailure } from "../../src/mail/imap_client.ts";
 import { createMailComponent } from "../../src/mail/mail_component.ts";
 import { composeMessage } from "../../src/mail/mime.ts";
-import { createToolConnections } from "../../src/mail/tool_connection.ts";
+import { createToolConnections, MailToolRefusal } from "../../src/mail/tool_connection.ts";
 import { MAIL_TOOL_NAMES } from "../../src/roles/role_model.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { type FakeMailServer, startFakeMailServer } from "../support/fake_mail_server.ts";
@@ -223,6 +223,8 @@ async function start() {
     return {
         workServer,
         watchServer,
+        mail,
+        daemon,
         invoke,
         async seat(role: string): Promise<{ conversationId: string; workspace: string }> {
             assert.ok(!seatedKeys.has(role), "seat a role once");
@@ -428,6 +430,58 @@ describe("the mail tools that read", { timeout: TEST_TIMEOUT_MS }, () => {
             assert.deepEqual(await readFile(join(workspace, "saved", "data.bin")), BINARY);
         });
 
+        it("refuses two attachments of one name and writes none of the message (AC-4)", async () => {
+            const started = await start();
+            await deliverMessage(started.workServer, WORK.address, {
+                subject: "twins",
+                text: "two files, one name",
+                attachments: [
+                    { filename: "same.txt", content: Buffer.from("one") },
+                    { filename: "same.txt", content: Buffer.from("two") },
+                ],
+            });
+            const { conversationId, workspace } = await started.seat("reader");
+            await mkdir(join(workspace, "saved"), { recursive: true });
+            const [found] = await started.run(conversationId, [
+                { name: "mail_search", arguments: { account: WORK.name } },
+            ]);
+            const target = (jsonOf(found) as Found).messages[0];
+
+            const [refused] = await started.run(conversationId, [
+                {
+                    name: "mail_save_attachments",
+                    arguments: {
+                        account: WORK.name,
+                        folder: "INBOX",
+                        uidValidity: target?.uidValidity,
+                        uid: target?.uid,
+                        directory: "saved",
+                    },
+                },
+            ]);
+
+            assert.equal(refused?.isError, true);
+            assert.match(refused?.text ?? "", /same\.txt/);
+            assert.deepEqual(await readdir(join(workspace, "saved")), []);
+        });
+
+        it("closes the account's tools connection when the account stops, and every connection when the daemon stops", async () => {
+            const { started, conversationId } = await readerWithMail();
+            await started.run(conversationId, [{ name: "mail_list_folders", arguments: { account: WORK.name } }]);
+            await until(
+                "the tools connection to be the only one open",
+                () => started.workServer.openConnections() === 1,
+            );
+
+            started.mail.control.stopAccount(WORK.name);
+            await until("the stopped account's connection to close", () => started.workServer.openConnections() === 0);
+            await started.run(conversationId, [{ name: "mail_list_folders", arguments: { account: WATCH.name } }]);
+            await until("the watch connection to be open", () => started.watchServer.openConnections() === 1);
+            await started.daemon.stop();
+
+            await until("the daemon's connections to close", () => started.watchServer.openConnections() === 0);
+        });
+
         it("refuses a folder that doesn't exist and doesn't create it (AC-4)", async () => {
             const { started, conversationId, workspace } = await readerWithMail();
 
@@ -471,7 +525,7 @@ describe("the mail tools' connections", () => {
     const account = { name: "work", imapHost: "h", imapPort: 1, imapSecurity: "none", checkIntervalSeconds: 60 };
 
     function connections(idleMs: number) {
-        const state = { opened: 0, loggedOut: 0, running: 0, mostRunning: 0 };
+        const state = { opened: 0, loggedOut: 0, running: 0, mostRunning: 0, closed: new Set<ImapConnection>() };
         const tools = createToolConnections({
             account: () => account as never,
             status: () => "ready",
@@ -479,10 +533,13 @@ describe("the mail tools' connections", () => {
             idleMs,
             open: async () => {
                 state.opened += 1;
-                const logout = async () => {
-                    state.loggedOut += 1;
-                };
-                return { logout } as unknown as ImapConnection;
+                const connection = {
+                    logout: async () => {
+                        state.loggedOut += 1;
+                        state.closed.add(connection);
+                    },
+                } as unknown as ImapConnection;
+                return connection;
             },
         });
         const call = () =>
@@ -513,6 +570,35 @@ describe("the mail tools' connections", () => {
         await until("the idle connection to close", () => state.loggedOut === 1);
         await call();
 
+        assert.equal(state.opened, 2);
+        await tools.closeAll();
+    });
+
+    it("keeps the connection when a call is refused for a reason of its own", async () => {
+        const { state, tools } = connections(scaled(60_000));
+
+        await assert.rejects(
+            tools.use("work", async () => {
+                throw new MailToolRefusal("no such folder");
+            }),
+            /no such folder/,
+        );
+        await tools.use("work", async () => undefined);
+
+        assert.deepEqual([state.opened, state.loggedOut], [1, 0]);
+        await tools.closeAll();
+    });
+
+    it("runs a call queued behind a lost connection on a new one", async () => {
+        const { state, tools } = connections(scaled(60_000));
+        const lost = tools.use("work", async () => {
+            throw new ImapFailure("unreachable", "the connection was lost");
+        });
+        const queued = tools.use("work", async (imap) => (state.closed.has(imap) ? "closed" : "open"));
+
+        await assert.rejects(lost, /lost/);
+
+        assert.equal(await queued, "open");
         assert.equal(state.opened, 2);
         await tools.closeAll();
     });
