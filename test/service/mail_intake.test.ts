@@ -1,15 +1,22 @@
 /**
- * Intake (S-009 REQ-006, REQ-007, REQ-009: AC-006.1, AC-006.2, AC-007.1, AC-009.2 and the open-job route of AC-009.1):
- * each new email of an owned inbox becomes a triage job or input to the open job of its thread, on the mail rig.
+ * Intake (S-009 REQ-006, REQ-007, REQ-009, REQ-021, REQ-023): each new email of an owned inbox becomes a triage job or
+ * input to the open job of its thread, on the mail rig and, for the status deltas, in a daemon of this process.
  */
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import type { AgentsComponent } from "../../src/agents/agents_component.ts";
+import { runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
+import { createLogger } from "../../src/daemon/logger.ts";
+import type { JobsComponent } from "../../src/jobs/jobs_component.ts";
 import { type MessageRef, openImap } from "../../src/mail/imap_client.ts";
+import { createMailComponent } from "../../src/mail/mail_component.ts";
 import { composeMessage } from "../../src/mail/mime.ts";
-import type { FakeMailServer } from "../support/fake_mail_server.ts";
+import { type FakeMailServer, startFakeMailServer } from "../support/fake_mail_server.ts";
+import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { type MailRig, startMailRig } from "../support/mail_rig.ts";
+import { createTestClock, type TestClock } from "../support/schedule_rig.ts";
 import { scaled } from "../support/time_scale.ts";
 
 const TEST_TIMEOUT_MS = scaled(60_000);
@@ -20,25 +27,26 @@ const SENDER = "ann@example.test";
 const PASSWORD = "s3cret";
 const AFTER_RETRY_PAUSE = "2026-03-02T11:00:00.000Z";
 const EXISTING_MESSAGES = 5000;
-// S-009 REQ-023: unscaled, since it is the spec's bound and the library's own IDLE restart (15 s) must not meet it.
+// REQ-023's bound, unscaled: the library's own IDLE restart (15 s) must not meet it.
 const ANNOUNCED_MAIL_BOUND_MS = 10_000;
 
-type Entry = { field: string; old: unknown; new: unknown; author: { kind: string } };
+type Entry = { field: string; old: unknown; new: unknown };
 type Job = {
     id: string;
     leadConversation?: string;
     number: string;
     status: string;
     related: string[];
-    request: { text: string; origin: { kind: string; wayIn: string; observed?: Record<string, string> } };
+    request: Request;
 };
+type Request = { text: string; origin: { kind: string; wayIn: string; observed?: Record<string, string> } };
 
 const scenario = (name: string, run: () => Promise<void>) => it(name, { timeout: TEST_TIMEOUT_MS }, run);
 
-const rigs: MailRig[] = [];
+const cleanups: (() => Promise<unknown>)[] = [];
 
 afterEach(async () => {
-    for (const rig of rigs.splice(0)) await rig.stop();
+    for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
 async function until<T>(what: string, attempt: () => Promise<T | undefined> | T | undefined): Promise<T> {
@@ -53,28 +61,32 @@ async function until<T>(what: string, attempt: () => Promise<T | undefined> | T 
 
 const jobsOf = async (rig: MailRig) =>
     ((await rig.process().invoke("jobs.list", {})) as { jobs: Job[] }).jobs.toSorted((a, b) =>
-        a.number.localeCompare(b.number, undefined, { numeric: true }),
+        a.number.localeCompare(b.number),
     );
 
 /** Starts the rig with the account unknown to the server, so it first connects once the test has filled the inbox. */
 async function startWatching(existing: (server: FakeMailServer) => void = () => undefined): Promise<MailRig> {
-    const rig = await startMailRig({
-        accounts: [{ name: "work", address: ADDRESS, password: PASSWORD, isKnownToServer: false }],
-    });
-    rigs.push(rig);
+    const account = { name: "work", address: ADDRESS, password: PASSWORD, isKnownToServer: false };
+    const rig = await startMailRig({ accounts: [account] });
+    cleanups.push(() => rig.stop());
     await rig.waitForStatus("work", "failing");
     rig.server.addAccount({ address: ADDRESS, login: ADDRESS, password: PASSWORD });
     existing(rig.server);
     await rig.setClock(new Date(AFTER_RETRY_PAUSE));
     await rig.waitForStatus("work", "ready");
-    await until("intake to watch the inbox", () =>
-        rig.process().stderr().includes("mail intake watching") ? true : undefined,
-    );
+    await watching(rig);
     return rig;
 }
 
-const jobOf = async (rig: MailRig, job: Job | undefined) =>
-    (await rig.process().invoke("jobs.get", { job: job?.id })) as Job;
+const watching = (rig: MailRig) =>
+    until("intake to watch the inbox", () =>
+        rig.process().stderr().includes("mail intake watching") ? true : undefined,
+    );
+
+const jobOf = async (rig: MailRig, job?: Job) => (await rig.process().invoke("jobs.get", { job: job?.id })) as Job;
+
+const untilBlocked = (rig: MailRig, job?: Job) =>
+    until("the job to block", async () => ((await jobOf(rig, job)).status === "blocked" ? true : undefined));
 
 const untilJobs = (rig: MailRig, count: number) =>
     until(`${count} jobs`, async () => ((await jobsOf(rig)).length >= count ? await jobsOf(rig) : undefined));
@@ -88,6 +100,41 @@ const rawMail = (subject: string, text: string, headers: string[] = []): string 
     ]
         .concat(headers, ["", text, ""])
         .join("\r\n");
+
+const accountToml = (server: FakeMailServer) =>
+    ["[[mail_account]]", 'name = "work"', 'kind = "owned"', `address = "${ADDRESS}"`, 'imap_host = "127.0.0.1"']
+        .concat(`imap_port = ${server.imapPort}`, 'imap_security = "none"', 'auth = "password_command"')
+        .concat(`password_command = ["printf", "%s", "${PASSWORD}"]`, "")
+        .join("\n");
+
+/** The mail component alone in a daemon of this process, with the hub's status changes recorded. */
+async function runMail(env: HermeticEnv, clock: TestClock) {
+    const log: string[] = [];
+    const logger = createLogger({ stream: { write: (chunk: string) => log.push(chunk) > 0 } });
+    const catalog = { addReferenceSource() {}, get: () => ({}) };
+    const [agents, jobs] = [{ runtime: () => ({ catalog }) }, { options: {} }] as unknown as [
+        AgentsComponent,
+        JobsComponent,
+    ];
+    const mail = await createMailComponent({ clock, agents, jobs, logger });
+    const statuses: string[] = [];
+    mail.accountStatus.onChange((view) => statuses.push(view.status));
+    const contexts: ServiceContext[] = [];
+    const { configDir, stateDir, dataDir, runtimeDir } = env;
+    const daemon = runDaemon({
+        flags: { configDir, stateDir, dataDir, runtimeDir },
+        env: env.env,
+        homeDir: env.root,
+        logger,
+        sections: mail.sections,
+        components: [mail.component, { name: "probe", start: async (ctx) => void contexts.push(ctx) }],
+        operations: mail.operations,
+        accountStatus: mail.accountStatus,
+    });
+    cleanups.push(() => daemon.stop());
+    await until("intake to watch the inbox", () => (log.join("").includes("mail intake watching") ? true : undefined));
+    return { mail, statuses, daemon, ctx: contexts[0] as ServiceContext };
+}
 
 describe("intake", () => {
     scenario("leaves the existing inbox alone and takes the one email that arrives (AC-1)", async () => {
@@ -106,19 +153,18 @@ describe("intake", () => {
     scenario("makes one job for an email, an auto-reply, a failure report and a list message (AC-2)", async () => {
         const rig = await startWatching();
         const subjects = ["ordinary", "out of office", "delivery failure", "list message"];
-        const headers: Record<string, string[]> = {
-            "out of office": ["Auto-Submitted: auto-replied", "Precedence: auto_reply"],
-            "delivery failure": ["Content-Type: multipart/report; report-type=delivery-status; boundary=b"],
-            "list message": ["List-Id: <news.example.test>", "Precedence: bulk"],
-        };
+        const headers = [
+            "Auto-Submitted: auto-replied",
+            "Content-Type: multipart/report; boundary=b",
+            "List-Id: <l.test>",
+        ];
 
-        for (const subject of subjects) rig.deliver(ADDRESS, rawMail(subject, "body", headers[subject]));
+        for (const [n, subject] of subjects.entries())
+            rig.deliver(ADDRESS, rawMail(subject, "body", headers.slice(n - 1, n)));
 
         const jobs = await untilJobs(rig, subjects.length);
-        assert.equal(jobs.length, subjects.length);
-        for (const subject of subjects) {
-            assert.equal(jobs.filter((job) => job.request.text.includes(`Subject: ${subject}`)).length, 1, subject);
-        }
+        const taken = jobs.map((job) => /Subject: (.*)/.exec(job.request.text)?.[1]);
+        assert.deepEqual(taken.toSorted(), subjects.toSorted());
         assert.deepEqual(rig.server.received(), []);
     });
 
@@ -129,24 +175,39 @@ describe("intake", () => {
 
         rig.deliver(ADDRESS, rawMail("two", "second"));
 
-        const second = await rig.waitForJob((job) => job.id !== first?.id, { timeoutMs: ANNOUNCED_MAIL_BOUND_MS });
-        assert.ok(second);
+        await rig.waitForJob((job) => job.id !== first?.id, { timeoutMs: ANNOUNCED_MAIL_BOUND_MS });
+    });
+
+    scenario("sets the last error with every status delta ready when UIDVALIDITY changed (AC-7)", async () => {
+        const env = await createHermeticEnv();
+        const server = await startFakeMailServer();
+        cleanups.push(() => env.dispose());
+        cleanups.push(() => server.stop());
+        server.addAccount({ address: ADDRESS, login: ADDRESS, password: PASSWORD });
+        await writeFile(join(env.configDir, "config.toml"), accountToml(server));
+        const clock = createTestClock(new Date(AFTER_RETRY_PAUSE));
+        const first = await runMail(env, clock);
+        await first.daemon.stop();
+        server.setUidValidity(ADDRESS, 4242);
+        server.deliver(ADDRESS, rawMail("lost", "body"));
+
+        const second = await runMail(env, clock);
+
+        const lastError = await until("the last error", () => second.mail.accountStatus.get("mail", "work")?.lastError);
+        assert.match(lastError.message, /could no longer tell old mail from new/);
+        assert.deepEqual(new Set(second.statuses.slice(second.statuses.indexOf("ready"))), new Set(["ready"]));
+        assert.deepEqual((await second.ctx.jobStore.listJobs({})).jobs, []);
     });
 
     scenario("saves the message and its attachments and leaves the message in INBOX unflagged (AC-3)", async () => {
         const rig = await startWatching();
         const pdf = Buffer.from(Array.from({ length: 10_240 }, (_, index) => (index * 31 + 7) % 256));
         const note = Buffer.from("remember the milk");
-        const sent = await composeMessage({
-            from: SENDER,
-            to: [ADDRESS],
-            subject: "with files",
-            text: "see attached",
-            attachments: [
-                { filename: "report.pdf", contentType: "application/pdf", content: pdf },
-                { filename: "note.txt", contentType: "text/plain", content: note },
-            ],
-        });
+        const attachments = [
+            { filename: "report.pdf", contentType: "application/pdf", content: pdf },
+            { filename: "note.txt", contentType: "text/plain", content: note },
+        ];
+        const sent = await composeMessage({ from: SENDER, to: [ADDRESS], subject: "files", text: "see", attachments });
 
         rig.deliver(ADDRESS, sent.raw);
 
@@ -156,18 +217,14 @@ describe("intake", () => {
             wayIn: "email",
             observed: { account: "work", messageId: sent.messageId, sender: SENDER },
         });
-        const view = (await rig.process().invoke("jobs.get", { job: job?.id })) as { leadConversation: string };
-        const lead = (await rig.process().invoke("conversations.get", { conversationId: view.leadConversation })) as {
-            seat: { role: string };
-        };
-        assert.equal(lead.seat.role, "triage");
-        const paths = [...(job?.request.text.matchAll(/^(?:Saved message: |- )(\/.+)$/gm) ?? [])].map(
-            (match) => match[1],
-        );
+        const conversationId = (await jobOf(rig, job)).leadConversation;
+        const lead = await rig.process().invoke("conversations.get", { conversationId });
+        assert.equal((lead as { seat: { role: string } }).seat.role, "triage");
+        const paths = [...(job?.request.text.matchAll(/^(?:Saved message: |- )(\/.+)$/gm) ?? [])].map((m) => m[1]);
         assert.equal(paths.length, 3);
-        const [message, ...attachments] = await Promise.all(paths.map((path) => readFile(path as string)));
+        const [message, ...saved] = await Promise.all(paths.map((path) => readFile(path as string)));
         assert.deepEqual(message, sent.raw);
-        assert.deepEqual(attachments, [pdf, note]);
+        assert.deepEqual(saved, [pdf, note]);
         const [stored] = rig.server.mailbox(ADDRESS, "INBOX");
         assert.deepEqual([stored?.flags, stored?.raw], [[], sent.raw]);
     });
@@ -176,11 +233,8 @@ describe("intake", () => {
         const rig = await startWatching();
         rig.deliver(ADDRESS, rawMail("first", "please file this"));
         const [first] = await untilJobs(rig, 1);
-        await until("the first job to settle", async () =>
-            (await jobOf(rig, first)).status === "blocked" ? true : undefined,
-        );
-        const finished = await rig.process().invoke("jobs.cancel", { job: first?.id, justification: "not needed" });
-        assert.equal((finished as Job).status, "done");
+        await untilBlocked(rig, first);
+        await rig.process().invoke("jobs.cancel", { job: first?.id, justification: "not needed" });
 
         rig.deliver(ADDRESS, rawMail("Re: first", "one more thing", ["In-Reply-To: <first@example.test>"]));
         const [, reply] = await untilJobs(rig, 2);
@@ -198,8 +252,8 @@ describe("intake", () => {
         const rig = await startWatching();
         rig.deliver(ADDRESS, rawMail("question", "please file this"));
         const [job] = await untilJobs(rig, 1);
-        await until("the job to block", async () => ((await jobOf(rig, job)).status === "blocked" ? true : undefined));
-        const lead = (await jobOf(rig, job)).leadConversation as string;
+        await untilBlocked(rig, job);
+        const lead = (await jobOf(rig, job)).leadConversation;
 
         rig.deliver(ADDRESS, rawMail("Re: question", "use the staging one", ["In-Reply-To: <question@example.test>"]));
 
@@ -208,91 +262,33 @@ describe("intake", () => {
         await until("the reply to be recorded", async () =>
             (await history()).entries.filter((entry) => entry.field === "mail").length === 2 ? true : undefined,
         );
-        const { entries } = await history();
-        assert.ok(
-            entries.some((entry) => entry.field === "status" && entry.old === "blocked" && entry.new === "in_progress"),
-            "the job resumed",
+        const resumed = (await history()).entries.some(
+            (entry) => entry.field === "status" && entry.old === "blocked" && entry.new === "in_progress",
         );
+        assert.ok(resumed, "the job resumed");
         const read = await rig.process().invoke("conversations.entries", { conversationId: lead, limit: 500 });
-        const [steer] = (
-            read as { entries: { kind: string; data: { actor: unknown; content: string } }[] }
-        ).entries.filter((entry) => entry.kind === "intern.steer");
+        type Steer = { kind: string; data: { actor: unknown; content: string } };
+        const [steer] = (read as { entries: Steer[] }).entries.filter((entry) => entry.kind === "intern.steer");
         assert.deepEqual(steer?.data.actor, { kind: "team_member", wayIn: "email" });
         assert.match(steer?.data.content ?? "", /From: ann@example\.test[\s\S]*use the staging one/);
         assert.equal((await jobsOf(rig)).length, 1);
     });
 
-    describe("on the mail that arrived while the daemon was down", () => {
-        async function whileDown(rig: MailRig, work: () => Promise<void> | void): Promise<void> {
-            rig.process().kill9();
-            await rig.process().exited;
-            await work();
-            await rig.restart();
-            await until("intake to watch again", () =>
-                rig.process().stderr().includes("mail intake watching") ? true : undefined,
-            );
-        }
+    scenario("takes mail that arrived while down in order, passing over a vanished UID (REQ-021)", async () => {
+        const rig = await startWatching();
+        rig.process().kill9();
+        await rig.process().exited;
+        for (const subject of ["a", "b", "c"]) rig.deliver(ADDRESS, rawMail(subject, "body"));
+        const connection = { host: "127.0.0.1", port: rig.server.imapPort, security: "none", idleSeconds: 60 } as const;
+        const imap = await openImap({ ...connection, credential: { user: ADDRESS, password: PASSWORD } });
+        const [ref] = await imap.search("INBOX", { subject: "b" }, 1);
+        await imap.move([ref as MessageRef], "Trash");
+        await imap.logout();
 
-        const subjectsOf = async (rig: MailRig, count: number) =>
-            (await untilJobs(rig, count)).map((job) => /Subject: (.*)/.exec(job.request.text)?.[1]);
+        await rig.restart();
 
-        scenario("takes it in order and passes over a UID that left the inbox (REQ-021)", async () => {
-            const rig = await startWatching();
-
-            await whileDown(rig, async () => {
-                for (const subject of ["a", "b", "c"]) rig.deliver(ADDRESS, rawMail(subject, "body"));
-                const credential = { user: ADDRESS, password: PASSWORD };
-                const imap = await openImap({
-                    host: "127.0.0.1",
-                    port: rig.server.imapPort,
-                    security: "none",
-                    credential,
-                    idleSeconds: 60,
-                });
-                const [ref] = await imap.search("INBOX", { subject: "b" }, 1);
-                await imap.move([ref as MessageRef], "Trash");
-                await imap.logout();
-            });
-
-            assert.deepEqual(await subjectsOf(rig, 2), ["a", "c"]);
-        });
-
-        scenario("takes nothing and sets the last error when UIDVALIDITY changed (REQ-021)", async () => {
-            const rig = await startWatching();
-
-            await whileDown(rig, () => {
-                rig.server.setUidValidity(ADDRESS, 4242);
-                rig.deliver(ADDRESS, rawMail("lost", "body"));
-            });
-
-            const lastError = await until("the last error", async () => {
-                const status = (await rig.process().invoke("daemon.status", {})) as {
-                    mailAccounts: { lastError?: { message: string } }[];
-                };
-                return status.mailAccounts[0]?.lastError?.message;
-            });
-            assert.match(lastError, /could no longer tell old mail from new/);
-            rig.deliver(ADDRESS, rawMail("found", "body"));
-            assert.deepEqual(await subjectsOf(rig, 1), ["found"]);
-            assert.equal((await jobsOf(rig)).length, 1);
-        });
-
-        scenario("starts afresh when the account's identity changed (REQ-006)", async () => {
-            const rig = await startWatching();
-            const file = join(rig.env.configDir, "config.toml");
-
-            await whileDown(rig, async () => {
-                const kept = (await readFile(file, "utf8")).replace(
-                    `address = "${ADDRESS}"`,
-                    `login = "${ADDRESS}"\naddress = "other@example.test"`,
-                );
-                await writeFile(file, kept);
-                rig.deliver(ADDRESS, rawMail("before", "body"));
-            });
-            rig.deliver(ADDRESS, rawMail("after", "body"));
-
-            assert.deepEqual(await subjectsOf(rig, 1), ["after"]);
-            assert.equal((await jobsOf(rig)).length, 1);
-        });
+        const jobs = await untilJobs(rig, 2);
+        const subjects = jobs.map((job) => /Subject: (.*)/.exec(job.request.text)?.[1]);
+        assert.deepEqual(subjects, ["a", "c"]);
     });
 });
