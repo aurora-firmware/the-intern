@@ -10,8 +10,8 @@ import type { WorkspaceRegistry } from "../workspaces/workspace_registry.ts";
 import {
     applyRoleChange,
     COORDINATION_TOOL_NAMES,
-    MAIL_TOOL_SET_ENTRY,
     isSkillName,
+    MAIL_TOOL_SET_ENTRY,
     type RoleChange,
     type RoleDefinition,
     RoleInvalidError,
