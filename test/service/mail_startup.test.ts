@@ -11,10 +11,10 @@ import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
-import { mailAccountSection } from "../../src/mail/mail_section.ts";
 import { createMailComponent, type MailComponent } from "../../src/mail/mail_component.ts";
-import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { mailAccountSection } from "../../src/mail/mail_section.ts";
 import { type FakeMailServer, startFakeMailServer } from "../support/fake_mail_server.ts";
+import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { scaled } from "../support/time_scale.ts";
 
 const WAIT_TIMEOUT_MS = scaled(10_000);
@@ -122,9 +122,13 @@ async function startRig(configToml: (env: HermeticEnv) => string, before?: (env:
             return captured;
         },
         status: async () =>
-            (await daemon.catalogue.invoke("daemon.status", {}, {
-                actor: { kind: "team_member", wayIn: "command line" },
-            })) as Awaited<ReturnType<Rig["status"]>>,
+            (await daemon.catalogue.invoke(
+                "daemon.status",
+                {},
+                {
+                    actor: { kind: "team_member", wayIn: "command line" },
+                },
+            )) as Awaited<ReturnType<Rig["status"]>>,
         until,
     };
     return rig;
@@ -144,9 +148,7 @@ describe("the mail component at startup", () => {
 
     it("turns an account failing when the server refuses the command's password", async () => {
         const server = await mailServer();
-        const rig = await startRig(() =>
-            accountToml(server).replace(PASSWORD, "wrong"),
-        );
+        const rig = await startRig(() => accountToml(server).replace(PASSWORD, "wrong"));
 
         await rig.until("the account to fail", async () => (await statusOf(rig, "work")) === "failing");
         assert.equal(rig.daemon.phase(), "ready");

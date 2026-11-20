@@ -12,6 +12,7 @@ import { createJobsComponent } from "../jobs/jobs_component.ts";
 import { createLocalSocketComponent } from "../listeners/local_socket.ts";
 import { createNetworkListenerComponent } from "../listeners/network_listener.ts";
 import { networkSection } from "../listeners/network_section.ts";
+import { createMailComponent } from "../mail/mail_component.ts";
 import { createSchedulesComponent } from "../schedules/schedules_component.ts";
 
 const FAILURE_EXIT_STATUS = 1;
@@ -45,6 +46,7 @@ export async function runServe(flags: ServeFlags): Promise<number> {
     const agents = await createAgentsComponent({ logger });
     const jobs = await createJobsComponent({ agents, logger });
     const desk = await createDeskComponent({ agents, jobs, logger });
+    const mail = await createMailComponent({ agents, jobs, logger });
     const schedules = await createSchedulesComponent({ agents, jobs, logger });
     const daemon = runDaemon({
         flags: {
@@ -57,17 +59,25 @@ export async function runServe(flags: ServeFlags): Promise<number> {
         env: process.env,
         homeDir: homedir(),
         logger,
-        sections: [...agents.sections, ...schedules.sections, networkSection],
+        sections: [...agents.sections, ...mail.sections, ...schedules.sections, networkSection],
         // The listeners follow the agents component, so they open once the agents are ready (S-003 REQ-001).
         components: [
             agents.component,
             jobs.component,
             desk.component,
+            mail.component,
             schedules.component,
             createLocalSocketComponent(),
             createNetworkListenerComponent(),
         ],
-        operations: [...agents.operations, ...jobs.operations, ...desk.operations, ...schedules.operations],
+        operations: [
+            ...agents.operations,
+            ...jobs.operations,
+            ...desk.operations,
+            ...mail.operations,
+            ...schedules.operations,
+        ],
+        accountStatus: mail.accountStatus,
     });
 
     // stop() of a running shutdown waits for it, so a repeated signal needs no handling of its own.
