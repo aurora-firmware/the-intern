@@ -268,4 +268,143 @@ describe("mail store", () => {
             assert.deepEqual(entry.author, daemon);
         }
     });
+    it("records an intake outcome and keeps the route and job it is not given", async () => {
+        const { store } = await openStore();
+        const { job } = await store.insertJob(newJob());
+        const saved = await store.writeMail((tx) => tx.saveMessage(message({ route: "new" })));
+        await store.writeMail((tx) => tx.recordIntakeOutcome(saved.id, { outcome: "created" }));
+        const first = await store.readMail((tx) => tx.saveMessage(message()));
+        assert.equal(first.outcome, "created");
+        assert.equal(first.route, "new");
+        assert.equal(first.job, null);
+        await store.writeMail((tx) =>
+            tx.recordIntakeOutcome(saved.id, { outcome: "routed", route: "related", job: job.id }),
+        );
+        const second = await store.readMail((tx) => tx.saveMessage(message()));
+        assert.deepEqual([second.outcome, second.route, second.job], ["routed", "related", job.id]);
+    });
+
+    it("reads no intake record before one is written, and an upsert replaces it", async () => {
+        const { store } = await openStore();
+        assert.equal(await store.readMail((tx) => tx.readIntake("work")), undefined);
+        await store.writeMail((tx) => tx.writeIntake("work", { uidvalidity: 7, nextUid: 12, identity: "a" }));
+        await store.writeMail((tx) => tx.writeIntake("work", { uidvalidity: 8, nextUid: 1, identity: "b" }));
+        assert.deepEqual(await store.readMail((tx) => tx.readIntake("work")), {
+            uidvalidity: 8,
+            nextUid: 1,
+            identity: "b",
+        });
+    });
+
+    it("removes the intake record of every account not named", async () => {
+        const { store } = await openStore();
+        await store.writeMail(async (tx) => {
+            for (const account of ["a", "b", "c"]) {
+                await tx.writeIntake(account, { uidvalidity: 1, nextUid: 1, identity: account });
+            }
+            await tx.removeIntakeExcept(["b"]);
+        });
+        const left = await store.readMail(async (tx) => [
+            await tx.readIntake("a"),
+            (await tx.readIntake("b"))?.identity,
+            await tx.readIntake("c"),
+        ]);
+        assert.deepEqual(left, [undefined, "b", undefined]);
+        await store.writeMail((tx) => tx.removeIntakeExcept([]));
+        assert.equal(await store.readMail((tx) => tx.readIntake("b")), undefined);
+    });
+
+    it("returns an inserted outbox row owed, and refuses a second insert of its key", async () => {
+        const { store } = await openStore();
+        const { job } = await store.insertJob(newJob());
+        const row = await store.writeMail((tx) => tx.insertOutbox(outboxRow(job.id, "question:1")));
+        assert.deepEqual(
+            { ...row, id: undefined },
+            {
+                ...outboxRow(job.id, "question:1"),
+                id: undefined,
+                messageId: null,
+                raw: null,
+                state: "owed",
+                serverAnswer: null,
+                copied: null,
+            },
+        );
+        await assert.rejects(
+            store.writeMail((tx) => tx.insertOutbox(outboxRow(job.id, "question:1"))),
+            /UNIQUE/,
+        );
+    });
+
+    it("lists the owed rows of one account oldest first, and the rows of a state for one account or all", async () => {
+        const { store } = await openStore();
+        const { job } = await store.insertJob(newJob());
+        await store.writeMail(async (tx) => {
+            const one = await tx.insertOutbox(outboxRow(job.id, "k:1"));
+            await tx.insertOutbox(outboxRow(job.id, "k:2", "other"));
+            await tx.insertOutbox(outboxRow(job.id, "k:3"));
+            const four = await tx.insertOutbox(outboxRow(job.id, "k:4", "other"));
+            await tx.setOutboxState(one.id, "sent");
+            await tx.setOutboxState(four.id, "sent");
+        });
+        const keys = (rows: { key: string }[]) => rows.map((row) => row.key);
+        assert.deepEqual(keys(await store.readMail((tx) => tx.owedRows("work"))), ["k:3"]);
+        assert.deepEqual(keys(await store.readMail((tx) => tx.owedRows("other"))), ["k:2"]);
+        assert.deepEqual(keys(await store.readMail((tx) => tx.rowsInState("sent"))), ["k:1", "k:4"]);
+        assert.deepEqual(keys(await store.readMail((tx) => tx.rowsInState("sent", "other"))), ["k:4"]);
+        assert.deepEqual(await store.readMail((tx) => tx.rowsInState("refused")), []);
+    });
+
+    it("sets a row's state, and keeps each field the change does not give", async () => {
+        const { store } = await openStore();
+        const { job } = await store.insertJob(newJob());
+        const row = await store.writeMail((tx) => tx.insertOutbox(outboxRow(job.id, "k:1")));
+        await store.writeMail((tx) =>
+            tx.setOutboxState(row.id, "sending", { messageId: "<m@x>", raw: new Uint8Array([9, 8]), copied: false }),
+        );
+        const sending = await store.readMail((tx) => tx.outboxByKey("k:1"));
+        assert.deepEqual(
+            [sending?.state, sending?.messageId, sending?.raw, sending?.copied, sending?.serverAnswer],
+            ["sending", "<m@x>", new Uint8Array([9, 8]), false, null],
+        );
+        await store.writeMail((tx) => tx.setOutboxState(row.id, "refused", { serverAnswer: "550 no", copied: true }));
+        const refused = await store.readMail((tx) => tx.outboxByKey("k:1"));
+        assert.deepEqual(
+            [refused?.state, refused?.messageId, refused?.raw, refused?.copied, refused?.serverAnswer],
+            ["refused", "<m@x>", new Uint8Array([9, 8]), true, "550 no"],
+        );
+    });
+
+    it("finds the newest question of a job that was not held back", async () => {
+        const { store } = await openStore();
+        const a = (await store.insertJob(newJob())).job;
+        const b = (await store.insertJob(newJob())).job;
+        assert.equal(await store.readMail((tx) => tx.newestQuestion(a.id)), undefined);
+        await store.writeMail(async (tx) => {
+            await tx.insertOutbox(outboxRow(a.id, "question:1"));
+            const second = await tx.insertOutbox(outboxRow(a.id, "question:2"));
+            const third = await tx.insertOutbox(outboxRow(a.id, "question:3"));
+            await tx.insertOutbox({ ...outboxRow(a.id, "result:1"), kind: "result" });
+            await tx.insertOutbox(outboxRow(b.id, "question:9"));
+            await tx.setOutboxState(third.id, "held_back");
+            return second;
+        });
+        assert.equal((await store.readMail((tx) => tx.newestQuestion(a.id)))?.key, "question:2");
+    });
+
+    it("lists the saved emails of one job oldest first", async () => {
+        const { store } = await openStore();
+        const a = (await store.insertJob(newJob())).job;
+        const b = (await store.insertJob(newJob())).job;
+        await store.writeMail(async (tx) => {
+            await tx.saveMessage(message({ uid: 1, job: a.id }));
+            await tx.saveMessage(message({ uid: 2, job: b.id }));
+            await tx.saveMessage(message({ uid: 3, job: a.id }));
+        });
+        const rows = await store.readMail((tx) => tx.emailRowsOf(a.id));
+        assert.deepEqual(
+            rows.map((row) => row.uid),
+            [1, 3],
+        );
+    });
 });
