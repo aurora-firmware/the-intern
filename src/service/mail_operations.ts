@@ -5,24 +5,39 @@
  * afresh or stops it. No result holds a secret.
  */
 import type { AccountStatusHub, AccountStatusKind } from "../accounts/account_status.ts";
+import type { AccountAuth, Credential } from "../accounts/providers.ts";
 import type { SecretsStore } from "../accounts/secrets_store.ts";
-import type { AccountsLayer } from "../accounts/sign_in.ts";
+import type { AccountsLayer, SignInStart } from "../accounts/sign_in.ts";
 import type { AgentsComponent } from "../agents/agents_component.ts";
 import { ConfigValueError } from "../config/config_file.ts";
 import { ConfigChangeRefused } from "../config/config_writer.ts";
 import type { ServiceContext } from "../daemon/daemon.ts";
+import { openImap } from "../mail/imap_client.ts";
 import { accountKey, checkNotice, type MailAccount, type MailNotice, MailRuleError } from "../mail/mail_model.ts";
 import { mailAccountSection, mailSection } from "../mail/mail_section.ts";
+import { checkSmtpLogin } from "../mail/smtp_client.ts";
 import { asRecord, requireString } from "./job_record_operations.ts";
 import { defineOperation, ServiceError } from "./operations.ts";
 
 const MAIL_OWNER = "mail";
 const SECRET_KEYS = ["password", "clientSecret"] as const;
+const CHECK_IDLE_SECONDS = 60;
+const SIGN_IN_KINDS: readonly string[] = ["google", "microsoft"];
+
+const SCOPES: Record<string, readonly string[]> = {
+    google: ["https://mail.google.com/"],
+    microsoft: [
+        "offline_access",
+        "https://outlook.office.com/IMAP.AccessAsUser.All",
+        "https://outlook.office.com/SMTP.Send",
+    ],
+    microsoft_app: ["https://outlook.office365.com/.default"],
+};
 
 /** What the account operations need of the mail component. */
 export type MailOperationsDeps = {
     agents: Pick<AgentsComponent, "runtime">;
-    accounts: Pick<AccountsLayer, "setSecret" | "removeAccount">;
+    accounts: Pick<AccountsLayer, "setSecret" | "removeAccount" | "credentialFor" | "startSignIn">;
     /** The store the secrets are kept in; a refused write puts back what it held before the call. */
     secrets: Pick<SecretsStore, "read" | "write">;
     accountStatus: Pick<AccountStatusHub, "get">;
@@ -37,6 +52,10 @@ export type MailAccountView = MailAccount & {
 };
 
 export type MailNoticeView = { to?: string; from?: string };
+
+/** One server's answer to a login check: `message` is the server's own words when it refused. */
+export type ServerCheck = { ok: boolean; message?: string };
+export type MailTestResult = { imap: ServerCheck; smtp?: ServerCheck };
 
 type Secrets = { password?: string; clientSecret?: string };
 type Change = { name: string; table: Record<string, unknown>; secrets: Secrets };
@@ -79,6 +98,23 @@ async function mappingRefusals<T>(action: () => Promise<T>): Promise<T> {
 // The section's own parser applies every rule of REQ-001, unknown keys included, to the table of one account.
 const parseAccount = (table: Record<string, unknown>): MailAccount =>
     mailAccountSection.parse([table])[0] as MailAccount;
+
+function authOf(account: MailAccount): AccountAuth {
+    return {
+        key: accountKey(account.name),
+        kind: account.auth,
+        login: account.login,
+        ...(account.clientId !== undefined && { clientId: account.clientId }),
+        ...(account.tenant !== undefined && { tenant: account.tenant }),
+        ...(account.passwordCommand !== undefined && { passwordCommand: account.passwordCommand }),
+    };
+}
+
+const hasSmtp = (account: MailAccount): boolean =>
+    account.kind === "owned" && account.smtpHost !== undefined && account.smtpPort !== undefined;
+
+const failureMessage = (error: unknown): string =>
+    error instanceof Error && error.message !== "" ? error.message : "the login failed";
 
 const hasSecrets = (secrets: Secrets): boolean => Object.keys(secrets).length > 0;
 
@@ -260,6 +296,70 @@ export function mailOperations({ agents, accounts, secrets, accountStatus, contr
             }),
     });
 
+    const checkImap = async (account: MailAccount, credential: Credential): Promise<ServerCheck> => {
+        try {
+            const imap = await openImap({
+                host: account.imapHost,
+                port: account.imapPort,
+                security: account.imapSecurity,
+                credential,
+                idleSeconds: CHECK_IDLE_SECONDS,
+            });
+            await imap.logout();
+            return { ok: true };
+        } catch (error) {
+            return { ok: false, message: failureMessage(error) };
+        }
+    };
+
+    const checkSmtp = async (account: MailAccount, credential: Credential): Promise<ServerCheck | undefined> => {
+        if (!hasSmtp(account)) return undefined;
+        return checkSmtpLogin({
+            host: account.smtpHost as string,
+            port: account.smtpPort as number,
+            security: account.smtpSecurity,
+            credential,
+        });
+    };
+
+    const testOperation = defineOperation<ServiceContext, { name: string }, MailTestResult>({
+        name: "mail.accounts.test",
+        kind: "control",
+        parse: parseName,
+        run: async ({ config }, { name }) => {
+            const account = config.current(mailAccountSection).find((candidate) => candidate.name === name);
+            if (account === undefined) throw missing(name);
+            let credential: Credential;
+            try {
+                credential = await accounts.credentialFor(authOf(account), SCOPES[account.auth] ?? []);
+            } catch (error) {
+                const failed = { ok: false, message: failureMessage(error) };
+                return { imap: failed, ...(hasSmtp(account) && { smtp: failed }) };
+            }
+            const smtp = await checkSmtp(account, credential);
+            return { imap: await checkImap(account, credential), ...(smtp !== undefined && { smtp }) };
+        },
+    });
+
+    const signInOperation = defineOperation<ServiceContext, { name: string }, SignInStart>({
+        name: "mail.accounts.signin",
+        kind: "control",
+        parse: parseName,
+        run: async ({ config }, { name }) => {
+            const account = config.current(mailAccountSection).find((candidate) => candidate.name === name);
+            if (account === undefined) throw missing(name);
+            if (!SIGN_IN_KINDS.includes(account.auth)) {
+                throw new ServiceError(
+                    "invalid_input",
+                    `The mail account "${name}" uses auth ${account.auth}, which has no sign-in.`,
+                );
+            }
+            return accounts.startSignIn(authOf(account), SCOPES[account.auth] ?? [], () => {
+                void control.restartAccount(name);
+            });
+        },
+    });
+
     return [
         listOperation,
         getOperation,
@@ -268,5 +368,7 @@ export function mailOperations({ agents, accounts, secrets, accountStatus, contr
         removeOperation,
         getNoticeOperation,
         setNoticeOperation,
+        testOperation,
+        signInOperation,
     ];
 }

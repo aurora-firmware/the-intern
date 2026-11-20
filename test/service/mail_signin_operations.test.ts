@@ -156,6 +156,22 @@ describe("mail.accounts.test", () => {
         assert.deepEqual(result, { imap: { ok: true } });
     });
 
+    it("reports the failure of an account that has not signed in", { timeout: TEST_TIMEOUT_MS }, async () => {
+        const rig = await startWithOwnedAddress();
+        await rig
+            .process()
+            .invoke(
+                "mail.accounts.create",
+                accountInput(rig, "work", { auth: "microsoft", client_id: "client-1", tenant: "contoso" }),
+            );
+
+        const result = (await rig.process().invoke("mail.accounts.test", { name: "work" })) as TestResult;
+
+        assert.equal(result.imap.ok, false);
+        assert.match(result.imap.message ?? "", /sign in/i);
+        assert.equal(result.smtp?.ok, false);
+    });
+
     it("refuses an unknown name not_found", { timeout: TEST_TIMEOUT_MS }, async () => {
         const rig = await startWithOwnedAddress();
 
