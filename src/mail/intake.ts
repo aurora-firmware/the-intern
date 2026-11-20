@@ -236,17 +236,21 @@ async function watch(account: MailAccount, deps: IntakeDeps, signal: AbortSignal
     try {
         const session: Session = { account, deps, imap, ctx: deps.context() };
         let isWoken = false;
-        let hasChecked = false;
+        let isListening = false;
         let pause: AbortController | undefined;
-        imap.onNewMail(() => {
+        const wake = () => {
             isWoken = true;
             pause?.abort();
-        });
+        };
         while (!signal.aborted) {
             isWoken = false;
             await check(session);
-            if (!hasChecked) deps.logger.info("mail intake watching", { account: account.name });
-            hasChecked = true;
+            // The server pushes only to a connection that has INBOX selected, so the listener comes after a first check.
+            if (!isListening) {
+                isListening = true;
+                imap.onNewMail(wake);
+                deps.logger.info("mail intake watching", { account: account.name });
+            }
             if (isWoken) continue;
             pause = new AbortController();
             const stop = () => pause?.abort();

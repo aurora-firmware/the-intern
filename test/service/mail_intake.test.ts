@@ -31,13 +31,10 @@ type Job = {
     request: { text: string; origin: { kind: string; wayIn: string; observed?: Record<string, string> } };
 };
 
-const CREDENTIAL = { user: ADDRESS, password: PASSWORD };
-const IMAP_OPTIONS = (rig: MailRig) => ({
-    host: "127.0.0.1",
-    port: rig.server.imapPort,
-    security: "none" as const,
-    idleSeconds: 60,
-});
+const INTERVAL_MS = 61_000;
+const TICK_MS = 200;
+let intervals = 0;
+const scenario = (name: string, run: () => Promise<void>) => it(name, { timeout: TEST_TIMEOUT_MS }, run);
 
 const rigs: MailRig[] = [];
 
@@ -45,13 +42,19 @@ afterEach(async () => {
     for (const rig of rigs.splice(0)) await rig.stop();
 });
 
-async function until<T>(what: string, attempt: () => Promise<T | undefined> | T | undefined): Promise<T> {
+/** Waits for a value. With a rig, the mail clock moves on by one interval at each turn, so the interval check runs. */
+async function until<T>(
+    what: string,
+    attempt: () => Promise<T | undefined> | T | undefined,
+    rig?: MailRig,
+): Promise<T> {
     const deadline = Date.now() + WAIT_MS;
     for (;;) {
         const found = await attempt();
         if (found !== undefined) return found;
         assert.ok(Date.now() < deadline, `timed out waiting for ${what}`);
-        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+        if (rig !== undefined) await rig.setClock(new Date(Date.parse(AFTER_RETRY_PAUSE) + ++intervals * INTERVAL_MS));
+        await new Promise((resolve) => setTimeout(resolve, rig === undefined ? POLL_MS : TICK_MS));
     }
 }
 
@@ -60,10 +63,7 @@ const jobsOf = async (rig: MailRig) =>
         a.number.localeCompare(b.number, undefined, { numeric: true }),
     );
 
-/**
- * Starts the rig with the account unknown to the server, so its first connection comes after the test has filled the
- * inbox, and waits until intake has recorded its starting point.
- */
+/** Starts the rig with the account unknown to the server, so it first connects once the test has filled the inbox. */
 async function startWatching(existing: (server: FakeMailServer) => void = () => undefined): Promise<MailRig> {
     const rig = await startMailRig({
         accounts: [{ name: "work", address: ADDRESS, password: PASSWORD, isKnownToServer: false }],
@@ -83,12 +83,8 @@ async function startWatching(existing: (server: FakeMailServer) => void = () => 
 const jobOf = async (rig: MailRig, job: Job | undefined) =>
     (await rig.process().invoke("jobs.get", { job: job?.id })) as Job;
 
-async function untilJobs(rig: MailRig, count: number): Promise<Job[]> {
-    return until(`${count} jobs`, async () => {
-        const jobs = await jobsOf(rig);
-        return jobs.length >= count ? jobs : undefined;
-    });
-}
+const untilJobs = (rig: MailRig, count: number) =>
+    until(`${count} jobs`, async () => ((await jobsOf(rig)).length >= count ? await jobsOf(rig) : undefined), rig);
 
 const rawMail = (subject: string, text: string, headers: string[] = []): string =>
     [
@@ -96,14 +92,12 @@ const rawMail = (subject: string, text: string, headers: string[] = []): string 
         `To: ${ADDRESS}`,
         `Subject: ${subject}`,
         `Message-ID: <${subject.replaceAll(" ", "-")}@example.test>`,
-        ...headers,
-        "",
-        text,
-        "",
-    ].join("\r\n");
+    ]
+        .concat(headers, ["", text, ""])
+        .join("\r\n");
 
-describe("intake", { timeout: TEST_TIMEOUT_MS }, () => {
-    it("leaves the existing inbox alone and takes the one email that arrives (AC-1)", async () => {
+describe("intake", () => {
+    scenario("leaves the existing inbox alone and takes the one email that arrives (AC-1)", async () => {
         const rig = await startWatching((server) => {
             for (let n = 0; n < EXISTING_MESSAGES; n++) server.deliver(ADDRESS, rawMail(`old ${n}`, "old"));
         });
@@ -116,7 +110,7 @@ describe("intake", { timeout: TEST_TIMEOUT_MS }, () => {
         assert.match(jobs[0]?.request.text ?? "", /Subject: new one/);
     });
 
-    it("makes one job for each of an ordinary email, an auto-reply, a failure report and a list message (AC-2)", async () => {
+    scenario("makes one job for an email, an auto-reply, a failure report and a list message (AC-2)", async () => {
         const rig = await startWatching();
         const subjects = ["ordinary", "out of office", "delivery failure", "list message"];
         const headers: Record<string, string[]> = {
@@ -135,7 +129,7 @@ describe("intake", { timeout: TEST_TIMEOUT_MS }, () => {
         assert.deepEqual(rig.server.received(), []);
     });
 
-    it("saves the message and its attachments and leaves the message in INBOX unflagged (AC-3)", async () => {
+    scenario("saves the message and its attachments and leaves the message in INBOX unflagged (AC-3)", async () => {
         const rig = await startWatching();
         const pdf = Buffer.from(Array.from({ length: 10_240 }, (_, index) => (index * 31 + 7) % 256));
         const note = Buffer.from("remember the milk");
@@ -174,7 +168,7 @@ describe("intake", { timeout: TEST_TIMEOUT_MS }, () => {
         assert.deepEqual([stored?.flags, stored?.raw], [[], sent.raw]);
     });
 
-    it("makes a Done job's reply a related job, and an unthreaded quote of it a job related to nothing (AC-4)", async () => {
+    scenario("relates a Done job's reply to it, and an unthreaded quote of the reply to nothing (AC-4)", async () => {
         const rig = await startWatching();
         rig.deliver(ADDRESS, rawMail("first", "please file this"));
         const [first] = await untilJobs(rig, 1);
@@ -196,7 +190,7 @@ describe("intake", { timeout: TEST_TIMEOUT_MS }, () => {
         assert.deepEqual(after.related, [reply?.number]);
     });
 
-    it("delivers a reply in a Blocked job's thread to its lead as input and resumes the job (AC-5)", async () => {
+    scenario("delivers a reply in a Blocked job's thread to its lead as input and resumes the job (AC-5)", async () => {
         const rig = await startWatching();
         rig.deliver(ADDRESS, rawMail("question", "please file this"));
         const [job] = await untilJobs(rig, 1);
@@ -207,19 +201,21 @@ describe("intake", { timeout: TEST_TIMEOUT_MS }, () => {
 
         const history = () =>
             rig.process().invoke("jobs.history.list", { job: job?.id, limit: 100 }) as Promise<{ entries: Entry[] }>;
-        await until("the reply to be recorded", async () =>
-            (await history()).entries.filter((entry) => entry.field === "mail").length === 2 ? true : undefined,
+        await until(
+            "the reply to be recorded",
+            async () =>
+                (await history()).entries.filter((entry) => entry.field === "mail").length === 2 ? true : undefined,
+            rig,
         );
         const { entries } = await history();
         assert.ok(
             entries.some((entry) => entry.field === "status" && entry.old === "blocked" && entry.new === "in_progress"),
             "the job resumed",
         );
-        const { entries: leadEntries } = (await rig.process().invoke("conversations.entries", {
-            conversationId: lead,
-            limit: 500,
-        })) as { entries: { kind: string; data: { actor: unknown; content: string } }[] };
-        const [steer] = leadEntries.filter((entry) => entry.kind === "intern.steer");
+        const read = await rig.process().invoke("conversations.entries", { conversationId: lead, limit: 500 });
+        const [steer] = (
+            read as { entries: { kind: string; data: { actor: unknown; content: string } }[] }
+        ).entries.filter((entry) => entry.kind === "intern.steer");
         assert.deepEqual(steer?.data.actor, { kind: "team_member", wayIn: "email" });
         assert.match(steer?.data.content ?? "", /From: ann@example\.test[\s\S]*use the staging one/);
         assert.equal((await jobsOf(rig)).length, 1);
@@ -239,12 +235,19 @@ describe("intake", { timeout: TEST_TIMEOUT_MS }, () => {
         const subjectsOf = async (rig: MailRig, count: number) =>
             (await untilJobs(rig, count)).map((job) => /Subject: (.*)/.exec(job.request.text)?.[1]);
 
-        it("takes it in order and passes over a UID that left the inbox (REQ-021)", async () => {
+        scenario("takes it in order and passes over a UID that left the inbox (REQ-021)", async () => {
             const rig = await startWatching();
 
             await whileDown(rig, async () => {
                 for (const subject of ["a", "b", "c"]) rig.deliver(ADDRESS, rawMail(subject, "body"));
-                const imap = await openImap({ ...IMAP_OPTIONS(rig), credential: CREDENTIAL });
+                const credential = { user: ADDRESS, password: PASSWORD };
+                const imap = await openImap({
+                    host: "127.0.0.1",
+                    port: rig.server.imapPort,
+                    security: "none",
+                    credential,
+                    idleSeconds: 60,
+                });
                 const [ref] = await imap.search("INBOX", { subject: "b" }, 1);
                 await imap.move([ref as MessageRef], "Trash");
                 await imap.logout();
@@ -253,7 +256,7 @@ describe("intake", { timeout: TEST_TIMEOUT_MS }, () => {
             assert.deepEqual(await subjectsOf(rig, 2), ["a", "c"]);
         });
 
-        it("takes nothing and says so in the last error when the server's UIDVALIDITY changed (REQ-021)", async () => {
+        scenario("takes nothing and sets the last error when UIDVALIDITY changed (REQ-021)", async () => {
             const rig = await startWatching();
 
             await whileDown(rig, () => {
@@ -263,7 +266,7 @@ describe("intake", { timeout: TEST_TIMEOUT_MS }, () => {
 
             const lastError = await until("the last error", async () => {
                 const status = (await rig.process().invoke("daemon.status", {})) as {
-                    mailAccounts: { status: string; lastError?: { message: string } }[];
+                    mailAccounts: { lastError?: { message: string } }[];
                 };
                 return status.mailAccounts[0]?.lastError?.message;
             });
@@ -273,7 +276,7 @@ describe("intake", { timeout: TEST_TIMEOUT_MS }, () => {
             assert.equal((await jobsOf(rig)).length, 1);
         });
 
-        it("starts afresh when the account's identity changed (REQ-006)", async () => {
+        scenario("starts afresh when the account's identity changed (REQ-006)", async () => {
             const rig = await startWatching();
             const file = join(rig.env.configDir, "config.toml");
 
