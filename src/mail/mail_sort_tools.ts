@@ -91,7 +91,7 @@ export const setFlagsTool = (options: MailToolsOptions) =>
 const draftMessageId = (conversationId: string, callId: string, address: string): string =>
     `<${createHash("sha256").update(`${conversationId}:${callId}`).digest("hex")}@${address.slice(address.lastIndexOf("@") + 1)}>`;
 
-async function readAttachments(workspace: string | undefined, paths: string[]) {
+export async function readAttachments(workspace: string | undefined, paths: string[]) {
     const attachments = [];
     for (const path of paths) {
         if (!isAbsolute(path) && workspace === undefined) {

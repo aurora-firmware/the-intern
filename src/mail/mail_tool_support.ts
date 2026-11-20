@@ -4,12 +4,18 @@
  */
 import { Type } from "@earendil-works/pi-ai";
 import type { ToolExecutionResult } from "@earendil-works/pi-durable";
+import type { HarnessHost } from "../host/harness_host.ts";
 import { type ImapConnection, ImapFailure, type MessageRef } from "./imap_client.ts";
 import { type ParsedMessage, parseMessage } from "./mime.ts";
+import type { Outbox } from "./outbox.ts";
 import { MailToolRefusal, type ToolConnections } from "./tool_connection.ts";
 
 export type MailToolsOptions = {
     connections(): ToolConnections;
+    /** The host, or undefined until the daemon has opened it. */
+    host(): HarnessHost | undefined;
+    /** The started outbox, or undefined before the mail component starts. */
+    outbox(): Outbox | undefined;
 };
 
 export const textResult = (text: string, isError = false): ToolExecutionResult => ({

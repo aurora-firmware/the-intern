@@ -447,6 +447,7 @@ describe("the send tool", { timeout: TEST_TIMEOUT_MS }, () => {
         const result = await tool.execute(
             sendCall().arguments as never,
             { conversationId: "c-1", callId: "call-1" } as never,
+            {} as never,
         );
 
         assert.equal(result.isError, true);

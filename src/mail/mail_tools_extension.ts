@@ -8,6 +8,7 @@ import { basename, isAbsolute, join } from "node:path";
 import { type Static, Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, type Extension, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import type { SearchQuery } from "./imap_client.ts";
+import { sendTool } from "./mail_send_tool.ts";
 import { moveTool, saveDraftTool, setFlagsTool } from "./mail_sort_tools.ts";
 import {
     accountField,
@@ -213,6 +214,7 @@ export function createMailToolsExtension(options: MailToolsOptions): Extension {
             moveTool(options),
             setFlagsTool(options),
             saveDraftTool(options),
+            sendTool(options),
         ],
     });
 }

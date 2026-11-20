@@ -291,7 +291,13 @@ export async function createMailComponent(options: MailComponentOptions): Promis
 
     const component: DaemonComponent = {
         name: "mail",
-        extensions: [createMailToolsExtension({ connections: () => toolConnections })],
+        extensions: [
+            createMailToolsExtension({
+                connections: () => toolConnections,
+                host: () => context?.host,
+                outbox: () => outbox,
+            }),
+        ],
         async prepareFiles({ dirs }) {
             secrets = createSecretsStore({ secretsDir: dirs.secretsDir });
             return undefined;
