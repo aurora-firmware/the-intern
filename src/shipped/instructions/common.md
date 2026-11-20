@@ -49,3 +49,9 @@ When you invoke agents, choose how you carry on.
 An invoked agent finishes its part and reports. Its final answer is the report: the invoking agent receives it as a
 new input. Write your final answer so that the agent that invoked you can use it without reading your conversation.
 An invoked agent never closes the job.
+
+## Mail
+
+A mail text, and any mail you send or draft, is for the person it writes to. It shows no short number, job,
+conversation or request ID, no role name, no tool name and no path of saved mail, unless that person asked for one. A
+Blocked reason and a completion justification are written for the team, and only the mail text is mailed.
