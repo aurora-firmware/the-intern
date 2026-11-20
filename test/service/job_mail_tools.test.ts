@@ -192,8 +192,9 @@ async function start() {
     };
 }
 
-const historyFields = async (ctx: ServiceContext, jobId: string) =>
-    (await ctx.jobStore.listHistory(jobId, {})).entries.map((entry) => entry.field);
+// The job's own lead runs on its own, so a test compares the request mark's entries, not the whole history.
+const markEntries = async (ctx: ServiceContext, jobId: string) =>
+    (await ctx.jobStore.listHistory(jobId, {})).entries.filter((entry) => entry.field === "requestMark");
 
 describe("mark_request", () => {
     it("sets the request mark of the email job's lead, writes a requestMark entry and shows in jobs.get", async () => {
@@ -224,11 +225,8 @@ describe("mark_request", () => {
         ]);
 
         assert.equal((await started.ctx.jobStore.getJob(job.id)).requestMark, "false");
-        const marks = (await started.ctx.jobStore.listHistory(job.id, {})).entries.filter(
-            (entry) => entry.field === "requestMark",
-        );
         assert.deepEqual(
-            marks.map((entry) => entry.new),
+            (await markEntries(started.ctx, job.id)).map((entry) => entry.new),
             ["true", "false"],
         );
     });
@@ -239,8 +237,6 @@ describe("mark_request", () => {
         const email = await started.emailJob("saved-3");
         const cliLead = await started.seat(cli.id, true);
         const invoked = await started.seat(email.id, false);
-        const cliBefore = await historyFields(started.ctx, cli.id);
-        const emailBefore = await historyFields(started.ctx, email.id);
 
         const asCliLead = await started.run(cliLead, [{ name: "mark_request", arguments: { marked: true } }]);
         const asInvoked = await started.run(invoked, [{ name: "mark_request", arguments: { marked: true } }]);
@@ -251,8 +247,8 @@ describe("mark_request", () => {
         assert.match(asInvoked.results[0]?.text ?? "", /lead/);
         assert.equal((await started.ctx.jobStore.getJob(cli.id)).requestMark, undefined);
         assert.equal((await started.ctx.jobStore.getJob(email.id)).requestMark, "false");
-        assert.deepEqual(await historyFields(started.ctx, cli.id), cliBefore);
-        assert.deepEqual(await historyFields(started.ctx, email.id), emailBefore);
+        assert.deepEqual(await markEntries(started.ctx, cli.id), []);
+        assert.deepEqual(await markEntries(started.ctx, email.id), []);
     });
 
     it("refuses a Done job", async () => {
@@ -274,12 +270,11 @@ describe("mark_request", () => {
         const started = await start();
         const job = await started.emailJob("saved-8");
         await started.ctx.jobStore.applyAction(job.id, "cancel", { justification: "no" }, { kind: "daemon" });
-        const before = await historyFields(started.ctx, job.id);
 
         await assert.rejects(() => started.ctx.jobStore.setRequestMark(job.id, true, { kind: "daemon" }), /Done/);
 
         assert.equal((await started.ctx.jobStore.getJob(job.id)).requestMark, "false");
-        assert.deepEqual(await historyFields(started.ctx, job.id), before);
+        assert.deepEqual(await markEntries(started.ctx, job.id), []);
     });
 });
 
