@@ -4,6 +4,8 @@
  * with 1. Shutdown undoes the same steps in reverse and settles with 0, or with 1 when it overruns `STOP_BOUND_MS`. A
  * storage failure runs the shutdown without closing the host and settles with 1. `runDaemon` never throws.
  */
+
+import type { AccountStatusHub } from "../accounts/account_status.ts";
 import { type Admission, createAdmission } from "../admission/admission.ts";
 import { createAdmissionGate } from "../admission/admission_extension.ts";
 import { type ConfigSection, type LoadedConfig, loadConfig } from "../config/config_file.ts";
@@ -42,6 +44,8 @@ import {
     resolveInstanceDirs,
 } from "./state_layout.ts";
 
+const MAIL_OWNER = "mail";
+
 export type ServiceContext = {
     host: HarnessHost;
     admission: Admission;
@@ -55,6 +59,7 @@ export type ServiceContext = {
     catalogue: Catalogue;
     jobStore: JobStore;
     fileChanges: FileChangeHub;
+    accountStatus?: AccountStatusHub;
 };
 
 export type DaemonComponent = {
@@ -98,6 +103,8 @@ export type DaemonOptions = {
     openStorage?: (database: SqliteDatabase) => Promise<Storage>;
     /** Test-only: wraps the database the job store writes to, to make a write fail. */
     wrapJobDatabase?: (database: HostDatabase) => HostDatabase;
+    /** The accounts layer's status hub, created by the mail component with its own clock; the context carries it unchanged. */
+    accountStatus?: AccountStatusHub;
 };
 
 export type RunningDaemon = {
@@ -165,6 +172,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         versions,
         dirs,
         admission: () => admission?.state() ?? { capacity: workerThreadCount, active: [], waiting: [] },
+        mailAccounts: () => options.accountStatus?.list(MAIL_OWNER) ?? [],
     };
     // The operations are rejected by phase until ready, so the context is complete by the time any of them runs.
     const context = { status, dirs, logger } as ServiceContext;
@@ -284,6 +292,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
                 config: store,
                 jobStore: runtime.jobStore,
                 fileChanges,
+                ...(options.accountStatus && { accountStatus: options.accountStatus }),
             });
             undoStack.push(async () => instanceFeed.close());
             Object.assign(context, {
@@ -295,6 +304,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
                 feed,
                 instanceFeed,
                 fileChanges,
+                ...(options.accountStatus && { accountStatus: options.accountStatus }),
             });
             return runtime;
         });

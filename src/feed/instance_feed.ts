@@ -5,6 +5,7 @@
  * with reason `lagging`.
  */
 
+import type { AccountStatusHub, AccountStatusKind } from "../accounts/account_status.ts";
 import type { Admission, AdmissionSnapshot } from "../admission/admission.ts";
 import type { ConfigStore } from "../config/config_writer.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
@@ -16,6 +17,8 @@ import type { Job, JobChange, JobStore } from "../jobs/job_store.ts";
 import { type ConversationListing, conversationStatus } from "../service/conversation_read_operations.ts";
 import type { FileChange, FileChangeHub } from "../skills/file_store.ts";
 import { createSubscription, FEED_MAX_PENDING, type Subscription } from "./observation_feed.ts";
+
+const MAIL_OWNER = "mail";
 
 export type InstanceSnapshot = {
     conversations: Pick<ConversationListing, "id" | "jobId" | "isLead" | "seat" | "enabledSkills" | "status">[];
@@ -32,6 +35,13 @@ export type InstanceDelta = { seq: number } & (
     | { type: "admission_changed"; admission: AdmissionSnapshot }
     | { type: "settings_changed"; section: string }
     | ({ type: "files_changed" } & FileChange)
+    | {
+          type: "mail_account_status";
+          name: string;
+          status: AccountStatusKind;
+          lastError?: { message: string; at: string };
+          lastCheck?: string;
+      }
     | { type: "job_created"; job: Job }
     | { type: "job_changed"; number: string; fields: Extract<JobChange, { type: "job_changed" }>["fields"] }
     | { type: "job_worklog_added"; number: string; entry: Extract<JobChange, { type: "worklog_added" }>["entry"] }
@@ -75,9 +85,10 @@ export async function createInstanceFeed(options: {
     config: ConfigStore;
     jobStore: JobStore;
     fileChanges: FileChangeHub;
+    accountStatus?: AccountStatusHub;
     maxPending?: number;
 }): Promise<InstanceFeed> {
-    const { host, admission, config, jobStore, fileChanges, maxPending = FEED_MAX_PENDING } = options;
+    const { host, admission, config, jobStore, fileChanges, accountStatus, maxPending = FEED_MAX_PENDING } = options;
     const sinks = new Set<Sink & { nextSeq(): number }>();
     const busyById = new Map<string, boolean>();
     const factsById = new Map<string, ConversationFacts>();
@@ -218,6 +229,17 @@ export async function createInstanceFeed(options: {
     const stopAdmission = admission.onChange((snapshot) => publish({ type: "admission_changed", admission: snapshot }));
     const stopConfig = config.onChange(({ section }) => publish({ type: "settings_changed", section }));
     const stopFiles = fileChanges.onChange(({ path, kind }) => publish({ type: "files_changed", path, kind }));
+    const stopAccounts = accountStatus?.onChange((view) => {
+        if (view.owner !== MAIL_OWNER) return;
+        const { name, status, lastError, lastCheck } = view;
+        publish({
+            type: "mail_account_status",
+            name,
+            status,
+            ...(lastError && { lastError: { message: lastError.message, at: lastError.at.toISOString() } }),
+            ...(lastCheck && { lastCheck: lastCheck.toISOString() }),
+        });
+    });
     let isClosed = false;
 
     function snapshot(): InstanceSnapshot {
@@ -291,6 +313,7 @@ export async function createInstanceFeed(options: {
             stopAdmission();
             stopConfig();
             stopFiles();
+            stopAccounts?.();
             stopJobs();
             for (const sink of [...sinks]) sink.end("stopped");
             sinks.clear();
