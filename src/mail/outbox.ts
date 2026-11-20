@@ -10,6 +10,7 @@ import type { Logger } from "../daemon/logger.ts";
 import type { JobAuthor } from "../jobs/job_model.ts";
 import type { Job, JobStore, MailTx } from "../jobs/job_store.ts";
 import type { JobEmail, MailAsk, MailDecision, MailPolicy, OwedMail } from "../jobs/mail_policy.ts";
+import { openImap } from "./imap_client.ts";
 import {
     heldBackNotice,
     isAllowed,
@@ -21,7 +22,7 @@ import {
     refusedNotice,
 } from "./mail_model.ts";
 import type { MailMessageRow, NewOutboxRow, OutboxRow, OutboxState } from "./mail_store.ts";
-import { composeMessage, parseMessage } from "./mime.ts";
+import { type ComposeAttachment, composeMessage, parseMessage } from "./mime.ts";
 import { savedCopyPaths } from "./saved_copy.ts";
 import { type SmtpOutcome, sendRaw } from "./smtp_client.ts";
 
@@ -233,7 +234,36 @@ export type OutboxDeps = {
     afterWrite?: (point: OutboxPoint) => Promise<void>;
 };
 
+/** One email an agent's `mail_send` call writes: its row is keyed by the conversation and the tool call. */
+export type ToolMail = {
+    conversationId: string;
+    callId: string;
+    role: string;
+    job: string;
+    account: string;
+    to: string[];
+    subject: string;
+    text: string;
+    attachments: ComposeAttachment[];
+    inReplyTo?: string;
+    references?: string[];
+};
+
+/** What became of a tool's email; a repeated call returns the same kind from its row. */
+export type ToolSendResult =
+    | { kind: "sent"; messageId: string; to: string[] }
+    | { kind: "waiting" }
+    | { kind: "not_ready"; account: string }
+    | { kind: "held_back"; notAllowed: string[] }
+    | { kind: "refused"; answer: string }
+    | { kind: "unknown" }
+    | { kind: "not_sent" };
+
 export type Outbox = {
+    /** Why the account can't send a tool's email, or undefined when it can: checked before any connection. */
+    refusalFor(account: string): string | undefined;
+    /** Sends a tool's email once, then copies it to the account's Sent folder. */
+    sendFromTool(mail: ToolMail): Promise<ToolSendResult>;
     /** Wakes every started sender, after a commit that adds an owed row. */
     wake(): void;
     /** Starts the account's sender, which at once takes the account's owed rows. The account is `ready`. */
@@ -248,6 +278,24 @@ const STOP_BOUND_MS = 10_000;
 const DAEMON_AUTHOR: JobAuthor = { kind: "daemon" };
 
 type Sender = { name: string; isStopped: boolean; isQueued: boolean };
+
+// The servers of these hosts file what is submitted over SMTP in Sent themselves.
+const FILING_IMAP_HOSTS: readonly string[] = ["imap.gmail.com", "outlook.office365.com"];
+
+export const skipsSentCopy = (imapHost: string): boolean => FILING_IMAP_HOSTS.includes(imapHost.toLowerCase());
+
+const TOOL_PREFIX = "tool:";
+
+// A tool row's kind is `tool:<role>` and its key `tool:<conversationId>:<toolCallId>`, so its `sent` entry has the
+// agent as author even when the sender sends it after a restart.
+const authorOf = (row: OutboxRow): JobAuthor =>
+    row.kind.startsWith(TOOL_PREFIX)
+        ? {
+              kind: "agent",
+              conversationId: row.key.slice(TOOL_PREFIX.length, row.key.indexOf(":", TOOL_PREFIX.length)),
+              role: row.kind.slice(TOOL_PREFIX.length),
+          }
+        : DAEMON_AUTHOR;
 
 const sameAddress = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
 
@@ -288,28 +336,35 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         await tx.insertOutbox(owed);
     }
 
-    async function holdBack(row: OutboxRow, account: MailAccount, notAllowed: string[]): Promise<void> {
+    async function writeHeldBack(tx: MailTx, row: OutboxRow, account: MailAccount, notAllowed: string[]) {
         const subject = row.subject ?? "";
-        await jobStore.writeMail(async (tx) => {
-            await tx.setOutboxState(row.id, "held_back");
-            const entry = {
-                mail: "held_back" as const,
-                from: account.address,
-                to: row.recipients,
-                subject,
-                notAllowed,
-            };
-            await tx.addMailHistory(row.job, entry, DAEMON_AUTHOR);
-            await oweNotice(
-                tx,
-                row,
-                heldBackNotice({ account: account.name, recipients: notAllowed, subject }),
-                `notice:${row.id}`,
-            );
-        });
+        await tx.setOutboxState(row.id, "held_back");
+        const entry = {
+            mail: "held_back" as const,
+            from: account.address,
+            to: row.recipients,
+            subject,
+            notAllowed,
+        };
+        await tx.addMailHistory(row.job, entry, DAEMON_AUTHOR);
+        await oweNotice(
+            tx,
+            row,
+            heldBackNotice({ account: account.name, recipients: notAllowed, subject }),
+            `notice:${row.id}`,
+        );
     }
 
-    async function markSending(row: OutboxRow, account: MailAccount): Promise<{ raw: Buffer }> {
+    const holdBack = (row: OutboxRow, account: MailAccount, notAllowed: string[]): Promise<void> =>
+        jobStore.writeMail((tx) => writeHeldBack(tx, row, account, notAllowed));
+
+    async function markSending(row: OutboxRow, account: MailAccount): Promise<{ raw: Uint8Array }> {
+        // A row that was sent once before goes out again as the same bytes, under its Message-ID and its thread row.
+        if (row.raw !== null) {
+            await jobStore.writeMail((tx) => tx.setOutboxState(row.id, "sending"));
+            await deps.afterWrite?.("mail-sending");
+            return { raw: row.raw };
+        }
         const composed = await composeMessage({
             from: account.address,
             to: row.recipients,
@@ -358,7 +413,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
             await jobStore.writeMail(async (tx) => {
                 await tx.setOutboxState(row.id, "sent");
                 const entry = { mail: "sent" as const, from: account.address, to: outcome.accepted, subject };
-                await tx.addMailHistory(row.job, entry, DAEMON_AUTHOR);
+                await tx.addMailHistory(row.job, entry, authorOf(row));
                 if (outcome.refused.length === 0) return;
                 const addresses = outcome.refused.map((refusal) => refusal.address);
                 const answer = outcome.refused.map((refusal) => refusal.answer).join("; ");
@@ -384,6 +439,25 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         }
     }
 
+    // Sends the bytes of a row that is `sending`. A failure before the server took them puts the row back to `owed`.
+    async function deliver(row: OutboxRow, account: MailAccount, raw: Uint8Array): Promise<SmtpOutcome> {
+        const outcome = await sendRaw({
+            host: account.smtpHost as string,
+            port: account.smtpPort as number,
+            security: account.smtpSecurity,
+            credential: await deps.credential(account),
+            envelope: { from: account.address, to: row.recipients },
+            raw,
+        });
+        if (outcome.kind === "not_taken") {
+            await jobStore.writeMail((tx) => tx.setOutboxState(row.id, "owed"));
+            deps.fail(account.name, outcome.message);
+        } else {
+            await record(row, account, outcome);
+        }
+        return outcome;
+    }
+
     // Sends one row. Returns false when the pass must stop: the server failed before taking the message.
     async function send(row: OutboxRow, account: MailAccount): Promise<boolean> {
         const notAllowed = notAllowedRecipients(account, row.recipients, deps.notice()?.to);
@@ -391,26 +465,53 @@ export function createOutbox(deps: OutboxDeps): Outbox {
             await holdBack(row, account, notAllowed);
             return true;
         }
-        const credential = await deps.credential(account);
         const { raw } = await markSending(row, account);
-        const outcome = await sendRaw({
-            host: account.smtpHost as string,
-            port: account.smtpPort as number,
-            security: account.smtpSecurity,
-            credential,
-            envelope: { from: account.address, to: row.recipients },
-            raw,
-        });
-        if (outcome.kind === "not_taken") {
-            await jobStore.writeMail((tx) => tx.setOutboxState(row.id, "owed"));
-            deps.fail(account.name, outcome.message);
-            return false;
-        }
-        await record(row, account, outcome);
-        return true;
+        const outcome = await deliver(row, account, raw);
+        return outcome.kind !== "not_taken";
     }
 
-    async function pass(sender: Sender): Promise<void> {
+    async function appendToSent(account: MailAccount, row: { messageId: string; raw: Uint8Array }): Promise<void> {
+        const imap = await openImap({
+            host: account.imapHost,
+            port: account.imapPort,
+            security: account.imapSecurity,
+            credential: await deps.credential(account),
+            idleSeconds: account.checkIntervalSeconds,
+        });
+        try {
+            const folder = await imap.specialFolder("sent");
+            if (folder === undefined) throw new Error(`The account ${account.name} has no Sent folder.`);
+            if (!(await imap.hasMessageId(folder, row.messageId))) await imap.append(folder, row.raw, ["\\Seen"]);
+        } finally {
+            await imap.logout();
+        }
+    }
+
+    // One copy of a sent tool email in the account's Sent folder, then the `copied` mark. A failed copy leaves the mark
+    // off: the next pass of a ready account tries again, and the send itself stands.
+    const copying = new Set<string>();
+    async function copyToSent(key: string, account: MailAccount): Promise<void> {
+        const row = await jobStore.readMail((tx) => tx.outboxByKey(key));
+        if (row?.copied !== false || row.messageId === null || row.raw === null || copying.has(row.id)) return;
+        copying.add(row.id);
+        try {
+            if (!skipsSentCopy(account.imapHost))
+                await appendToSent(account, { messageId: row.messageId, raw: row.raw });
+            await jobStore.writeMail((tx) => tx.setOutboxState(row.id, "sent", { copied: true }));
+        } catch (error) {
+            const cause = error instanceof Error ? error.message : "the copy failed";
+            logger.error("mail copy to Sent failed", { account: account.name, cause });
+        } finally {
+            copying.delete(row.id);
+        }
+    }
+
+    async function copyPending(account: MailAccount): Promise<void> {
+        const sent = await jobStore.readMail((tx) => tx.rowsInState("sent", account.name));
+        for (const row of sent) if (row.copied === false) await copyToSent(row.key, account);
+    }
+
+    async function sendOwed(sender: Sender): Promise<void> {
         while (!sender.isStopped && deps.isReady(sender.name)) {
             const account = accountNamed(sender.name);
             if (account?.smtpHost === undefined) return;
@@ -420,6 +521,13 @@ export function createOutbox(deps: OutboxDeps): Outbox {
             // The notice a row owed may belong to another account's sender.
             wake();
         }
+    }
+
+    async function pass(sender: Sender): Promise<void> {
+        await sendOwed(sender);
+        const account = accountNamed(sender.name);
+        if (account === undefined || sender.isStopped || !deps.isReady(sender.name)) return;
+        await copyPending(account);
     }
 
     function enqueue(sender: Sender): void {
@@ -450,7 +558,88 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         senders.delete(name);
     }
 
+    function resultOfRow(row: OutboxRow): ToolSendResult {
+        switch (row.state) {
+            case "owed":
+                return { kind: "waiting" };
+            case "sent":
+                return { kind: "sent", messageId: row.messageId ?? "", to: row.recipients };
+            case "held_back": {
+                const account = accountNamed(row.account ?? "");
+                const notAllowed =
+                    account === undefined
+                        ? row.recipients
+                        : notAllowedRecipients(account, row.recipients, deps.notice()?.to);
+                return { kind: "held_back", notAllowed };
+            }
+            case "refused":
+                return { kind: "refused", answer: row.serverAnswer ?? "" };
+            case "account_removed":
+                return { kind: "not_sent" };
+            default:
+                return { kind: "unknown" };
+        }
+    }
+
+    function refusalFor(name: string): string | undefined {
+        const account = accountNamed(name);
+        if (account === undefined) return `There is no mail account named "${name}".`;
+        if (account.kind === "monitored") return `The mail account "${name}" is monitored: it never sends.`;
+        if (account.smtpHost === undefined) return `The mail account "${name}" has no SMTP host to send through.`;
+        return undefined;
+    }
+
+    async function sendFromTool(mail: ToolMail): Promise<ToolSendResult> {
+        const key = `${TOOL_PREFIX}${mail.conversationId}:${mail.callId}`;
+        const existing = await jobStore.readMail((tx) => tx.outboxByKey(key));
+        if (existing !== undefined) return resultOfRow(existing);
+        if (!deps.isReady(mail.account)) return { kind: "not_ready", account: mail.account };
+        const account = accountNamed(mail.account) as MailAccount;
+        const owed: NewOutboxRow = {
+            key,
+            job: mail.job,
+            account: account.name,
+            kind: `${TOOL_PREFIX}${mail.role}`,
+            recipients: mail.to,
+            subject: mail.subject,
+            mailText: mail.text,
+            inReplyTo: mail.inReplyTo ?? null,
+            references: mail.references?.join(" ") ?? null,
+        };
+        const notAllowed = notAllowedRecipients(account, mail.to, deps.notice()?.to);
+        if (notAllowed.length > 0) {
+            await jobStore.writeMail(async (tx) => writeHeldBack(tx, await tx.insertOutbox(owed), account, notAllowed));
+            wake();
+            return { kind: "held_back", notAllowed };
+        }
+        const composed = await composeMessage({
+            from: account.address,
+            to: mail.to,
+            subject: mail.subject,
+            text: mail.text,
+            attachments: mail.attachments,
+            ...(mail.inReplyTo !== undefined && { inReplyTo: mail.inReplyTo }),
+            ...(mail.references !== undefined && { references: mail.references }),
+        });
+        const row = await jobStore.writeMail(async (tx) => {
+            const inserted = await tx.insertOutbox(owed);
+            const written = { messageId: composed.messageId, raw: composed.raw, copied: false };
+            await tx.setOutboxState(inserted.id, "sending", written);
+            await tx.addThread({ messageId: composed.messageId, job: mail.job, direction: "out" });
+            return inserted;
+        });
+        await deps.afterWrite?.("mail-sending");
+        const outcome = await deliver(row, account, composed.raw);
+        if (outcome.kind === "not_taken") return { kind: "waiting" };
+        if (outcome.kind === "refused") return { kind: "refused", answer: outcome.answer };
+        if (outcome.kind === "unknown") return { kind: "unknown" };
+        await copyToSent(key, account);
+        return { kind: "sent", messageId: composed.messageId, to: row.recipients };
+    }
+
     return {
+        refusalFor,
+        sendFromTool,
         wake,
         startAccount(account) {
             const sender = senders.get(account.name) ?? { name: account.name, isStopped: false, isQueued: false };

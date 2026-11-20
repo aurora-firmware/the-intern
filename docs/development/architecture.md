@@ -1176,7 +1176,7 @@ here can change inside its module.
 | Intake | `src/mail/intake.ts` | The intake connection, the check, and taking in one email |
 | Outbox | `src/mail/outbox.ts` | The policy the jobs component asks, the sender of each account, the Sent folder copy |
 | Saved copy | `src/mail/saved_copy.ts` | Writing a saved email out, and the paths `jobs.get` returns |
-| Tools | `src/mail/mail_tools_extension.ts` (registers the tools and holds the read tools), `src/mail/mail_sort_tools.ts` (move, set flags, save draft), `src/mail/mail_tool_support.ts` (what they share), `src/mail/tool_connection.ts` | The pi-durable extension `intern.mail`, and the tools' connection per account |
+| Tools | `src/mail/mail_tools_extension.ts` (registers the tools and holds the read tools), `src/mail/mail_sort_tools.ts` (move, set flags, save draft), `src/mail/mail_send_tool.ts` (send), `src/mail/mail_tool_support.ts` (what they share), `src/mail/tool_connection.ts` | The pi-durable extension `intern.mail`, and the tools' connection per account |
 | Component | `src/mail/mail_component.ts` | The daemon hooks, the holds on roles, the test switches |
 | Operations | `src/service/mail_operations.ts` | `mail.*` |
 | Commands | `src/cli/mail_commands.ts`, `src/cli/mail_text.ts`, `src/cli/secret_prompt.ts` | S-005's conventions, on the client library |
