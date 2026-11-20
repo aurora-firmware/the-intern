@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { openHostDatabase } from "../../src/host/harness_host.ts";
-import { createJobStore, type NewJob, migrateJobStore } from "../../src/jobs/job_store.ts";
+import { createJobStore, migrateJobStore, type NewJob } from "../../src/jobs/job_store.ts";
 import type { NewMessage } from "../../src/mail/mail_store.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
