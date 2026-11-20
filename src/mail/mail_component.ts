@@ -21,6 +21,7 @@ import type { JobsComponent } from "../jobs/jobs_component.ts";
 import { mailOperations } from "../service/mail_operations.ts";
 import type { Operation } from "../service/operations.ts";
 import { openImap } from "./imap_client.ts";
+import { createIntake } from "./intake.ts";
 import { accountKey, checkNotice, type MailAccount, MailRuleError } from "./mail_model.ts";
 import { mailAccountSection, mailSection } from "./mail_section.ts";
 import { createMailToolsExtension } from "./mail_tools_extension.ts";
@@ -138,6 +139,24 @@ export async function createMailComponent(options: MailComponentOptions): Promis
         credential: (account) => accounts.credentialFor(authOf(account), SCOPES[account.auth] ?? []),
     });
 
+    const intake = createIntake({
+        context: () => {
+            if (context === undefined) throw new Error("intake runs only while the mail component is started");
+            return context;
+        },
+        jobs: options.jobs.options,
+        credential: (account) => accounts.credentialFor(authOf(account), SCOPES[account.auth] ?? []),
+        clock,
+        logger,
+        fail: (name, message) => accountStatus.report(MAIL_OWNER, name, { kind: "failing", message }),
+        // The status has no last error without a status, so the error is reported and the account is ready again.
+        noteError: (name, message) => {
+            accountStatus.report(MAIL_OWNER, name, { kind: "failing", message });
+            accountStatus.report(MAIL_OWNER, name, { kind: "ready" });
+        },
+        ...(options.afterWrite && { afterWrite: options.afterWrite }),
+    });
+
     const endCheck = (name: string): void => {
         checks.get(name)?.abort();
         checks.delete(name);
@@ -182,6 +201,7 @@ export async function createMailComponent(options: MailComponentOptions): Promis
             if (controller.signal.aborted) return;
             checks.delete(account.name);
             accountStatus.report(MAIL_OWNER, account.name, outcome);
+            if (outcome.kind === "ready" && account.kind === "owned") intake.start(account);
         });
     }
 
@@ -197,6 +217,7 @@ export async function createMailComponent(options: MailComponentOptions): Promis
 
     const stopAccount = (name: string): void => {
         endCheck(name);
+        void intake.stop(name);
         void toolConnections.close(name);
         accountStatus.stop(MAIL_OWNER, name);
     };
@@ -258,6 +279,7 @@ export async function createMailComponent(options: MailComponentOptions): Promis
         },
         async stop() {
             for (const name of [...checks.keys()]) endCheck(name);
+            await intake.stopAll();
             await toolConnections.closeAll();
             for (const account of accountStatus.list(MAIL_OWNER)) accountStatus.stop(MAIL_OWNER, account.name);
             context = undefined;
