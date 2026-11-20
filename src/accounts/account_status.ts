@@ -32,6 +32,8 @@ export type AccountStartOptions = {
 export type AccountStatusHub = {
     start(owner: string, name: string, options: AccountStartOptions): void;
     report(owner: string, name: string, outcome: CheckOutcome): void;
+    /** Sets the last error and its time and publishes once; the status, the last check and the retry timer stay. */
+    noteError(owner: string, name: string, message: string): void;
     /** Cancels the account's timer and forgets it. */
     stop(owner: string, name: string): void;
     get(owner: string, name: string): AccountStatusView | undefined;
@@ -124,6 +126,12 @@ export function createAccountStatusHub(options: { clock?: AccountClock } = {}): 
                 entry.view.lastError = { message: outcome.message, at };
                 if (outcome.kind === "failing") scheduleRetry(entry);
             }
+            publish(entry);
+        },
+        noteError(owner, name, message) {
+            const entry = entries.get(keyOf(owner, name));
+            if (!entry) return;
+            entry.view.lastError = { message, at: clock.now() };
             publish(entry);
         },
         stop(owner, name) {
