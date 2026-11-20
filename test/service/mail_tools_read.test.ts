@@ -23,8 +23,10 @@ import { createDeskComponent } from "../../src/desk/desk_component.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
 import { createSeatedConversation } from "../../src/host/seating.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
+import type { ImapConnection } from "../../src/mail/imap_client.ts";
 import { createMailComponent } from "../../src/mail/mail_component.ts";
 import { composeMessage } from "../../src/mail/mime.ts";
+import { createToolConnections } from "../../src/mail/tool_connection.ts";
 import { MAIL_TOOL_NAMES } from "../../src/roles/role_model.ts";
 import type { Caller } from "../../src/service/operations.ts";
 import { type FakeMailServer, startFakeMailServer } from "../support/fake_mail_server.ts";
@@ -462,5 +464,65 @@ describe("the mail tools that read", { timeout: TEST_TIMEOUT_MS }, () => {
         assert.equal((jsonOf(read) as ReadBack).text.trim(), "seen from outside");
         assert.equal(saved?.isError, false, saved?.text);
         assert.deepEqual(await readFile(join(reader.workspace, "saved", "data.bin")), BINARY);
+    });
+});
+
+describe("the mail tools' connections", () => {
+    const account = { name: "work", imapHost: "h", imapPort: 1, imapSecurity: "none", checkIntervalSeconds: 60 };
+
+    function connections(idleMs: number) {
+        const state = { opened: 0, loggedOut: 0, running: 0, mostRunning: 0 };
+        const tools = createToolConnections({
+            account: () => account as never,
+            status: () => "ready",
+            credential: async () => ({ user: "u", password: "p" }),
+            idleMs,
+            open: async () => {
+                state.opened += 1;
+                const logout = async () => {
+                    state.loggedOut += 1;
+                };
+                return { logout } as unknown as ImapConnection;
+            },
+        });
+        const call = () =>
+            tools.use("work", async () => {
+                state.running += 1;
+                state.mostRunning = Math.max(state.mostRunning, state.running);
+                await sleep(POLL_MS);
+                state.running -= 1;
+            });
+        return { state, tools, call };
+    }
+
+    it("opens one connection at the first call and keeps it for the next", async () => {
+        const { state, call, tools } = connections(scaled(60_000));
+
+        await call();
+        await call();
+
+        assert.equal(state.opened, 1);
+        await tools.closeAll();
+        assert.equal(state.loggedOut, 1);
+    });
+
+    it("closes the connection after the idle time and opens another for the next call", async () => {
+        const { state, call, tools } = connections(1);
+
+        await call();
+        await until("the idle connection to close", () => state.loggedOut === 1);
+        await call();
+
+        assert.equal(state.opened, 2);
+        await tools.closeAll();
+    });
+
+    it("runs the calls of one account one after another", async () => {
+        const { state, call, tools } = connections(scaled(60_000));
+
+        await Promise.all([call(), call(), call()]);
+
+        assert.equal(state.mostRunning, 1);
+        await tools.closeAll();
     });
 });
