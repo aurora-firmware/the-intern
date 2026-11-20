@@ -6,7 +6,13 @@ export type JobAction = "start" | "block" | "resume" | "complete" | "cancel";
 export type Letter = "C" | "W" | "E" | "S" | "A";
 export type Resolution = { kind: "completed" | "cancelled"; justification: string };
 
-export type ObservedDetails = { remoteAddress?: string; remotePort?: number; messageId?: string; sender?: string };
+export type ObservedDetails = {
+    remoteAddress?: string;
+    remotePort?: number;
+    account?: string;
+    messageId?: string;
+    sender?: string;
+};
 
 export type JobAuthor =
     | { kind: "agent"; conversationId: string; role: string }

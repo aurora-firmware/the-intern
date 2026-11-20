@@ -120,9 +120,14 @@ export type NewJob = {
     title?: string;
     statedBy?: string;
     idempotencyKey?: string;
-    idempotencyScope?: "jobs.create" | "schedules.run" | "schedule.fire";
+    idempotencyScope?: "jobs.create" | "schedules.run" | "schedule.fire" | "mail.intake";
     /** A job to relate the new one to, written in the insert's own transaction. */
     relatedTo?: string;
+    /**
+     * The email the job came from: its account, the saved row and the `Message-ID` that starts the job's thread. Set
+     * only by Email's in-process intake. The job gets the request mark false.
+     */
+    email?: { account: string; savedId: string; messageId?: string };
     /** The schedule entry that fires the job and the UTC time it fired. Refused while a job of the entry is open. */
     schedule?: { entry: string; firedAt: string };
     /** Who authors that Related link in the history. The daemon when omitted. */
@@ -597,8 +602,9 @@ async function insertIn(tx: HostSqlExecutor, input: NewJob): Promise<Inserted> {
     const now = new Date().toISOString();
     await tx.run(
         `INSERT INTO intern_jobs (id, letter, n, title, description, definition_of_done, status, request_text, origin,
-            stated_by, lead_start, idempotency_key, created_at, updated_at, schedule_entry, schedule_fired_at)
-         VALUES (?, ?, ?, ?, '', '', 'to_do', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            stated_by, lead_start, idempotency_key, created_at, updated_at, schedule_entry, schedule_fired_at,
+            mail_account, mail_message, request_mark)
+         VALUES (?, ?, ?, ?, '', '', 'to_do', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id,
         input.letter,
         n,
@@ -612,7 +618,13 @@ async function insertIn(tx: HostSqlExecutor, input: NewJob): Promise<Inserted> {
         now,
         input.schedule?.entry ?? null,
         input.schedule?.firedAt ?? null,
+        input.email?.account ?? null,
+        input.email?.savedId ?? null,
+        input.email === undefined ? null : NO_REQUEST_MARK,
     );
+    if (input.email?.messageId !== undefined) {
+        await mailTxOf(tx).addThread({ messageId: input.email.messageId, job: id, direction: "in" });
+    }
     if (input.idempotencyKey !== undefined) {
         await tx.run(
             "INSERT INTO intern_job_keys (scope, key, job) VALUES (?, ?, ?)",
@@ -632,6 +644,9 @@ async function insertIn(tx: HostSqlExecutor, input: NewJob): Promise<Inserted> {
 }
 
 const DAEMON: JobAuthor = { kind: "daemon" };
+
+/** The `request_mark` of a job that just came by email: its email asks nothing of The Intern until the lead says so. */
+const NO_REQUEST_MARK = "false";
 
 async function addHistory(tx: HostSqlExecutor, jobId: string, entry: HistoryEntry): Promise<void> {
     await tx.run(

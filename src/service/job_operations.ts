@@ -11,7 +11,7 @@ import type { HarnessHost } from "../host/harness_host.ts";
 import { ConversationClosedError, inJobSection, JobDoneError, refuseIfJobDone } from "../host/job_section.ts";
 import { createSeatedConversation, type Origin, readConversationMeta, type SeatActor } from "../host/seating.ts";
 import { type JobAuthor, type JobOrigin, type JobOriginOnDemand, letterFor } from "../jobs/job_model.ts";
-import { type Job, JobNotFoundError, JobRefusedError, OpenScheduledRunError } from "../jobs/job_store.ts";
+import { type Job, JobNotFoundError, JobRefusedError, type NewJob, OpenScheduledRunError } from "../jobs/job_store.ts";
 import type { JobsComponentOptions } from "../jobs/jobs_component.ts";
 import { LEAD_DUTY, scheduledRunNotice } from "../prompt/role_prompt.ts";
 import { RoleRefusedError } from "../roles/role_catalog.ts";
@@ -171,6 +171,10 @@ export type CreateJobRequest = {
     origin?: unknown;
     // Set by an agent's create job call to relate the follow-up to the job it came from; never read from jobs.create input.
     related?: boolean;
+    // Set only by Email's in-process intake: the email the job comes from. Never read from jobs.create input.
+    email?: { account: string; savedId: string; messageId?: string };
+    // Set only by Email's in-process intake: the job a `related` email's job relates to. Never read from jobs.create input.
+    relatedTo?: string;
 };
 
 export const MAX_KEY_LENGTH = 200;
@@ -332,6 +336,12 @@ function checkBeforeWrite(
     return { letter, overrides };
 }
 
+function idempotencyScopeOf(request: CreateJobRequest, origin: JobOrigin): NonNullable<NewJob["idempotencyScope"]> {
+    if (request.email !== undefined) return "mail.intake";
+    if (origin.kind !== "schedule") return "jobs.create";
+    return origin.onDemand ? "schedules.run" : "schedule.fire";
+}
+
 /**
  * Creates a job and starts its lead (S-004 REQ-002, REQ-003, REQ-007). The role and overrides are checked before any
  * write, so a refused call leaves no job and uses no number. A lead that cannot start after the write cancels the job.
@@ -357,10 +367,13 @@ export async function createJob(
             ...(request.statedBy !== undefined && { statedBy: request.statedBy }),
             ...(request.idempotencyKey !== undefined && {
                 idempotencyKey: request.idempotencyKey,
-                idempotencyScope:
-                    origin.kind === "schedule" ? (origin.onDemand ? "schedules.run" : "schedule.fire") : "jobs.create",
+                idempotencyScope: idempotencyScopeOf(request, origin),
             }),
-            ...(relatedTo !== undefined && { relatedTo, author }),
+            ...(request.email !== undefined && { email: request.email }),
+            ...((relatedTo ?? request.relatedTo) !== undefined && {
+                relatedTo: (relatedTo ?? request.relatedTo) as string,
+                author,
+            }),
             leadStart,
         });
     } catch (error) {
