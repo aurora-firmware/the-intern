@@ -98,10 +98,16 @@ describe("composeMessage and parseMessage", () => {
         assert.ok(Buffer.from(parsed.attachments[0]?.content ?? []).equals(content));
     });
 
-    it("imports_postal_mime_and_nodemailer_only_in_the_mime_adapter", () => {
-        const output = execFileSync("git", ["grep", "-l", "-E", "postal-mime|nodemailer", "--", "src"], {
-            encoding: "utf8",
-        });
-        assert.deepEqual(output.trim().split("\n"), ["src/mail/mime.ts"]);
+    function importersOf(pattern: string): string[] {
+        const output = execFileSync("git", ["grep", "-l", "-E", pattern, "--", "src"], { encoding: "utf8" });
+        return output.trim().split("\n");
+    }
+
+    it("imports_nodemailer_only_in_the_mime_and_smtp_adapters", () => {
+        assert.deepEqual(importersOf("nodemailer"), ["src/mail/mime.ts", "src/mail/smtp_client.ts"]);
+    });
+
+    it("imports_postal_mime_only_in_the_mime_adapter", () => {
+        assert.deepEqual(importersOf("postal-mime"), ["src/mail/mime.ts"]);
     });
 });
