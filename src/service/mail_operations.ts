@@ -5,6 +5,7 @@
  * afresh or stops it. No result holds a secret.
  */
 import type { AccountStatusHub, AccountStatusKind } from "../accounts/account_status.ts";
+import type { SecretsStore } from "../accounts/secrets_store.ts";
 import type { AccountsLayer } from "../accounts/sign_in.ts";
 import type { AgentsComponent } from "../agents/agents_component.ts";
 import { ConfigValueError } from "../config/config_file.ts";
@@ -22,6 +23,8 @@ const SECRET_KEYS = ["password", "clientSecret"] as const;
 export type MailOperationsDeps = {
     agents: Pick<AgentsComponent, "runtime">;
     accounts: Pick<AccountsLayer, "setSecret" | "removeAccount">;
+    /** The store the secrets are kept in; a refused write puts back what it held before the call. */
+    secrets: Pick<SecretsStore, "read" | "write">;
     accountStatus: Pick<AccountStatusHub, "get">;
     control: { restartAccount(name: string): Promise<void>; stopAccount(name: string): void };
 };
@@ -79,7 +82,7 @@ const parseAccount = (table: Record<string, unknown>): MailAccount =>
 
 const hasSecrets = (secrets: Secrets): boolean => Object.keys(secrets).length > 0;
 
-export function mailOperations({ agents, accounts, accountStatus, control }: MailOperationsDeps) {
+export function mailOperations({ agents, accounts, secrets, accountStatus, control }: MailOperationsDeps) {
     const missing = (name: string) => new ServiceError("not_found", `There is no mail account named "${name}".`);
 
     const view = (account: MailAccount): MailAccountView => {
@@ -107,29 +110,34 @@ export function mailOperations({ agents, accounts, accountStatus, control }: Mai
     };
 
     // The secret goes to the store before the file is written, so a stored account never lacks the secret it was
-    // given. A refused create takes its secret back; nothing else holds that key.
+    // given. The store's fingerprint check comes after this step, so a refused write puts the old secret back.
     const writeAccounts = async (
         ctx: ServiceContext,
         name: string,
-        secrets: Secrets,
-        isNew: boolean,
+        newSecrets: Secrets,
         change: (current: MailAccount[]) => MailAccount[],
     ): Promise<MailAccount> => {
+        const key = accountKey(name);
         let written: MailAccount | undefined;
         let hasStoredSecret = false;
+        let previous: Awaited<ReturnType<typeof secrets.read>>;
         try {
             await ctx.config.update(mailAccountSection, async (current) => {
                 const next = change(current);
                 written = next.find((account) => account.name === name) as MailAccount;
                 checkRules(ctx, written, next);
-                if (hasSecrets(secrets)) {
-                    await accounts.setSecret(accountKey(name), secrets);
+                if (hasSecrets(newSecrets)) {
+                    previous = await secrets.read(key);
                     hasStoredSecret = true;
+                    await accounts.setSecret(key, newSecrets);
                 }
                 return next;
             });
         } catch (error) {
-            if (isNew && hasStoredSecret) await accounts.removeAccount(accountKey(name));
+            if (hasStoredSecret) {
+                if (previous === undefined) await accounts.removeAccount(key);
+                else await secrets.write(key, previous);
+            }
             throw error;
         }
         await control.restartAccount(name);
@@ -158,9 +166,9 @@ export function mailOperations({ agents, accounts, accountStatus, control }: Mai
         name: "mail.accounts.create",
         kind: "control",
         parse: parseWrite,
-        run: (ctx, { name, table, secrets }) =>
+        run: (ctx, { name, table, secrets: newSecrets }) =>
             mappingRefusals(async () => {
-                const created = await writeAccounts(ctx, name, secrets, true, (current) => {
+                const created = await writeAccounts(ctx, name, newSecrets, (current) => {
                     const account = parseAccount(table);
                     if (current.some((candidate) => candidate.name === account.name)) {
                         throw new ServiceError("conflict", `There is already a mail account named "${account.name}".`);
@@ -188,9 +196,9 @@ export function mailOperations({ agents, accounts, accountStatus, control }: Mai
         name: "mail.accounts.change",
         kind: "control",
         parse: parseWrite,
-        run: (ctx, { name, table, secrets }) =>
+        run: (ctx, { name, table, secrets: newSecrets }) =>
             mappingRefusals(async () => {
-                const changed = await writeAccounts(ctx, name, secrets, false, (current) => {
+                const changed = await writeAccounts(ctx, name, newSecrets, (current) => {
                     const account = current.find((candidate) => candidate.name === name);
                     if (account === undefined) throw missing(name);
                     const next = parseAccount(mergeChange(account, table));

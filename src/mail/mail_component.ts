@@ -119,9 +119,10 @@ export async function createMailComponent(options: MailComponentOptions): Promis
     const { agents, logger } = options;
     const clock = options.clock ?? realClock;
     let secrets: SecretsStore | undefined;
+    const lateStore = lateSecretsStore(() => secrets);
     const accountStatus = createAccountStatusHub({ clock });
     const accounts = createAccountsLayer({
-        secrets: lateSecretsStore(() => secrets),
+        secrets: lateStore,
         status: accountStatus,
         endpoints: options.oauthEndpoints ?? REAL_PROVIDER_ENDPOINTS,
         clock,
@@ -255,7 +256,7 @@ export async function createMailComponent(options: MailComponentOptions): Promis
     return {
         component,
         sections: [mailSection, mailAccountSection],
-        operations: mailOperations({ agents, accounts, accountStatus, control }),
+        operations: mailOperations({ agents, accounts, secrets: lateStore, accountStatus, control }),
         accountStatus,
         accounts,
         control,
