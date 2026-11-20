@@ -33,6 +33,7 @@ type Role = {
     name: string;
     instructions?: string;
     instructionsVersion?: string;
+    tools?: string[];
     instructionsMissing?: boolean;
     changed: boolean;
     shipped: boolean;
