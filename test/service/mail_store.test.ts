@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { openHostDatabase } from "../../src/host/harness_host.ts";
 import { createJobStore, migrateJobStore, type NewJob } from "../../src/jobs/job_store.ts";
-import type { NewMessage } from "../../src/mail/mail_store.ts";
+import type { MailStoreFunctions, NewMessage } from "../../src/mail/mail_store.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 type Db = Awaited<ReturnType<typeof openHostDatabase>>;
@@ -406,5 +406,28 @@ describe("mail store", () => {
             rows.map((row) => row.uid),
             [1, 3],
         );
+    });
+
+    it("lists the outbox rows of one job in the given states, oldest first", async () => {
+        const { store } = await openStore();
+        const a = (await store.insertJob(newJob())).job;
+        const b = (await store.insertJob(newJob())).job;
+        await store.writeMail(async (tx) => {
+            const one = await tx.insertOutbox(outboxRow(a.id, "k:1"));
+            await tx.insertOutbox(outboxRow(b.id, "k:2"));
+            const three = await tx.insertOutbox(outboxRow(a.id, "k:3"));
+            const four = await tx.insertOutbox(outboxRow(a.id, "k:4"));
+            const five = await tx.insertOutbox(outboxRow(b.id, "k:5"));
+            await tx.setOutboxState(one.id, "sent");
+            await tx.setOutboxState(three.id, "refused");
+            await tx.setOutboxState(four.id, "sent");
+            await tx.setOutboxState(five.id, "sent");
+        });
+        const keys = async (states: Parameters<MailStoreFunctions["outboxRowsOfJob"]>[1]) =>
+            (await store.readMail((tx) => tx.outboxRowsOfJob(a.id, states))).map((row) => row.key);
+        assert.deepEqual(await keys(["sent"]), ["k:1", "k:4"]);
+        assert.deepEqual(await keys(["refused", "sent"]), ["k:1", "k:3", "k:4"]);
+        assert.deepEqual(await keys(["owed"]), []);
+        assert.deepEqual(await keys([]), []);
     });
 });
