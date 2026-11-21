@@ -23,9 +23,7 @@ async function readAll(stdin: NodeJS.ReadableStream): Promise<string> {
 }
 
 async function readFromStdin(io: CommandIo): Promise<string> {
-    const secret = (await readAll(io.stdin)).replace(TRAILING_LINE_END, "");
-    if (secret === "") throw new Error("Standard input held no secret: it is empty.");
-    return secret;
+    return (await readAll(io.stdin)).replace(TRAILING_LINE_END, "");
 }
 
 function readFromTerminal(io: CommandIo, prompt: string): Promise<string> {
@@ -59,11 +57,15 @@ function readFromTerminal(io: CommandIo, prompt: string): Promise<string> {
     });
 }
 
-/** The secret, read without echo from a terminal or, with `fromStdin`, from standard input. */
+/**
+ * The secret, read without echo from a terminal or, with `fromStdin`, from standard input. An empty secret is refused
+ * in both modes: the mail operations take no empty secret.
+ */
 export async function readSecret({ io, prompt, fromStdin }: ReadSecretOptions): Promise<string> {
-    if (fromStdin) return readFromStdin(io);
-    if (!io.isStdinTerminal) {
+    if (!fromStdin && !io.isStdinTerminal) {
         throw new Error("Standard input is not a terminal: pass --secret-stdin to read the secret from it.");
     }
-    return readFromTerminal(io, prompt);
+    const secret = fromStdin ? await readFromStdin(io) : await readFromTerminal(io, prompt);
+    if (secret === "") throw new Error("The secret is empty: give a non-empty secret.");
+    return secret;
 }
