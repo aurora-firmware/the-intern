@@ -21,9 +21,6 @@ import { createTestClock, type TestClock } from "./schedule_rig.ts";
 
 export { until };
 
-import { scaled } from "./time_scale.ts";
-
-const _WAIT_MS = scaled(30_000);
 const POLL_MS = 20;
 const CLOCK_START = Date.parse("2026-03-02T09:00:00.000Z");
 const RETRY_STEP_MS = 31 * 60 * 1000;
