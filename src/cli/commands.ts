@@ -9,6 +9,7 @@ import { followCommand, jobsFollowCommand } from "./follow_commands.ts";
 import { exportCommand, importCommand, statusCommand, usageCommand } from "./instance_commands.ts";
 import { INSTRUCTIONS_COMMANDS } from "./instructions_commands.ts";
 import { JOBS_COMMANDS } from "./jobs_commands.ts";
+import { MAIL_COMMANDS } from "./mail_commands.ts";
 import { ROLES_COMMANDS } from "./roles_commands.ts";
 import { SCHEDULES_COMMANDS } from "./schedules_commands.ts";
 import type { ServeFlags } from "./serve.ts";
@@ -63,4 +64,5 @@ export const COMMANDS: readonly CommandSpec[] = [
     ...SCHEDULES_COMMANDS,
     ...SKILLS_COMMANDS,
     ...INSTRUCTIONS_COMMANDS,
+    ...MAIL_COMMANDS,
 ];

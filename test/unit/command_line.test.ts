@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import {
-    type CommandSpec,
-    EXIT_CODES,
-    type ParsedCommandLine,
-    parseCommandLine,
-    RESERVED_GROUPS,
-} from "../../src/cli/command_line.ts";
+import { type CommandSpec, EXIT_CODES, type ParsedCommandLine, parseCommandLine } from "../../src/cli/command_line.ts";
 
 const run = async () => 0;
 
@@ -89,9 +83,7 @@ describe("help", () => {
         assert.equal(parse("--help").kind, "help");
         assert.match(usage, /status/);
         assert.match(usage, /jobs/);
-        for (const group of RESERVED_GROUPS) {
-            assert.doesNotMatch(usage, new RegExp(group));
-        }
+        assert.doesNotMatch(usage, /knowledge/);
     });
 
     it("returns the usage of a group for --help after the group", () => {
@@ -163,7 +155,7 @@ describe("usage errors", () => {
 });
 
 describe("reserved groups", () => {
-    for (const argv of [["knowledge", "list"], ["knowledge"], ["mail", "--help"], ["knowledge", "x", "--bogus"]]) {
+    for (const argv of [["knowledge", "list"], ["knowledge"], ["knowledge", "--help"], ["knowledge", "x", "--bogus"]]) {
         it(`returns a reserved-group result naming the group for ${argv.join(" ")}`, () => {
             const result = parse(...argv);
             assert.equal(result.kind, "reserved-group");
