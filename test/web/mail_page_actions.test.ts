@@ -15,7 +15,9 @@ const POLL_MS = 100;
 const STOP_TIMEOUT_MS = scaled(20_000);
 const TEST_TIMEOUT_MS = scaled(120_000);
 const CLOCK_START = "2026-03-02T09:00:00.000Z";
-const CLOCK_STEP_MS = 2 * 60 * 60 * 1000;
+// Each step is far below the access token's life, so a retry uses the token the fake server was told of.
+const CLOCK_STEP_MS = 60 * 1000;
+const DEVICE_POLL_STEP_MS = 10_000;
 const LOOPBACK = "127.0.0.1";
 const GOOD = { name: "work", address: "work@example.test", password: "work-secret" };
 const OWNED = { name: "added", address: "added@example.test", password: "added-secret" };
@@ -173,10 +175,12 @@ describe("the Mail page actions in chrome", () => {
             `${rig.oauth.endpoints.microsoftBase}/devicelogin`,
         );
         rig.oauth.enterCode(code);
-        let clock = Date.parse(CLOCK_START);
+        let clock = Date.parse(CLOCK_START) + DEVICE_POLL_STEP_MS;
+        await daemon.invoke("test.mail.clock.set", { time: new Date(clock).toISOString() });
         await until("the account to be ready on the page", async () => {
             const token = await storedAccessToken(rig, OWNED.name);
-            if (token !== undefined) rig.server.acceptToken(OWNED.address, token);
+            if (token === undefined) return false;
+            rig.server.acceptToken(OWNED.address, token);
             const status = await textOf(page, `${card(OWNED.name)} .mail-status`);
             if (status === "ready") return true;
             clock += CLOCK_STEP_MS;

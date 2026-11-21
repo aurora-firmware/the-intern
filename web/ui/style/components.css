@@ -290,3 +290,17 @@ textarea {
     content-visibility: auto;
     contain-intrinsic-size: auto 5rem;
 }
+
+/* Mail page: the result line and the sign-in and test answers */
+
+.mail-result,
+.mail-signin-start,
+.mail-test-result {
+    margin: 0.5rem 0;
+}
+
+.mail-account,
+.mail-notice,
+.mail-create {
+    margin-bottom: 1rem;
+}
