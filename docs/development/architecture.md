@@ -1179,8 +1179,8 @@ here can change inside its module.
 | Tools | `src/mail/mail_tools_extension.ts` (registers the tools and holds the read tools), `src/mail/mail_sort_tools.ts` (move, set flags, save draft), `src/mail/mail_send_tool.ts` (send), `src/mail/mail_tool_support.ts` (what they share), `src/mail/tool_connection.ts` | The pi-durable extension `intern.mail`, and the tools' connection per account |
 | Component | `src/mail/mail_component.ts` | The daemon hooks, the holds on roles, the test switches |
 | Operations | `src/service/mail_operations.ts` | `mail.*` |
-| Commands | `src/cli/mail_commands.ts`, `src/cli/mail_text.ts`, `src/cli/secret_prompt.ts` | S-005's conventions, on the client library |
-| Pages | `web/ui/pages/mail.ts`, `web/ui/model/mail.ts`, `web/ui/components/job_email.ts` | The Mail page, its pure model, the Job page's email section |
+| Commands | `src/cli/mail_commands.ts` (list, show, test, remove, notices), `src/cli/mail_setup_commands.ts` (create, change, signin), `src/cli/mail_command_kit.ts` (what they share), `src/cli/mail_text.ts`, `src/cli/secret_prompt.ts` | S-005's conventions, on the client library |
+| Pages | `web/ui/pages/mail.ts`, `web/ui/pages/mail_cards.ts` (the account cards, the add form and the notice settings), `web/ui/pages/mail_form.ts` (the form fields and buttons), `web/ui/model/mail.ts`, `web/ui/components/job_email.ts` | The Mail page, its pure model, the Job page's email section |
 | Shipped text | `src/shipped/instructions/roles/triage.md` | The `triage` role's instructions (REQ-019) |
 
 `serve.ts` places the mail component after the desk component and before the schedules component and the listeners,
