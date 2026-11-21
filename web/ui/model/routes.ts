@@ -5,6 +5,7 @@ export type Route =
     | { page: "roles" }
     | { page: "workspaces" }
     | { page: "schedules" }
+    | { page: "mail" }
     | { page: "status" }
     | { page: "unknown" };
 
@@ -14,6 +15,7 @@ const FIXED_PAGES = new Map<string, Route>([
     ["#/roles", { page: "roles" }],
     ["#/workspaces", { page: "workspaces" }],
     ["#/schedules", { page: "schedules" }],
+    ["#/mail", { page: "mail" }],
     ["#/status", { page: "status" }],
 ]);
 
@@ -36,6 +38,7 @@ export const routeHash = (route: Route): string => {
         case "roles":
         case "workspaces":
         case "schedules":
+        case "mail":
         case "status":
             return `#/${route.page}`;
         case "board":

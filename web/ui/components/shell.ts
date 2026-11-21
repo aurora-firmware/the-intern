@@ -1,6 +1,6 @@
 import { type ComponentChildren, Fragment, h } from "preact";
 
-export type ShellPage = "board" | "desk" | "roles" | "workspaces" | "status" | "schedules" | "job";
+export type ShellPage = "board" | "desk" | "roles" | "workspaces" | "status" | "schedules" | "mail" | "job";
 
 const LINKS: { page: ShellPage; label: string; href: string }[] = [
     { page: "board", label: "Board", href: "#/" },
@@ -8,6 +8,7 @@ const LINKS: { page: ShellPage; label: string; href: string }[] = [
     { page: "roles", label: "Roles", href: "#/roles" },
     { page: "workspaces", label: "Workspaces", href: "#/workspaces" },
     { page: "schedules", label: "Schedules", href: "#/schedules" },
+    { page: "mail", label: "Mail", href: "#/mail" },
     { page: "status", label: "Status", href: "#/status" },
 ];
 

@@ -6,6 +6,7 @@ import { parseRoute, type Route } from "./model/routes.ts";
 import { BoardPage } from "./pages/board.ts";
 import { DeskPage } from "./pages/desk.ts";
 import { JobPage } from "./pages/job.ts";
+import { MailPage } from "./pages/mail.ts";
 import { RolesPage } from "./pages/roles.ts";
 import { SchedulesPage } from "./pages/schedules.ts";
 import { StatusPage } from "./pages/status.ts";
@@ -21,6 +22,7 @@ const PAGE_HEADINGS: Record<PageName, string> = {
     roles: "Roles",
     workspaces: "Workspaces",
     schedules: "Schedules",
+    mail: "Mail",
     status: "Status",
 };
 
@@ -36,6 +38,7 @@ const showRoute = (route: Route) => {
         route.page === "roles" ? h(RolesPage, { feed }) : null,
         route.page === "workspaces" ? h(WorkspacesPage, { feed }) : null,
         route.page === "schedules" ? h(SchedulesPage, { feed }) : null,
+        route.page === "mail" ? h(MailPage, { feed }) : null,
         route.page === "status" ? h(StatusPage, { feed }) : null,
         route.page === "job" ? h(JobPage, { feed, number: route.number, key: route.number }) : null,
     );

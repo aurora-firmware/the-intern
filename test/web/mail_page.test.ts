@@ -88,7 +88,7 @@ describe("the Mail page in chrome", () => {
     it("lists each account with its settings and shows the notice settings at its address", {
         timeout: TEST_TIMEOUT_MS,
     }, async (t) => {
-        const { rig, daemon, port } = await startServer();
+        const { daemon, port } = await startServer();
         await daemon.invoke("mail.notices.set", { to: NOTICE_TO, from: GOOD.name });
         await waitForReady(daemon);
         await until("the broken account to fail", async () => {
