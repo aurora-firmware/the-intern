@@ -11,6 +11,7 @@ import { ConversationControls } from "../components/conversation_controls.ts";
 import { ConversationSettings } from "../components/conversation_settings.ts";
 import { JobActions, UnrelateButton } from "../components/job_actions.ts";
 import { JobActivity } from "../components/job_activity.ts";
+import { type EmailJobRecord, JobEmail } from "../components/job_email.ts";
 import {
     Entries,
     EntryItem,
@@ -179,6 +180,7 @@ export const JobPage = ({ feed, number }: { feed: FeedConnection | null | undefi
                       numbers: view.record.related ?? [],
                       action: (other) => h(UnrelateButton, { number, other }),
                   }),
+                  h(JobEmail, { record: view.record as EmailJobRecord }),
                   h(JobActions, { record: view.record }),
                   h(AnswerBox, { number, isBlocked: view.record.status === "blocked" }),
                   h(JobActivity, {

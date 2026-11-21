@@ -244,8 +244,7 @@ describe("the Job page's email section in chrome", () => {
 
         await page.waitForFunction(
             () =>
-                document.querySelector('main .job-email [data-field="request-mark"] .job-value')?.textContent ===
-                "Set",
+                document.querySelector('main .job-email [data-field="request-mark"] .job-value')?.textContent === "Set",
             undefined,
             { timeout: WAIT_MS },
         );
