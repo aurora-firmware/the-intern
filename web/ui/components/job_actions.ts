@@ -71,13 +71,22 @@ const EditForm = ({ record }: { record: JobRecord }) => {
     );
 };
 
-/** Complete or cancel with a justification. An empty one is sent as it is: the service refuses it (S-006 REQ-013). */
+/**
+ * Complete or cancel with a justification. An empty one is sent as it is: the service refuses it (S-006 REQ-013).
+ * Complete alone sends the mail text, and only when it is filled (S-006 REQ-004).
+ */
 const FinishForm = ({ number }: { number: string }) => {
     const connected = useContext(isConnected);
     const [justification, setJustification] = useState("");
+    const [mailText, setMailText] = useState("");
     const { sending, failure, run } = useCall();
     const finish = (operation: "jobs.complete" | "jobs.cancel") => async () => {
-        if (await run(() => pageClient().invoke(operation, { job: number, justification }))) setJustification("");
+        const sendsMailText = operation === "jobs.complete" && mailText !== "";
+        const input = { job: number, justification, ...(sendsMailText ? { mailText } : {}) };
+        if (await run(() => pageClient().invoke(operation, input))) {
+            setJustification("");
+            setMailText("");
+        }
     };
     const button = (cls: string, label: string, operation: "jobs.complete" | "jobs.cancel") =>
         h(
@@ -94,6 +103,12 @@ const FinishForm = ({ number }: { number: string }) => {
             null,
             "Justification",
             h("textarea", { value: justification, onInput: (event: Event) => setJustification(textOf(event)) }),
+        ),
+        h(
+            "label",
+            null,
+            "Mail text (Complete only)",
+            h("textarea", { name: "mailText", value: mailText, onInput: (event: Event) => setMailText(textOf(event)) }),
         ),
         failure !== undefined ? h(RefusalMessage, { error: failure.error }) : null,
         button("job-complete", "Complete", "jobs.complete"),
