@@ -245,8 +245,8 @@ worklog entries and history. A job that came by email also shows an `Email:` sec
 subject, the request mark, the path of the saved message, each attachment with its size and path, and the job's mail
 thread, one line per message with its direction (`received` or `sent`), sender, recipients, subject and date. With
 `--json` it prints the keyed object with `jobs.get`, `jobs.worklog.list` and
-`jobs.history.list`; for a job that came by email the `jobs.get` value also holds the details under `email`. Each worklog and history value is the first page of entries as the service gives it, with a
-`cursor` when more follow.
+`jobs.history.list`; for a job that came by email, the `jobs.get` value also holds the details under `email`. Each
+worklog and history value is the first page of entries as the service gives it, with a `cursor` when more follow.
 
 ### `bob jobs update <job>`
 
@@ -476,8 +476,8 @@ sends only the options you give. The service checks every value, and a refusal e
 
 ## Mail
 
-`<name>` is a mail account's name. The manual page on email explains what the accounts are and how to set one up. Every mail
-command takes `--json`, `--runtime-dir <value>` and `--help`.
+`<name>` is a mail account's name. The manual page on email explains what the accounts are and how to set one up.
+Every mail command takes `--json`, `--runtime-dir <value>` and `--help`.
 
 | Command                                | What it does                                                                        |
 | -------------------------------------- | ----------------------------------------------------------------------------------- |
