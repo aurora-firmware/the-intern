@@ -199,17 +199,22 @@ async function checkTriage(world: World): Promise<void> {
     console.log("  one reply, to the request's sender, after its job was completed");
 }
 
-type ConversationEntry = {
-    kind: string;
-    data: { messages?: { role?: string; toolName?: string; isError?: boolean }[] };
-};
+type ConversationEntry = { kind: string; data: unknown };
+type ToolResultMessage = { toolName?: string; isError?: boolean };
 
-/** True when the entries hold the result of a handoff call the product accepted. */
+/**
+ * True when the entries hold the result of a handoff call the product accepted. pi-durable stores a tool result as an
+ * entry whose model is `[ToolResultMessage]`, with `isError` always set, and `conversations.entries` shows that array
+ * as the entry's `data`.
+ */
 export function holdsAcceptedHandoff(entries: readonly ConversationEntry[]): boolean {
     return entries.some(
         (entry) =>
             entry.kind === "pi.tool-result" &&
-            entry.data.messages?.some((message) => message.toolName === "handoff" && message.isError !== true),
+            Array.isArray(entry.data) &&
+            (entry.data as ToolResultMessage[]).some(
+                (message) => message.toolName === "handoff" && message.isError === false,
+            ),
     );
 }
 
