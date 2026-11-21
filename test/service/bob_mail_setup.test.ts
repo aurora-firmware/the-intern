@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { type BobResult, runBob, spawnBob } from "../support/bob_process.ts";
+import { type BobChild, type BobResult, runBob, spawnBob } from "../support/bob_process.ts";
 import { type MailRig, startMailRig } from "../support/mail_rig.ts";
 import { hasScript, runInPty } from "../support/pty.ts";
 import { scaled } from "../support/time_scale.ts";
@@ -241,26 +241,7 @@ describe("bob mail signin", () => {
         await createMicrosoftAccount(rig);
         const child = spawnBob(["mail", "signin", "work"], { runtimeDir: rig.env.runtimeDir, env: rig.env.env });
 
-        await child.waitFor("stdout", "enter the code ");
-        const code = /enter the code (\S+)\./.exec(child.stdout())?.[1] as string;
-        assert.ok(child.stdout().includes(`${rig.oauth.endpoints.microsoftBase}/devicelogin`), child.stdout());
-        rig.oauth.enterCode(code);
-        await rig.setClock(new Date(CLOCK_START + DEVICE_POLL_STEP_MS));
-        let clock = CLOCK_START;
-        let isDone = false;
-        const exited = child.exited.finally(() => {
-            isDone = true;
-        });
-        while (!isDone) {
-            const token = await storedToken(rig, "work");
-            if (token !== undefined) {
-                // The login check retries after a pause on the mail clock, so the clock moves once the token is known.
-                rig.server.acceptToken(ADDRESS, token);
-                clock += CLOCK_STEP_MS;
-                await rig.setClock(new Date(clock));
-            }
-            await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-        }
+        const { exited } = await driveSignInToReady(rig, child, CLOCK_START);
 
         assert.equal(await exited, 0, child.stderr());
     });
@@ -288,6 +269,37 @@ describe("bob mail signin", () => {
         assert.deepEqual([last.type, last.name, last.status], ["mail_account_status", "work", "needs_sign_in"]);
     });
 
+    it("prints the reason and exits 1 when the sign-in of a ready account ends without the code entered", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await emptyRig();
+        await createMicrosoftAccount(rig);
+        const first = spawnBob(["mail", "signin", "work"], { runtimeDir: rig.env.runtimeDir, env: rig.env.env });
+        let second: BobChild | undefined;
+        try {
+            const driven = await driveSignInToReady(rig, first, CLOCK_START);
+            assert.equal(await driven.exited, 0, first.stderr());
+            second = spawnBob(["mail", "signin", "work", "--json"], {
+                runtimeDir: rig.env.runtimeDir,
+                env: rig.env.env,
+            });
+            await second.waitFor("stdout", "devicelogin");
+
+            // The code expires on the mail clock; nobody entered it.
+            await rig.setClock(new Date(driven.clock() + 6 * 60 * 60 * 1000));
+
+            assert.equal(await second.exited, 1, second.stderr());
+            assert.ok(second.stderr().includes("The sign-in of work failed: "), second.stderr());
+            assert.ok(second.stderr().includes("the code expired"), second.stderr());
+            const lines = second.stdout().trim().split("\n");
+            const last = JSON.parse(lines.at(-1) as string) as { type: string; name: string; status: string };
+            assert.deepEqual([last.type, last.name, last.status], ["mail_account_status", "work", "needs_sign_in"]);
+        } finally {
+            first.signal("SIGKILL");
+            second?.signal("SIGKILL");
+        }
+    });
+
     it("exits 1 with the service's reason for an account that has no sign-in, and for one that doesn't exist", async () => {
         const rig = await emptyRig();
         await bob(rig, [...createArgs(rig), "--secret-stdin"], PASSWORD);
@@ -310,6 +322,37 @@ describe("bob mail signin", () => {
         assert.equal(result.status, 3, result.stderr);
     });
 });
+
+interface DrivenSignIn {
+    exited: Promise<number | null>;
+    clock: () => number;
+}
+
+/** Enters the printed code and moves the mail clock until the `signin` command exits, as a team member would. */
+async function driveSignInToReady(rig: MailRig, child: BobChild, clockStart: number): Promise<DrivenSignIn> {
+    await child.waitFor("stdout", "enter the code ");
+    const code = /enter the code (\S+)\./.exec(child.stdout())?.[1] as string;
+    assert.ok(child.stdout().includes(`${rig.oauth.endpoints.microsoftBase}/devicelogin`), child.stdout());
+    rig.oauth.enterCode(code);
+    await rig.setClock(new Date(clockStart + DEVICE_POLL_STEP_MS));
+    let clock = clockStart;
+    let isDone = false;
+    const exited = child.exited.finally(() => {
+        isDone = true;
+    });
+    while (!isDone) {
+        const token = await storedToken(rig, "work");
+        if (token !== undefined) {
+            // The login check retries after a pause on the mail clock, so the clock moves once the token is known.
+            rig.server.acceptToken(ADDRESS, token);
+            clock += CLOCK_STEP_MS;
+            await rig.setClock(new Date(clock));
+        }
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    }
+    await exited;
+    return { exited, clock: () => clock };
+}
 
 async function storedToken(rig: MailRig, name: string): Promise<string | undefined> {
     try {
