@@ -116,20 +116,33 @@ describe("mail account status on the instance feed", () => {
         subscription.close();
     });
 
-    it("follows a new subscriber's snapshot only with later deltas, never replaying earlier changes", async () => {
+    it("tells a new subscriber each mail account's current status as deltas right after the snapshot (S-009 AC-005.2)", async () => {
         const hub = createAccountStatusHub({ clock: fixedClock });
         const { context } = await startDaemon(hub);
         hub.start("mail", "work", START);
+        hub.start("mail", "home", START);
+        hub.report("mail", "home", { kind: "ready" });
+        hub.start("other", "x", START);
         const subscription = context.instanceFeed.subscribe();
         hub.report("mail", "work", { kind: "ready" });
-        const delta = await nextDelta(subscription);
-        assert.deepEqual(delta, {
-            seq: 1,
-            type: "mail_account_status",
-            name: "work",
-            status: "ready",
-            lastCheck: NOW.toISOString(),
-        });
+        const deltas = [await nextDelta(subscription), await nextDelta(subscription), await nextDelta(subscription)];
+        assert.deepEqual(deltas, [
+            { seq: 1, type: "mail_account_status", name: "work", status: "connecting" },
+            {
+                seq: 2,
+                type: "mail_account_status",
+                name: "home",
+                status: "ready",
+                lastCheck: NOW.toISOString(),
+            },
+            {
+                seq: 3,
+                type: "mail_account_status",
+                name: "work",
+                status: "ready",
+                lastCheck: NOW.toISOString(),
+            },
+        ]);
         subscription.close();
     });
 
