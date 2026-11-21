@@ -276,8 +276,10 @@ change there is a change to the role and affects only agents seated afterwards.
 The Mail page lists the mail accounts. [Email](email.md) explains the two kinds of account, the statuses and the
 sign-in. The page stays current without a reload, and it does what the [`bob mail`](commands.md#mail) commands do.
 
-Each account is a card with its address, kind, status, last error and last check, and with fields for its settings: the
-account's login details, the check interval, the triage role and the allowlist, one address per line. The status is
+Each account is a card with its address, kind, status, last error and last check, and with fields for the secret
+(**Password** or **Client secret**, as its authentication needs), the check interval, the triage role and the allowlist,
+one address per line. The card has no field for the address, servers, security, login, password command, client ID or
+tenant. To change those, remove the account and add it again, or use `bob mail change`. The status is
 `connecting`, `ready`, `needs_sign_in` or `failing`, and it changes on the card as the service checks the account.
 Each card has four actions:
 
