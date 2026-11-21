@@ -112,7 +112,7 @@ export function createAccountsLayer(options: AccountsLayerOptions): AccountsLaye
 
     function reportSignInFailure(auth: AccountAuth, error: unknown): void {
         const [owner, name] = auth.key.split("/");
-        if (owner === undefined || name === undefined || status.get(owner, name)?.status !== "needs_sign_in") return;
+        if (owner === undefined || name === undefined || status.get(owner, name) === undefined) return;
         const message = error instanceof Error ? error.message : `Account ${auth.key}: the sign-in failed.`;
         status.report(owner, name, { kind: "needs_sign_in", message });
     }
