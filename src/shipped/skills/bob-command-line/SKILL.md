@@ -66,6 +66,8 @@ Changing your seat resets your enabled skills to the new role's defaults.
 - `bob jobs answer <job> <text>` sends text to a job's lead, which resumes a Blocked job.
 - `bob jobs complete <job> <justification>` completes an In-progress job, and
   `bob jobs cancel <job> <justification>` cancels a job. Each needs a justification.
+- `bob jobs complete <job> <justification> --mail-text <text>` also gives the text that the sender of a job that came by
+  email receives as the reply. The justification is never mailed.
 
 ## Conversations
 
@@ -96,6 +98,21 @@ the job calls for it.
 - `bob schedules create <name>` and `bob schedules change <name>` write an entry with `--cron`, `--request`, `--role`,
   `--model`, `--thinking-level` and `--workspace`. `create` needs `--cron` and `--request`.
 - `bob schedules remove <name>` removes an entry, and `bob schedules run <name>` starts its scheduled run now.
+
+## Mail
+
+`<name>` is a mail account's name.
+
+- `bob mail list` lists the accounts with their address, kind, status and last check.
+- `bob mail show <name>` shows an account's settings, allowlist, triage role, status and last error. It never shows a
+  secret.
+- `bob mail test <name>` checks the login to an account's servers.
+- `bob mail notices` shows the notice mail settings. `bob mail notices set --to <address> --from <account>` and
+  `bob mail notices clear` change them.
+- `bob mail create <name>`, `bob mail change <name>` and `bob mail signin <name>` set up and sign in an account. A
+  password or client secret is read from the terminal, or from standard input with `--secret-stdin`, never from a flag
+  or the environment. `bob mail change` reads a new one only with `--new-secret`.
+- `bob jobs list --mail <account>` lists the jobs that came through one account.
 
 ## The instance
 
