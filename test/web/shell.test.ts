@@ -12,6 +12,7 @@ const LINKS = [
     { name: "Roles", hash: "#/roles" },
     { name: "Workspaces", hash: "#/workspaces" },
     { name: "Schedules", hash: "#/schedules" },
+    { name: "Mail", hash: "#/mail" },
     { name: "Status", hash: "#/status" },
 ];
 
@@ -42,7 +43,7 @@ const activeLinks = (page: Page) => page.locator(".sidebar a[aria-current='page'
 
 for (const name of BROWSERS) {
     describe(`the page shell in ${name}`, () => {
-        it("shows the sidebar with the logo and the six links when /ui/ opens", async (t) => {
+        it("shows the sidebar with the logo and the seven links when /ui/ opens", async (t) => {
             const port = await startNetworkDaemon();
             const browser = await launchBrowser(t, name);
             if (browser === undefined) {
