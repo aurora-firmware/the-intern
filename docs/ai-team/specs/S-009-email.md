@@ -1,7 +1,7 @@
 ---
 id: S-009
 title: Email
-version: '0.3'
+version: '0.4'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-17'
 author: planner
@@ -591,7 +591,7 @@ as instructions and skills of the triage role (S-008); this spec adds no rule en
   rewritten definition of done; the other two are completed with a justification; only the request gets a reply,
   after its job is completed
 
-**Verification:** test — a live check over the pi agent login (`npm run test:live`).
+**Verification:** test — a live check over the pi agent login (`npm run test:live:mail`).
 
 ### REQ-009 — Job threads
 
@@ -835,7 +835,7 @@ none of these unless the person they write to asked for one.
   send tool
 - **Then:** no mail text or sent email names a job number or internal name
 
-**Verification:** test — a live check over the pi agent login (`npm run test:live`).
+**Verification:** test — a live check over the pi agent login (`npm run test:live:mail`).
 
 ### REQ-017 — The `bob mail` commands
 
@@ -1109,7 +1109,7 @@ The command reference SHALL match `bob mail --help`.
    (REQ-021, REQ-022).
 6. No secret appears outside the secrets store, and no composed mail shows an internal (REQ-016, REQ-020).
 7. **Live check.** With a real low-cost model, the shipped `triage` role marks and hands off a request, completes a
-   newsletter and an auto-reply without a reply, and writes mail with no internals (`npm run test:live`).
+   newsletter and an auto-reply without a reply, and writes mail with no internals (`npm run test:live:mail`).
 
 ## Implementation Order
 
@@ -1133,3 +1133,4 @@ and the request id of an email follow-up in ADR-004 decisions 3 and 5.
 |------|-------------|-----|----------------|
 | 2026-11-19 | v0.2. REQ-002, REQ-020 and the Assumptions list: the secrets store holds the secrets of every kind of account The Intern connects to, with mail accounts its only users today, in place of a store for mail secrets only; S-002 and S-004 on this branch and the ADR-002 amendment follow. Open Questions: a shared accounts layer (sign-in, token refresh, the secrets store, account status) apart from the mail-specific code. No behaviour of email changes and no identifier is added, changed or retired. | Product owner decision, 2026-11-19: calendars and contacts will get their own spec, and S-009 shouldn't make them reopen S-002, S-004 and ADR-002. | None yet; S-009 isn't broken down |
 | 2026-11-19 | v0.3. REQ-005, Definitions and new AC-005.2: a fourth status, `connecting`, for an account not checked yet since it was added, changed or the daemon started. REQ-003: mail a removed account still owes is never sent, and each gets "not sent: account removed". REQ-022, REQ-013, REQ-016, Interfaces and new AC-022.3: an email the server permanently refuses isn't tried again; the history records "refused by the server" with the server's message, and the notice address gets one notice unless the refused email went to it. REQ-018, AC-018.1 and Interfaces: the Job page shows each attachment's name and size, with no download. Open Questions: settled by Feature Architecture. S-004 and S-006 on this branch follow. The feed events paragraph and the Assumptions list name every mail history entry (consistency review G2, G3). | Feature Architecture Spec findings F-A to F-D; product owner decisions, 2026-11-19. | None yet; S-009 isn't broken down |
+| 2026-11-21 | v0.4. AC-008.2, AC-016.2 and Success Criterion 7 name the live check `npm run test:live:mail`, the script that runs it, in place of `npm run test:live`, which runs the daemon's live check. No behaviour changes and no identifier is added, changed or retired. | B-054; product owner decision, 2026-11-21. | T-457 (already built to `test:live:mail`) |
