@@ -278,7 +278,6 @@ describe("an account checked against a slow server (S-009 AC-005.2)", () => {
 // starts, so the delta has no reader. Every status delta of the account that the feed carries, up to `ready`, is kept.
 it("sends connecting and then ready to the feed after a restart", {
     timeout: TEST_TIMEOUT_MS,
-    todo: "B-050",
 }, async () => {
     const { server, env, daemon } = await startFixture({ trustAuthority: false });
     await daemon.invoke("mail.accounts.create", ownedInput(server, "slow", FIRST_ADDRESS));

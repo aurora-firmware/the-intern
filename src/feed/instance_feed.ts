@@ -5,7 +5,7 @@
  * with reason `lagging`.
  */
 
-import type { AccountStatusHub, AccountStatusKind } from "../accounts/account_status.ts";
+import type { AccountStatusHub, AccountStatusKind, AccountStatusView } from "../accounts/account_status.ts";
 import type { Admission, AdmissionSnapshot } from "../admission/admission.ts";
 import type { ConfigStore } from "../config/config_writer.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
@@ -229,16 +229,18 @@ export async function createInstanceFeed(options: {
     const stopAdmission = admission.onChange((snapshot) => publish({ type: "admission_changed", admission: snapshot }));
     const stopConfig = config.onChange(({ section }) => publish({ type: "settings_changed", section }));
     const stopFiles = fileChanges.onChange(({ path, kind }) => publish({ type: "files_changed", path, kind }));
-    const stopAccounts = accountStatus?.onChange((view) => {
-        if (view.owner !== MAIL_OWNER) return;
+    function accountDelta(view: AccountStatusView): DeltaBody {
         const { name, status, lastError, lastCheck } = view;
-        publish({
+        return {
             type: "mail_account_status",
             name,
             status,
             ...(lastError && { lastError: { message: lastError.message, at: lastError.at.toISOString() } }),
             ...(lastCheck && { lastCheck: lastCheck.toISOString() }),
-        });
+        };
+    }
+    const stopAccounts = accountStatus?.onChange((view) => {
+        if (view.owner === MAIL_OWNER) publish(accountDelta(view));
     });
     let isClosed = false;
 
@@ -291,6 +293,11 @@ export async function createInstanceFeed(options: {
                 nextSeq: () => ++seq,
             };
             sinks.add(sink);
+            // The mail component starts before any client can connect, so a subscriber is told each account's
+            // current status here; the snapshot carries none.
+            for (const view of accountStatus?.list(MAIL_OWNER) ?? []) {
+                sink.push({ ...accountDelta(view), seq: sink.nextSeq() } as InstanceDelta);
+            }
             return {
                 ...subscription,
                 close() {
