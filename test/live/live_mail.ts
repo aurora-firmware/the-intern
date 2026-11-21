@@ -147,6 +147,7 @@ function print(label: string, job: JobView): void {
     console.log(`  ${label}: job ${job.number}, status ${job.status}, request mark ${job.requestMark}`);
     console.log(`    definition of done: ${JSON.stringify(job.definitionOfDone)}`);
     console.log(`    resolution: ${job.resolution ? JSON.stringify(job.resolution) : "none"}`);
+    if (job.blockedReason) console.log(`    blocked reason: ${JSON.stringify(job.blockedReason)}`);
 }
 
 async function untilJobEnds(world: World, subject: string, statuses: string[]): Promise<JobView> {
