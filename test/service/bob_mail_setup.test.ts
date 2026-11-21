@@ -75,6 +75,22 @@ async function allowOf(rig: MailRig, name = "intern"): Promise<string[]> {
     return answer.account.allow;
 }
 
+async function createMicrosoftAccount(rig: MailRig): Promise<void> {
+    const created = await bob(rig, [
+        "mail",
+        "create",
+        "work",
+        ...serverFlags(rig),
+        "--auth",
+        "microsoft",
+        "--client-id",
+        "client-1",
+        "--tenant",
+        "contoso",
+    ]);
+    assert.equal(created.status, 0, created.stderr);
+}
+
 describe("bob mail create", () => {
     it("creates the account from the password typed on a terminal and echoes and prints nothing of it", {
         skip: !hasScript(),
@@ -222,19 +238,7 @@ describe("bob mail signin", () => {
         timeout: TEST_TIMEOUT_MS,
     }, async () => {
         const rig = await emptyRig();
-        const created = await bob(rig, [
-            "mail",
-            "create",
-            "work",
-            ...serverFlags(rig),
-            "--auth",
-            "microsoft",
-            "--client-id",
-            "client-1",
-            "--tenant",
-            "contoso",
-        ]);
-        assert.equal(created.status, 0, created.stderr);
+        await createMicrosoftAccount(rig);
         const child = spawnBob(["mail", "signin", "work"], { runtimeDir: rig.env.runtimeDir, env: rig.env.env });
 
         await child.waitFor("stdout", "enter the code ");
@@ -259,6 +263,29 @@ describe("bob mail signin", () => {
         }
 
         assert.equal(await exited, 0, child.stderr());
+    });
+
+    it("prints the reason and exits 1 when the sign-in of an account that needs it ends without the code entered", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const rig = await emptyRig();
+        await createMicrosoftAccount(rig);
+        const child = spawnBob(["mail", "signin", "work", "--json"], {
+            runtimeDir: rig.env.runtimeDir,
+            env: rig.env.env,
+        });
+        await child.waitFor("stdout", "devicelogin");
+
+        // The code expires on the mail clock; nobody entered it.
+        await rig.setClock(new Date(CLOCK_START + CLOCK_STEP_MS));
+
+        assert.equal(await child.exited, 1, child.stderr());
+        assert.ok(child.stderr().includes("The sign-in of work failed: "), child.stderr());
+        assert.ok(child.stderr().includes("the code expired"), child.stderr());
+        const lines = child.stdout().trim().split("\n");
+        assert.equal((JSON.parse(lines[0] as string) as { kind: string }).kind, "device_code");
+        const last = JSON.parse(lines.at(-1) as string) as { type: string; name: string; status: string };
+        assert.deepEqual([last.type, last.name, last.status], ["mail_account_status", "work", "needs_sign_in"]);
     });
 
     it("exits 1 with the service's reason for an account that has no sign-in, and for one that doesn't exist", async () => {
