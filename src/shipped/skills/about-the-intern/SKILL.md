@@ -1,7 +1,7 @@
 ---
 
 name: about-the-intern
-description: "Explain how The Intern works and how a team member uses and configures it, from the user manual. Use it to answer questions about jobs, roles, workspaces, schedules, skills and instructions, the front desk, the `bob` commands, the web interface and running the service."
+description: "Explain how The Intern works and how a team member uses and configures it, from the user manual. Use it to answer questions about jobs, roles, workspaces, schedules, skills and instructions, the front desk, email accounts, the `bob` commands, the web interface and running the service."
 ---
 
 # About The Intern
@@ -24,6 +24,8 @@ in the first.
   share the work of a job.
 - `manual/schedules.md`: recurring work: schedule entries, due times and scheduled runs.
 - `manual/front_desk.md`: the front desk, what it does and doesn't do, and talking to it with `bob chat`.
+- `manual/email.md`: email accounts: owned and monitored accounts, setting one up, signing in with Google or Microsoft,
+  and what The Intern does with the mail and sends back.
 - `manual/skills_and_instructions.md`: where the common prompt, role instructions and skills are, how skills are found
   and enabled, how to change them and how upgrades treat the changes.
 - `manual/commands.md`: every `bob` command with its arguments, options, JSON output and exit codes.

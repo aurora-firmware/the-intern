@@ -41,6 +41,7 @@ describe("the shipped about-the-intern skill", () => {
             "schedules.md",
             "jobs.md",
             "front_desk.md",
+            "email.md",
         ]) {
             assert.ok(pages.includes(page), `${page} is copied`);
         }
