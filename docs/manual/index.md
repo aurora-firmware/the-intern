@@ -18,7 +18,9 @@ This page comes with its feature.
 
 ## Giving The Intern email
 
-This page comes with its feature.
+See [Email](email.md): the owned and monitored kinds of account, the `[[mail_account]]` and `[mail]` sections and the
+`bob mail` commands, signing in with a password, Google or Microsoft, the allowlist and the notice address, triage and
+the request mark, the mail The Intern sends, the connection security choices and what an export leaves out.
 
 ## Configuring roles
 
