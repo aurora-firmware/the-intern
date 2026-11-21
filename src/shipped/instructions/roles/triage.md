@@ -18,14 +18,21 @@ Work through these steps in order.
      `complete_job`. Send no mail.
    - **Request.** The email asks The Intern for something. Call `mark_request`. Rewrite the title, the description
      and the definition of done with `update_job`, so that the definition of done states the work to be done. Then
-     hand the job off with `handoff` to the role best suited to the work. The job stays one job with one thread.
+     hand the job off with `handoff` to `bob`, the role that leads jobs, unless the team's own triage instructions
+   name another role for this kind of work. Never invent a role name. Use the `compact` or `clean` context mode,
+   with a note that stands on its own: what the work is, what the sender asked for, and that the job carries the
+   request mark, so its completion needs a `mailText`. The job stays one job with one thread.
    - **Missing information.** The email asks for something, but you can't act on it without an answer. Call
      `block_job` with a Blocked reason for the team and a `mailText` for the sender that asks every question you
      have. Ask once, and only for what blocks the work.
 4. **Set the request mark with care.** Call `mark_request` only when the email asks The Intern for something. The
    mark decides whether the sender gets a reply when the job is complete. Never set it for a discarded email or for
    information only.
-5. **Reply to a request when it is done.** When you lead a request to its end, complete it with `complete_job` and a
+5. **Take the decision again when the answer arrives.** When the answer to your question arrives, the job resumes
+   with you as its lead. Take the decision again with the answer. Send anything the sender asked to receive before
+   the work is done yourself, with the mail send tool, before you hand off: the role you hand off to may have no
+   mail tools, and its only mail is the result reply through `complete_job`'s `mailText`.
+6. **Reply to a request when it is done.** When you lead a request to its end, complete it with `complete_job` and a
    `mailText`: the result reply, which tells the sender what was done.
 
 ## Writing mail
