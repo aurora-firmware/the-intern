@@ -1,8 +1,11 @@
 /**
  * The Mail page (S-009 REQ-018): each mail account with its name, address, kind, status, last error and last check,
- * and the notice address with its sending account. The accounts and the notice are read again after a mail
- * `settings_changed` delta and on each new instance snapshot; a `mail_account_status` delta sets one account's status
- * without a read. A refusal of a read shows on the page; a lost connection is the banner's to show.
+ * and the notice address with its sending account. A team member adds, changes, tests, signs in and removes accounts
+ * here and sets or clears the notice settings; the service owns the rules, and its refusal shows next to the form or
+ * account it concerns. The accounts and the notice are read again after a mail `settings_changed` delta and on each
+ * new instance snapshot; a `mail_account_status` delta sets one account's status without a read. A secret field
+ * starts empty, is never filled from the service and is emptied after each call. A refusal of a read shows on the
+ * page; a lost connection is the banner's to show.
  */
 import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
@@ -18,9 +21,11 @@ import {
     type MailStatusDelta,
     needsReload,
 } from "../model/mail.ts";
+import { AccountCard, CreateAccount, NoticeSettings } from "./mail_cards.ts";
+import type { Reload } from "./mail_form.ts";
 
-type Reload = () => Promise<void>;
 type Apply = (delta: MailStatusDelta) => void;
+type Data = { state: MailState; roles: string[] };
 
 // A feed connection has no way to remove a listener, so it gets one that speaks to the mounted page.
 let mountedReload: Reload | undefined;
@@ -39,51 +44,19 @@ const attachFeed = (feed: FeedConnection) => {
     });
 };
 
-const readState = async (): Promise<MailState> => {
+const readData = async (): Promise<Data> => {
     const client = pageClient();
     const { accounts } = (await client.invoke("mail.accounts.list")) as { accounts: MailAccountView[] };
     const { notice } = (await client.invoke("mail.notices.get")) as { notice: MailNoticeView };
-    return { accounts, notice };
+    const { roles } = (await client.invoke("roles.list")) as { roles: { name: string }[] };
+    return { state: { accounts, notice }, roles: roles.map((role) => role.name) };
 };
 
-const NOT_SET = "Not set";
-
-const field = (className: string, label: string, value: string) =>
-    h("div", null, h("dt", null, label), h("dd", { class: className }, value));
-
-const AccountCard = ({ account }: { account: MailAccountView }) =>
-    h(
-        "section",
-        { class: "card mail-account", "data-account": account.name },
-        h("h3", null, account.name),
-        h(
-            "dl",
-            null,
-            field("mail-address", "Address", account.address),
-            field("mail-kind", "Kind", account.kind),
-            field("mail-status", "Status", account.status),
-            field("mail-error", "Last error", account.lastError?.message ?? ""),
-            field("mail-checked", "Last check", account.lastCheck ?? ""),
-        ),
-    );
-
-const NoticeSettings = ({ notice }: { notice: MailNoticeView }) =>
-    h(
-        "section",
-        { class: "card mail-notice" },
-        h("h3", null, "Notice mail"),
-        h(
-            "dl",
-            null,
-            field("mail-notice-to", "Notice address", notice.to ?? NOT_SET),
-            field("mail-notice-from", "Sending account", notice.from ?? NOT_SET),
-        ),
-    );
-
-/** The mail accounts with their live status, and the notice settings. */
+/** The mail accounts with their live status and actions, and the notice settings. */
 export const MailPage = ({ feed }: { feed: FeedConnection | null | undefined }) => {
-    const [state, setState] = useState<MailState | undefined>(undefined);
+    const [data, setData] = useState<Data | undefined>(undefined);
     const [failure, setFailure] = useState<{ error: unknown } | undefined>(undefined);
+    const [result, setResult] = useState<string | undefined>(undefined);
 
     useEffect(() => {
         // `undefined` means the tab is still connecting: the first read waits for the feed.
@@ -97,9 +70,9 @@ export const MailPage = ({ feed }: { feed: FeedConnection | null | undefined }) 
             const thisRead = ++latestRead;
             const seenBefore = seenStatuses.length;
             try {
-                const read = await readState();
+                const read = await readData();
                 if (isClosed || thisRead !== latestRead) return;
-                setState(seenStatuses.slice(seenBefore).reduce(applyStatusDelta, read));
+                setData({ ...read, state: seenStatuses.slice(seenBefore).reduce(applyStatusDelta, read.state) });
                 setFailure(undefined);
             } catch (error) {
                 if (!isClosed && thisRead === latestRead) setFailure({ error });
@@ -107,7 +80,7 @@ export const MailPage = ({ feed }: { feed: FeedConnection | null | undefined }) 
         };
         const apply: Apply = (delta) => {
             seenStatuses.push(delta);
-            setState((held) => (held === undefined ? held : applyStatusDelta(held, delta)));
+            setData((held) => (held === undefined ? held : { ...held, state: applyStatusDelta(held.state, delta) }));
         };
         mountedReload = reload;
         mountedApply = apply;
@@ -120,15 +93,25 @@ export const MailPage = ({ feed }: { feed: FeedConnection | null | undefined }) 
         };
     }, [feed]);
 
+    const reload: Reload = async () => void (await mountedReload?.());
     return h(
         "div",
         { class: "mail" },
         failure !== undefined ? h(RefusalMessage, { error: failure.error }) : null,
-        state === undefined
+        result === undefined ? null : h("p", { class: "mail-result", role: "status" }, result),
+        data === undefined
             ? null
             : [
-                  h(NoticeSettings, { notice: state.notice }),
-                  ...state.accounts.map((account) => h(AccountCard, { account, key: account.name })),
+                  h(NoticeSettings, {
+                      notice: data.state.notice,
+                      accounts: data.state.accounts,
+                      reload,
+                      report: setResult,
+                  }),
+                  ...data.state.accounts.map((account) =>
+                      h(AccountCard, { account, roles: data.roles, reload, report: setResult, key: account.name }),
+                  ),
+                  h(CreateAccount, { roles: data.roles, reload, report: setResult }),
               ],
     );
 };
