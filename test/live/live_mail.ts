@@ -186,20 +186,36 @@ async function checkTriage(world: World): Promise<void> {
         assert.notEqual(job.requestMark, "true", `job ${job.number} is marked`);
     const requestDefinitions = (await historyOf(world, request)).filter((entry) => entry.field === "definitionOfDone");
     assert.ok(requestDefinitions.length >= 2, "the request's definition of done was not rewritten");
-    const entries = await conversationText(world, request);
-    assert.match(entries, /handoff/, "the request was not handed off");
+    assert.ok(await hasAcceptedHandoff(world, request), "the request was not handed off: no handoff tool result");
 
     const replies = await until("the reply to the request", () =>
         world.server.received().length > 0 ? world.server.received() : undefined,
     );
-    await sleep(POLL_INTERVAL_MS * 4);
-    assert.equal(world.server.received().length, replies.length, "mail kept arriving");
     assert.equal(replies.length, 1, `${replies.length} emails were sent, not one`);
     assert.deepEqual(replies[0]?.envelope.to, [SENDER], "the reply did not go to the request's sender");
     const sentAt = Date.parse((await parseMessage(replies[0]?.raw as Buffer)).date ?? "");
     const doneAt = Date.parse(request.doneAt ?? "");
     assert.ok(sentAt >= Math.floor(doneAt / 1000) * 1000, "the reply was sent before the request job was completed");
     console.log("  one reply, to the request's sender, after its job was completed");
+}
+
+type ConversationEntry = {
+    kind: string;
+    data: { messages?: { role?: string; toolName?: string; isError?: boolean }[] };
+};
+
+/** True when the lead conversation holds the result of a handoff call the product accepted. */
+async function hasAcceptedHandoff(world: World, job: JobView): Promise<boolean> {
+    assert.ok(job.leadConversation, `job ${job.number} has no lead conversation`);
+    const { entries } = (await world.daemon.invoke("conversations.entries", {
+        conversationId: job.leadConversation,
+        limit: 500,
+    })) as { entries: ConversationEntry[] };
+    return entries.some(
+        (entry) =>
+            entry.kind === "pi.tool-result" &&
+            entry.data.messages?.some((message) => message.toolName === "handoff" && message.isError !== true),
+    );
 }
 
 async function conversationText(world: World, job: JobView): Promise<string> {
@@ -233,6 +249,12 @@ async function checkQuestionAndSendTool(world: World): Promise<void> {
 
 async function scanSentMail(world: World): Promise<void> {
     const sent = world.server.received();
+    // Every job has ended by now, so a reply to the newsletter or the out-of-office reply would have been sent.
+    for (const mail of sent) {
+        const { subject } = await parseMessage(mail.raw);
+        for (const ignored of [NEWSLETTER, OUT_OF_OFFICE])
+            assert.ok(!subject?.includes(ignored.subject), `a reply was sent to "${ignored.subject}"`);
+    }
     assert.ok(sent.length >= 3, `${sent.length} emails were sent, fewer than the reply, the question and a note`);
     for (const mail of sent) {
         const { subject, text } = await parseMessage(mail.raw);

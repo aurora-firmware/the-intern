@@ -23,9 +23,9 @@ The daemon runs in the foreground and writes its log to standard error (S-002 RE
 lines. Stop it with Ctrl-C. For a second instance, use another folder under `.tmp/`.
 
 Run the live checks, which start the daemon over your own pi login, with `npm run test:live`,
-`npm run test:live:agents`, `npm run test:live:jobs`, `npm run test:live:schedules`, `npm run test:live:desk`, `npm run test:live:skills` and
-`npm run test:live:mail`. The schedules check creates an entry that fires every minute for a file in `gp`'s
-workspace, and waits for the fire at the next whole minute. The desk check asks the front desk for a piece of work,
+`npm run test:live:agents`, `npm run test:live:jobs`, `npm run test:live:schedules`, `npm run test:live:desk`,
+`npm run test:live:skills` and `npm run test:live:mail`. The schedules check creates an entry that fires every minute
+for a file in `gp`'s workspace, and waits for the fire at the next whole minute. The desk check asks the front desk for a piece of work,
 then pipes the same request to `bob chat` and runs `bob jobs follow` on the job it names until it is Done. The skills
 check adds a search path holding a skill `lint`, asks the front desk how to add a search path, then runs a `gp` job that
 enables `lint` for itself through `bob` and uses it. The mail check delivers a request, a newsletter and an
