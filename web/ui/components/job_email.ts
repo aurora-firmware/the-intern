@@ -26,6 +26,7 @@ export type EmailJobRecord = Omit<JobRecord, "request"> & {
     requestMark?: string;
 };
 
+const TEXT_STYLE = "margin: 0; overflow-wrap: anywhere; white-space: pre-wrap;";
 const LIST_STYLE = "display: flex; flex-direction: column; gap: 0.5rem; margin: 0; padding: 0; list-style: none;";
 
 type Thread = EmailDetails["thread"][number];
@@ -50,7 +51,12 @@ export const JobEmail = ({ record }: { record: EmailJobRecord }) => {
         h(Field, { name: "account", label: "Mail account", value: email.account }),
         h(Field, { name: "sender", label: "Sender", value: email.sender }),
         h(Field, { name: "subject", label: "Subject", value: email.subject }),
-        h(Field, { name: "message", label: "Saved message", value: record.request.text ?? "" }),
+        h(
+            "div",
+            { class: "job-field", "data-field": "message" },
+            h("h3", null, "Saved message"),
+            h("p", { class: "job-value", style: TEXT_STYLE, "data-verbatim": "" }, record.request.text ?? ""),
+        ),
         h(Field, {
             name: "request-mark",
             label: "Request mark",
