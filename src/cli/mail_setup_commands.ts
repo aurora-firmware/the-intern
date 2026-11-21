@@ -197,6 +197,8 @@ async function signIn(input: CommandInput): Promise<number> {
         const requestStop = () => stop.abort();
         process.once("SIGINT", requestStop);
         let isStarted = false;
+        // The feed opens with one delta per account telling its current status; before the sign-in it is not a result.
+        let isReplayPending = false;
         let exitCode: number = EXIT_CODES.ok;
         const end = (code: number) => {
             exitCode = code;
@@ -210,6 +212,7 @@ async function signIn(input: CommandInput): Promise<number> {
                 isUnreachableFatalAtStart: true,
                 onNotice: (notice) => writeError(io, notice),
                 async onSnapshot(_snapshot, client) {
+                    isReplayPending = !isStarted;
                     if (isStarted) return;
                     // The feed is open before the sign-in starts, so no change of the account is missed.
                     const start = (await client.invoke("mail.accounts.signin", { name })) as Parameters<
@@ -222,6 +225,10 @@ async function signIn(input: CommandInput): Promise<number> {
                 async onDelta(delta) {
                     const change = delta as AccountStatusDelta;
                     if (!isStarted || change.type !== "mail_account_status" || change.name !== name) return;
+                    if (isReplayPending) {
+                        isReplayPending = false;
+                        return;
+                    }
                     if (change.status !== "ready" && change.status !== "needs_sign_in") return;
                     if (input.json) writeJson(io, delta);
                     if (change.status === "ready") {
