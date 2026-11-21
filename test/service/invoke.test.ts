@@ -260,6 +260,7 @@ describe("the invoke tool", () => {
 
         await waitFor(() => started.leadRequests.length >= 2, "the lead to continue");
         assert.match(started.toolResults.join("\n"), /nobody/);
+        assert.match(started.toolResults.join("\n"), /The roles are: .*\bbob\b.*\bgp\b/);
         assert.deepEqual(await conversationIds(started.ctx), [conversationId]);
     });
 

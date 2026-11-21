@@ -285,6 +285,10 @@ describe("the handoff tool", () => {
             const result = started.requests[1]?.messages.find((message) => message.role === "toolResult");
             assert.equal(result?.role === "toolResult" && result.isError, true);
             assert.match(textOf(result), /The handoff was refused/);
+            if (title === "an unknown role") {
+                assert.match(textOf(result), /"nobody"/);
+                assert.match(textOf(result), /The roles are: .*\bbob\b.*\bgp\b/);
+            }
             assert.equal((await readConversationMeta(started.ctx.host, conversationId))?.seat.role, "bob");
             const records = (await started.entries(conversationId)).filter((entry) => entry.kind === SEAT_RECORD_KIND);
             assert.equal(records.length, 1);
