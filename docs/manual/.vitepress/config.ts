@@ -17,6 +17,7 @@ export default defineConfig({
             { text: "Schedules", link: "/schedules" },
             { text: "Giving, following and answering jobs", link: "/jobs" },
             { text: "The front desk and bob chat", link: "/front_desk" },
+            { text: "Email", link: "/email" },
             { text: "The web interface", link: "/web_interface" },
             { text: "Command reference", link: "/commands" },
         ],
