@@ -1,8 +1,12 @@
 import { afterEach, describe, it } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { Page } from "playwright-core";
+import { composeMessage } from "../../src/mail/mime.ts";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
+import { TEST_CA_FILE } from "../support/fake_mail_server.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { type MailRig, startMailRig } from "../support/mail_rig.ts";
 import { scaled } from "../support/time_scale.ts";
 
 const WAIT_MS = scaled(30_000);
@@ -12,7 +16,8 @@ const NOT_THE_PAGES_WORDING = "code, [data-verbatim]";
 
 /**
  * The words `docs/system_overview.html` (section 4, Say and Not) rules out, each as a whole word, case-insensitively,
- * with its plural. `owner-only` and `worker thread` are right.
+ * with its plural. `owner-only` and `worker thread` are right, and so is `job thread`, S-009's term for the emails
+ * linked to a job.
  */
 const RULED_OUT: readonly { word: string; pattern: RegExp }[] = [
     { word: "user", pattern: /\busers?\b/i },
@@ -21,7 +26,7 @@ const RULED_OUT: readonly { word: string; pattern: RegExp }[] = [
     { word: "owner", pattern: /\bowners?\b(?!-only)/i },
     { word: "subagent", pattern: /\bsubagents?\b/i },
     { word: "sandbox", pattern: /\bsandbox(?:es)?\b/i },
-    { word: "thread", pattern: /(?<!\bworker )\bthreads?\b/i },
+    { word: "thread", pattern: /(?<!\b(?:worker|job) )\bthreads?\b/i },
     { word: "bob", pattern: /\bbob\b/i },
     { word: "task", pattern: /\btasks?\b/i },
 ];
@@ -34,12 +39,14 @@ type Job = { id: string; number: string };
 
 const envs: HermeticEnv[] = [];
 const daemons: DaemonProcess[] = [];
+const rigs: MailRig[] = [];
 
 afterEach(async () => {
     for (const daemon of daemons.splice(0)) {
         daemon.kill9();
         await daemon.exited;
     }
+    for (const rig of rigs.splice(0)) await rig.stop();
     for (const env of envs.splice(0)) await env.dispose();
 });
 
@@ -101,6 +108,62 @@ const pagesToOpen = (job: Job): PageToOpen[] => [
     },
 ];
 
+const MAIL_ACCOUNT = { name: "work", address: "work@example.test", password: "work-secret" };
+const MAIL_CLOCK = "2026-03-02T09:00:00.000Z";
+const STOP_TIMEOUT_MS = scaled(20_000);
+const POLL_MS = 100;
+
+async function until<T>(description: string, attempt: () => Promise<T | undefined>): Promise<T> {
+    const deadline = Date.now() + WAIT_MS;
+    for (;;) {
+        const found = await attempt();
+        if (found !== undefined) return found;
+        if (Date.now() > deadline) throw new Error(`timed out waiting for ${description}`);
+        await sleep(POLL_MS);
+    }
+}
+
+/**
+ * A daemon with a network listener, an owned mail account that is ready and one job that came by email with an
+ * attachment. The rig's own daemon has no listener, so another takes its directories, as `mail_page` does.
+ */
+async function startMailJob(): Promise<{ port: number; job: Job }> {
+    const rig = await startMailRig({ accounts: [MAIL_ACCOUNT], clockStart: new Date(MAIL_CLOCK) });
+    rigs.push(rig);
+    const first = rig.process();
+    first.signal("SIGTERM");
+    await Promise.race([first.exited, sleep(STOP_TIMEOUT_MS, undefined, { ref: false })]);
+    const daemon = startDaemon({
+        hermetic: { ...rig.env, env: { ...rig.env.env, NODE_EXTRA_CA_CERTS: TEST_CA_FILE } },
+        mailClock: MAIL_CLOCK,
+        oauthEndpoints: rig.oauth.endpoints,
+        networkListener: true,
+    });
+    daemons.push(daemon);
+    await daemon.ready;
+    await until("intake to watch the inbox", async () =>
+        daemon.stderr().includes("mail intake watching") ? true : undefined,
+    );
+    const sent = await composeMessage({
+        from: "ann@example.test",
+        to: [MAIL_ACCOUNT.address],
+        subject: "Files for you",
+        text: "please look",
+        attachments: [{ filename: "report.pdf", contentType: "application/pdf", content: Buffer.alloc(1024, 7) }],
+    });
+    rig.deliver(MAIL_ACCOUNT.address, sent.raw);
+    const job = await until("the job of the email", async () => {
+        const { jobs } = (await daemon.invoke("jobs.list", {})) as { jobs: Job[] };
+        return jobs[0];
+    });
+    return { port: await daemon.networkPort(), job };
+}
+
+const mailPagesToOpen = (job: Job): PageToOpen[] => [
+    { name: "Mail", path: "/ui/#/mail", ready: "main .mail-account" },
+    { name: "Job that came by email", path: `/ui/#/jobs/${job.number}`, ready: "main .job-email" },
+];
+
 /** The visible text of the page with every collapsed area open, leaving out code and verbatim text. */
 function pageWording(page: Page): Promise<string[]> {
     return page.evaluate((skipped) => {
@@ -134,8 +197,25 @@ describe("the search for words the vocabulary rules out", () => {
             "task",
         ]);
         t.assert.deepEqual(wordsRuledOut("owner-only, worker threads, a job, username, tasking, bobbin"), []);
+        t.assert.deepEqual(wordsRuledOut("Job thread, the job threads"), []);
+        t.assert.deepEqual(wordsRuledOut("a mail thread, thread"), ["thread"]);
     });
 });
+
+/** Each ruled-out word the text of the pages holds, with the page and the line. */
+async function wordsFound(page: Page, port: number, targets: PageToOpen[]): Promise<string[]> {
+    const found: string[] = [];
+    for (const target of targets) {
+        await page.goto(pageUrl(port, target.path));
+        await page.waitForSelector(target.ready, { timeout: WAIT_MS });
+        await target.open?.(page);
+        await page.evaluate(() => document.fonts.ready);
+        for (const line of await pageWording(page)) {
+            for (const word of wordsRuledOut(line)) found.push(`${target.name}: "${word}" in "${line}"`);
+        }
+    }
+    return found;
+}
 
 describe("the page text in chrome", () => {
     it("holds no word the vocabulary rules out on any page", { timeout: TEST_TIMEOUT_MS }, async (t) => {
@@ -143,18 +223,18 @@ describe("the page text in chrome", () => {
         const browser = await launchBrowser(t, "chrome");
         if (browser === undefined) return;
         const page = await browser.newPage();
-        const found: string[] = [];
 
-        for (const target of pagesToOpen(job)) {
-            await page.goto(pageUrl(port, target.path));
-            await page.waitForSelector(target.ready, { timeout: WAIT_MS });
-            await target.open?.(page);
-            await page.evaluate(() => document.fonts.ready);
-            for (const line of await pageWording(page)) {
-                for (const word of wordsRuledOut(line)) found.push(`${target.name}: "${word}" in "${line}"`);
-            }
-        }
+        t.assert.deepEqual(await wordsFound(page, port, pagesToOpen(job)), []);
+    });
 
-        t.assert.deepEqual(found, []);
+    it("holds no word the vocabulary rules out on the Mail page and a job that came by email", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { port, job } = await startMailJob();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+
+        t.assert.deepEqual(await wordsFound(page, port, mailPagesToOpen(job)), []);
     });
 });
