@@ -19,13 +19,13 @@ configuration file, cache or history of its own.
 
 A command is a group and a verb, such as `bob jobs list`, or a top-level command, such as `bob chat`. The top-level
 commands are `serve`, `status`, `usage`, `export`, `import`, `follow` and `chat`. The groups are `jobs`,
-`conversations`, `roles`, `workspaces`, `models`, `schedules`, `skills` and `instructions`.
+`conversations`, `roles`, `workspaces`, `models`, `schedules`, `skills`, `instructions` and `mail`.
 
 In the usage lines below, `<name>` is a required argument. Options come after the arguments and take a value unless the
 table says they are switches. Give an option once, except `--tool` and `--skill`, which you repeat for several values.
 
-The groups `knowledge` and `mail` are reserved for later features.
-They have no command yet: `bob knowledge list` prints that the group isn't available yet and exits with status 2.
+The group `knowledge` is reserved for a later feature.
+It has no command yet: `bob knowledge list` prints that the group isn't available yet and exits with status 2.
 
 ## Options every command shares
 
@@ -234,15 +234,19 @@ prints an object with `jobs` and, when more follow, `cursor`.
 | `--letter <value>`   | Only jobs with this origin letter.                                   |
 | `--related <value>`  | Only jobs Related to this job.                                       |
 | `--schedule <value>` | Only the scheduled runs of this schedule entry.                      |
+| `--mail <value>`     | Only the jobs that came through this mail account.                   |
 | `--limit <value>`    | The most jobs to list.                                               |
 | `--cursor <value>`   | Continue after the cursor an earlier listing printed.                |
 
 ### `bob jobs show <job>`
 
 Show a job: its title, status, Blocked reason or resolution, description, definition of done, Related jobs, latest
-worklog entries and history. With `--json` it prints the keyed object with `jobs.get`, `jobs.worklog.list` and
-`jobs.history.list`. Each worklog and history value is the first page of entries as the service gives it, with a
-`cursor` when more follow.
+worklog entries and history. A job that came by email also shows an `Email:` section: the account, the sender, the
+subject, the request mark, the path of the saved message, each attachment with its size and path, and the job's mail
+thread, one line per message with its direction (`received` or `sent`), sender, recipients, subject and date. With
+`--json` it prints the keyed object with `jobs.get`, `jobs.worklog.list` and
+`jobs.history.list`; for a job that came by email, the `jobs.get` value also holds the details under `email`. Each
+worklog and history value is the first page of entries as the service gives it, with a `cursor` when more follow.
 
 ### `bob jobs update <job>`
 
@@ -264,6 +268,10 @@ object with the jobs as `a` and `b`.
 
 Complete an In-progress job, or cancel a job, with a justification. An empty justification is refused with exit 1. Each
 prints the changed job; with `--json` it prints the job.
+
+`bob jobs complete` takes one more option, `--mail-text <text>`: the text the sender of an email job receives as the
+reply. When the job's email needs a mail text and you give none, the service refuses the completion with exit 1 and
+changes nothing; give the option and run the command again.
 
 ### `bob jobs answer <job> <text>`
 
@@ -465,6 +473,114 @@ sends only the options you give. The service checks every value, and a refusal e
 | `--model <value>`         | The model of the run's lead.                             |
 | `--thinking-level <value>` | The thinking level of the run's lead.                   |
 | `--workspace <value>`     | The workspace of the run.                                |
+
+## Mail
+
+`<name>` is a mail account's name. The manual page on email explains what the accounts are and how to set one up.
+Every mail command takes `--json`, `--runtime-dir <value>` and `--help`.
+
+| Command                                | What it does                                                                        |
+| -------------------------------------- | ----------------------------------------------------------------------------------- |
+| `bob mail list`                        | List mail accounts.                                                                 |
+| `bob mail show <name>`                 | Show one mail account.                                                              |
+| `bob mail create <name>`               | Create a mail account; a password or client secret is typed or read with `--secret-stdin`. |
+| `bob mail change <name>`               | Change a mail account; `--new-secret` reads a new secret as `create` does.          |
+| `bob mail signin <name>`               | Sign in a `google` or `microsoft` account and wait until it is ready.               |
+| `bob mail test <name>`                 | Check the login to an account's servers.                                            |
+| `bob mail remove <name>`               | Remove a mail account.                                                              |
+| `bob mail notices [set\|clear]`        | Show the notice mail settings; with `set` or `clear`, change them.                  |
+
+`list` prints one line per account with its name, address, kind, status and time of the last check, or `never`. With
+`--json` it prints an object with `accounts`. `show` prints the account's settings, allowlist, triage role, status and
+last error, one per line. With `--json` it prints an object with the account under `account`. No output holds a
+secret. When no account has the name, `show` exits 1 with the service's reason.
+
+`test` logs in to the account's IMAP server and, when the account has one, its SMTP server, and prints one line per
+server: `IMAP: ok`, or `IMAP: failed` with the server's words. With `--json` it prints an object with `imap` and, when
+the account has an SMTP server, `smtp`; each holds `ok` and, for a refusal, `message`. A server that refuses the login
+does not make the command exit 1: read the lines or the `ok` values.
+
+`remove` prints one line, such as `intern removed`. With `--json` it prints the empty object `{}`. The service refuses
+it, with exit 1, while the notice mail comes from the account.
+
+### How a secret is read
+
+`bob mail create` and `bob mail change --new-secret` read a secret for an account whose `--auth` is `password`,
+`google` or `microsoft_app`: the password, or the client secret of the app. No option or environment variable carries
+a secret, so it stays out of your shell history and the process list.
+
+- On a terminal, `bob` prints `Password: ` or `Client secret: ` on standard error and reads what you type without
+  showing it. Press Enter to finish. Ctrl-C ends the command with exit 2.
+- With `--secret-stdin`, `bob` reads all of standard input as the secret and drops one line end at its end:
+  `printf '%s\n' "$PASSWORD" | bob mail create intern --secret-stdin ...`.
+
+An account with `--auth password_command` keeps no secret: `--password-command` names the command that prints the
+password, one word per option. If the secret can't be read, because standard input ended or the prompt was
+interrupted, the command prints why and exits 2. `change --new-secret` exits 2 for an account whose authentication
+keeps no secret.
+
+### `bob mail create <name>` and `bob mail change <name>`
+
+`create` makes an account and prints it as `show` does. `change` sends only the options you give and prints the changed
+account. With `--json` each prints an object with the account under `account`. The service checks every value, and a
+refusal exits 1. A value that must be a whole number but isn't exits 2.
+
+| Option                       | Meaning                                                               |
+| ---------------------------- | --------------------------------------------------------------------- |
+| `--kind <value>`             | `owned` or `monitored`.                                               |
+| `--address <value>`          | The account's email address.                                          |
+| `--imap-host <value>`        | The IMAP server.                                                      |
+| `--imap-port <value>`        | The IMAP port.                                                        |
+| `--imap-security <value>`    | `tls`, `starttls` or `none`.                                          |
+| `--smtp-host <value>`        | The SMTP server.                                                      |
+| `--smtp-port <value>`        | The SMTP port.                                                        |
+| `--smtp-security <value>`    | `tls`, `starttls` or `none`.                                          |
+| `--login <value>`            | The login name, when it is not the address.                           |
+| `--auth <value>`             | `password`, `password_command`, `google`, `microsoft` or `microsoft_app`. |
+| `--password-command <value>` | One word of the command that prints the password; repeat for each word. |
+| `--client-id <value>`        | The OAuth client ID.                                                  |
+| `--tenant <value>`           | The Microsoft tenant.                                                 |
+| `--check-interval <value>`   | Seconds between checks of the inbox.                                  |
+| `--triage-role <value>`      | The role that triages the account's mail.                             |
+| `--allow <value>`            | An address or `@domain` allowed; repeat for several.                  |
+| `--secret-stdin`             | Read the secret from standard input, not the terminal. A switch.      |
+
+`change` takes three more options.
+
+| Option                 | Meaning                                                                       |
+| ---------------------- | ----------------------------------------------------------------------------- |
+| `--disallow <value>`   | An allowed entry to remove; repeat for several.                               |
+| `--new-secret`         | Read a new password or client secret. A switch.                               |
+
+`--allow` adds to the account's allowlist and `--disallow` removes from it; the other entries stay.
+`--password-command`, `--allow` and `--disallow` are the options you repeat for several values, besides `--tool` and
+`--skill`.
+
+### `bob mail signin <name>`
+
+Sign in an account whose `--auth` is `google` or `microsoft`, then wait until it is ready. It first prints what you do
+next. For a `microsoft` account that is `Open <address> and enter the code <code>.` For a `google` account it is
+`Open <address> in a browser. On another machine, forward port <port> to this one first.` It then waits, and prints
+`<name> is ready` and exits 0 when the account turns `ready`. When the sign-in fails it prints `The sign-in of <name>
+failed: <reason>` on standard error and exits 1. Press Ctrl-C to stop waiting; the sign-in goes on in the daemon. An
+account with another `--auth` has no sign-in, and the service refuses it with exit 1. If no daemon runs, it exits 3.
+
+With `--json` it prints one JSON value per line: first the answer of the start (`kind` `device_code` with `code` and
+`address`, or `kind` `browser` with `address` and `port`), then the change of the account's status that ended the wait,
+an object with `type` `mail_account_status`, `name`, `status` and, for a failure, `lastError`.
+
+### `bob mail notices [set|clear]`
+
+Show or change the notice mail settings: the address notices go to and the account they come from. With no action it
+prints `To:` and `From:` lines, each `(none)` when unset. `set` needs both options below, or the command prints that
+and exits 2; it prints the new settings. `clear` removes both and prints `notices cleared`. Any other action exits 2.
+With `--json`, `show` and `set` print an object with the settings under `notice`, and `clear` prints the same object
+with no `to` or `from`.
+
+| Option              | Meaning                                         |
+| ------------------- | ----------------------------------------------- |
+| `--to <value>`      | With `set`: the address notices go to.          |
+| `--from <value>`    | With `set`: the account notices come from.      |
 
 ## Skills
 
