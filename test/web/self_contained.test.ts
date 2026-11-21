@@ -1,8 +1,12 @@
-import { afterEach, describe, it } from "node:test";
+import { afterEach, describe, it, type TestContext } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { BrowserContext, Page } from "playwright-core";
+import { composeMessage } from "../../src/mail/mime.ts";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
+import { TEST_CA_FILE } from "../support/fake_mail_server.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { type MailRig, startMailRig } from "../support/mail_rig.ts";
 import { scaled } from "../support/time_scale.ts";
 import { type RecordedRequest, startWebProxy, type WebProxy } from "../support/web_proxy.ts";
 
@@ -14,6 +18,7 @@ type Job = { id: string; number: string };
 
 const envs: HermeticEnv[] = [];
 const daemons: DaemonProcess[] = [];
+const rigs: MailRig[] = [];
 const proxies: WebProxy[] = [];
 
 afterEach(async () => {
@@ -22,6 +27,7 @@ afterEach(async () => {
         daemon.kill9();
         await daemon.exited;
     }
+    for (const rig of rigs.splice(0)) await rig.stop();
     for (const env of envs.splice(0)) await env.dispose();
 });
 
@@ -80,6 +86,62 @@ const pagesToOpen = (job: Job): PageToOpen[] => [
     },
 ];
 
+const MAIL_ACCOUNT = { name: "work", address: "work@example.test", password: "work-secret" };
+const MAIL_CLOCK = "2026-03-02T09:00:00.000Z";
+const STOP_TIMEOUT_MS = scaled(20_000);
+const POLL_MS = 100;
+
+async function until<T>(description: string, attempt: () => Promise<T | undefined>): Promise<T> {
+    const deadline = Date.now() + WAIT_MS;
+    for (;;) {
+        const found = await attempt();
+        if (found !== undefined) return found;
+        if (Date.now() > deadline) throw new Error(`timed out waiting for ${description}`);
+        await sleep(POLL_MS);
+    }
+}
+
+/**
+ * A daemon with a network listener, an owned mail account that is ready and one job that came by email with an
+ * attachment. The rig's own daemon has no listener, so another takes its directories, as `mail_page` does.
+ */
+async function startMailJob(): Promise<{ port: number; job: Job }> {
+    const rig = await startMailRig({ accounts: [MAIL_ACCOUNT], clockStart: new Date(MAIL_CLOCK) });
+    rigs.push(rig);
+    const first = rig.process();
+    first.signal("SIGTERM");
+    await Promise.race([first.exited, sleep(STOP_TIMEOUT_MS, undefined, { ref: false })]);
+    const daemon = startDaemon({
+        hermetic: { ...rig.env, env: { ...rig.env.env, NODE_EXTRA_CA_CERTS: TEST_CA_FILE } },
+        mailClock: MAIL_CLOCK,
+        oauthEndpoints: rig.oauth.endpoints,
+        networkListener: true,
+    });
+    daemons.push(daemon);
+    await daemon.ready;
+    await until("intake to watch the inbox", async () =>
+        daemon.stderr().includes("mail intake watching") ? true : undefined,
+    );
+    const sent = await composeMessage({
+        from: "ann@example.test",
+        to: [MAIL_ACCOUNT.address],
+        subject: "Files for you",
+        text: "please look",
+        attachments: [{ filename: "report.pdf", contentType: "application/pdf", content: Buffer.alloc(1024, 7) }],
+    });
+    rig.deliver(MAIL_ACCOUNT.address, sent.raw);
+    const job = await until("the job of the email", async () => {
+        const { jobs } = (await daemon.invoke("jobs.list", {})) as { jobs: Job[] };
+        return jobs[0];
+    });
+    return { port: await daemon.networkPort(), job };
+}
+
+const mailPagesToOpen = (job: Job): PageToOpen[] => [
+    { name: "Mail", path: "/ui/#/mail", ready: "main .mail-account" },
+    { name: "Job that came by email", path: `/ui/#/jobs/${job.number}`, ready: "main .job-email" },
+];
+
 async function openAndSettle(page: Page, port: number, target: PageToOpen): Promise<void> {
     await page.goto(pageUrl(port, target.path));
     await page.waitForSelector(target.ready, { timeout: WAIT_MS });
@@ -112,6 +174,38 @@ async function clearStoredData(context: BrowserContext, page: Page, port: number
     await context.clearCookies();
 }
 
+type PagesToCheck = { port: number; proxy: WebProxy; targets: PageToOpen[] };
+
+/** Opens each page through the proxy and checks that every request stayed with the service and a font came from it. */
+async function assertSelfContained(t: TestContext, { port, proxy, targets }: PagesToCheck): Promise<void> {
+    const browser = await launchBrowser(t, "chrome", { proxyPort: proxy.port });
+    if (browser === undefined) return;
+    const origin = new URL(pageUrl(port, "/")).origin;
+
+    // The proxy sees no CONNECT (https) request, but the page reports every request it makes, whatever the scheme.
+    const pageRequests: string[] = [];
+    for (const target of targets) {
+        const page = await browser.newPage();
+        page.on("request", (request) => pageRequests.push(request.url()));
+        await openAndSettle(page, port, target);
+        await page.close();
+    }
+
+    const withReferer = proxy.requests().filter((request) => request.referer !== undefined);
+    const stray = withReferer.filter(
+        (request) => !request.url.startsWith(`${origin}/`) || !request.referer?.startsWith(`${origin}/`),
+    );
+    t.assert.deepEqual(stray, [] as RecordedRequest[]);
+    const outside = pageRequests.filter((url) => /^(https?|wss?|ftp):/.test(url) && !url.startsWith(`${origin}/`));
+    t.assert.deepEqual(outside, [], "no request the page made went outside the service");
+    t.assert.equal(pageRequests.length > 0, true, "the pages' requests were seen");
+    t.assert.equal(
+        withReferer.some((request) => new URL(request.url).pathname.startsWith(FONT_PATH)),
+        true,
+        "a font came from the service",
+    );
+}
+
 describe("the pages' independence of anything but the service in chrome", () => {
     it("sends every request with a Referer to the service's address, on each page", {
         timeout: TEST_TIMEOUT_MS,
@@ -123,32 +217,16 @@ describe("the pages' independence of anything but the service in chrome", () => 
             cron: "0 3 * * *",
             request: "Run the weekly review.",
         });
-        const browser = await launchBrowser(t, "chrome", { proxyPort: proxy.port });
-        if (browser === undefined) return;
-        const origin = new URL(pageUrl(port, "/")).origin;
+        await assertSelfContained(t, { port, proxy, targets: pagesToOpen(job) });
+    });
 
-        // The proxy sees no CONNECT (https) request, but the page reports every request it makes, whatever the scheme.
-        const pageRequests: string[] = [];
-        for (const target of pagesToOpen(job)) {
-            const page = await browser.newPage();
-            page.on("request", (request) => pageRequests.push(request.url()));
-            await openAndSettle(page, port, target);
-            await page.close();
-        }
-
-        const withReferer = proxy.requests().filter((request) => request.referer !== undefined);
-        const stray = withReferer.filter(
-            (request) => !request.url.startsWith(`${origin}/`) || !request.referer?.startsWith(`${origin}/`),
-        );
-        t.assert.deepEqual(stray, [] as RecordedRequest[]);
-        const outside = pageRequests.filter((url) => /^(https?|wss?|ftp):/.test(url) && !url.startsWith(`${origin}/`));
-        t.assert.deepEqual(outside, [], "no request the page made went outside the service");
-        t.assert.equal(pageRequests.length > 0, true, "the pages' requests were seen");
-        t.assert.equal(
-            withReferer.some((request) => new URL(request.url).pathname.startsWith(FONT_PATH)),
-            true,
-            "a font came from the service",
-        );
+    it("sends every request with a Referer to the service's address, on the Mail page and a job that came by email", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { port, job } = await startMailJob();
+        const proxy = await startWebProxy();
+        proxies.push(proxy);
+        await assertSelfContained(t, { port, proxy, targets: mailPagesToOpen(job) });
     });
 
     it("shows the same jobs and the section open again after the stored data is cleared and the page reloaded", {
