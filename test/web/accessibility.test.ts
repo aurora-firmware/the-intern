@@ -1,9 +1,13 @@
 import { createRequire } from "node:module";
 import { afterEach, describe, it } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { Page } from "playwright-core";
+import { composeMessage } from "../../src/mail/mime.ts";
 import { launchBrowser, pageUrl } from "../support/browser.ts";
 import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
+import { TEST_CA_FILE } from "../support/fake_mail_server.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
+import { type MailRig, startMailRig } from "../support/mail_rig.ts";
 import { scaled } from "../support/time_scale.ts";
 
 const WAIT_MS = scaled(30_000);
@@ -21,12 +25,14 @@ type AxeResult = { violations: Violation[] };
 
 const envs: HermeticEnv[] = [];
 const daemons: DaemonProcess[] = [];
+const rigs: MailRig[] = [];
 
 afterEach(async () => {
     for (const daemon of daemons.splice(0)) {
         daemon.kill9();
         await daemon.exited;
     }
+    for (const rig of rigs.splice(0)) await rig.stop();
     for (const env of envs.splice(0)) await env.dispose();
 });
 
@@ -88,6 +94,62 @@ const pagesToOpen = (job: Job): PageToOpen[] => [
     },
 ];
 
+const MAIL_ACCOUNT = { name: "work", address: "work@example.test", password: "work-secret" };
+const MAIL_CLOCK = "2026-03-02T09:00:00.000Z";
+const STOP_TIMEOUT_MS = scaled(20_000);
+const POLL_MS = 100;
+
+async function until<T>(description: string, attempt: () => Promise<T | undefined>): Promise<T> {
+    const deadline = Date.now() + WAIT_MS;
+    for (;;) {
+        const found = await attempt();
+        if (found !== undefined) return found;
+        if (Date.now() > deadline) throw new Error(`timed out waiting for ${description}`);
+        await sleep(POLL_MS);
+    }
+}
+
+/**
+ * A daemon with a network listener, an owned mail account that is ready and one job that came by email with an
+ * attachment. The rig's own daemon has no listener, so another takes its directories, as `mail_page` does.
+ */
+async function startMailJob(): Promise<{ port: number; job: Job }> {
+    const rig = await startMailRig({ accounts: [MAIL_ACCOUNT], clockStart: new Date(MAIL_CLOCK) });
+    rigs.push(rig);
+    const first = rig.process();
+    first.signal("SIGTERM");
+    await Promise.race([first.exited, sleep(STOP_TIMEOUT_MS, undefined, { ref: false })]);
+    const daemon = startDaemon({
+        hermetic: { ...rig.env, env: { ...rig.env.env, NODE_EXTRA_CA_CERTS: TEST_CA_FILE } },
+        mailClock: MAIL_CLOCK,
+        oauthEndpoints: rig.oauth.endpoints,
+        networkListener: true,
+    });
+    daemons.push(daemon);
+    await daemon.ready;
+    await until("intake to watch the inbox", async () =>
+        daemon.stderr().includes("mail intake watching") ? true : undefined,
+    );
+    const sent = await composeMessage({
+        from: "ann@example.test",
+        to: [MAIL_ACCOUNT.address],
+        subject: "Files for you",
+        text: "please look",
+        attachments: [{ filename: "report.pdf", contentType: "application/pdf", content: Buffer.alloc(1024, 7) }],
+    });
+    rig.deliver(MAIL_ACCOUNT.address, sent.raw);
+    const job = await until("the job of the email", async () => {
+        const { jobs } = (await daemon.invoke("jobs.list", {})) as { jobs: Job[] };
+        return jobs[0];
+    });
+    return { port: await daemon.networkPort(), job };
+}
+
+const mailPagesToOpen = (job: Job): PageToOpen[] => [
+    { name: "Mail", path: "/ui/#/mail", ready: "main .mail-account" },
+    { name: "Job that came by email", path: `/ui/#/jobs/${job.number}`, ready: "main .job-email" },
+];
+
 /** The contrast violations axe-core finds on the page as drawn now. */
 async function contrastViolations(page: Page): Promise<string[]> {
     await page.addScriptTag({ path: AXE_FILE });
@@ -99,6 +161,19 @@ async function contrastViolations(page: Page): Promise<string[]> {
     return result.violations.flatMap((violation) =>
         violation.nodes.map((node) => `${violation.id} ${JSON.stringify(node.target)}: ${node.failureSummary ?? ""}`),
     );
+}
+
+/** The contrast violations of each page, with the page's name. */
+async function contrastFound(page: Page, port: number, targets: PageToOpen[]): Promise<string[]> {
+    const found: string[] = [];
+    for (const target of targets) {
+        await page.goto(pageUrl(port, target.path));
+        await page.waitForSelector(target.ready, { timeout: WAIT_MS });
+        await target.open?.(page);
+        await page.evaluate(() => document.fonts.ready);
+        found.push(...(await contrastViolations(page)).map((line) => `${target.name}: ${line}`));
+    }
+    return found;
 }
 
 /** What the focused element looks like: a drawn outline, or none. */
@@ -132,17 +207,37 @@ describe("contrast and keyboard use in chrome", () => {
         const browser = await launchBrowser(t, "chrome");
         if (browser === undefined) return;
         const page = await browser.newPage();
-        const found: string[] = [];
 
-        for (const target of pagesToOpen(job)) {
-            await page.goto(pageUrl(port, target.path));
-            await page.waitForSelector(target.ready, { timeout: WAIT_MS });
-            await target.open?.(page);
-            await page.evaluate(() => document.fonts.ready);
-            found.push(...(await contrastViolations(page)).map((line) => `${target.name}: ${line}`));
-        }
+        t.assert.deepEqual(await contrastFound(page, port, pagesToOpen(job)), []);
+    });
 
-        t.assert.deepEqual(found, []);
+    it("reaches 4.5:1 on the Mail page and a job that came by email", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { port, job } = await startMailJob();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+
+        t.assert.deepEqual(await contrastFound(page, port, mailPagesToOpen(job)), []);
+    });
+
+    it("reaches each control of the Mail page with the keyboard alone, the focus visible throughout", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async (t) => {
+        const { port } = await startMailJob();
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await page.goto(pageUrl(port, "/ui/#/mail"));
+        await page.waitForSelector("main .mail-account", { timeout: WAIT_MS });
+        const faults: string[] = [];
+
+        faults.push(...(await tabTo(page, "main .mail-notice .mail-notice-save")));
+        faults.push(...(await tabTo(page, "main .mail-account .mail-save")));
+        faults.push(...(await tabTo(page, "main .mail-account .mail-remove")));
+        faults.push(...(await tabTo(page, "main .mail-create .mail-create-submit")));
+        faults.push(...(await tabBackTo(page, "main .mail-account .mail-remove")));
+
+        t.assert.deepEqual(faults, []);
     });
 
     it("reaches 4.5:1 on the connection banner, drawn Dark Blue on Red", { timeout: TEST_TIMEOUT_MS }, async (t) => {
