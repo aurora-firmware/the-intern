@@ -2,8 +2,8 @@
 
 The web interface is The Intern's page for your browser. From any computer that reaches the service you see every job,
 answer a Blocked job, follow an agent while it works, stop or redirect it, talk to the front desk, shape roles and
-workspaces, and download a backup. It adds nothing the service doesn't already do: every action calls the same
-operation the command line does.
+workspaces, manage mail accounts, and download a backup. It adds nothing the service doesn't already do: every action
+calls the same operation the command line does.
 
 ::: warning Anyone who can reach the page can act and download everything
 The web interface has no login, and nobody enters a name. Anyone who can reach the page is a team member and can give,
@@ -25,8 +25,8 @@ Use a current Chrome or Firefox on a desktop computer. Edge may also work, but i
 Safari isn't a target, though nothing blocks it.
 The pages are made for desktop screens, so phones and tablets aren't supported.
 
-The dark sidebar on every page links to the Board, Front desk, Roles, Workspaces, Schedules and Status. Each page has an
-address of its own, and the browser's back, forward and reload buttons work across them:
+The dark sidebar on every page links to the Board, Front desk, Roles, Workspaces, Schedules, Mail and Status. Each page
+has an address of its own, and the browser's back, forward and reload buttons work across them:
 
 | Address                                | Page          |
 | -------------------------------------- | ------------- |
@@ -36,6 +36,7 @@ address of its own, and the browser's back, forward and reload buttons work acro
 | `/ui/#/roles`                          | Roles         |
 | `/ui/#/workspaces`                     | Workspaces    |
 | `/ui/#/schedules`                      | Schedules     |
+| `/ui/#/mail`                           | Mail          |
 | `/ui/#/status`                         | Status        |
 
 ## Share a job's address
@@ -81,6 +82,28 @@ The page lets you edit the title, description and definition of done, complete o
 justification, and relate it to another job or remove a relation. The service refuses what a job's rules don't allow,
 such as a cancel with no justification or completing a job that has no definition of done. The page shows the message
 and changes nothing.
+
+The **Mail text (Complete only)** box beside the justification is optional. When you select **Complete** with text in
+it, the service mails that text as the job's result reply, as [What The Intern sends](email.md#what-the-intern-sends)
+describes. It is sent only for a job that came by email and has the request mark, and only when the box has text.
+Without text, such a job sends no reply, and the history records that. **Cancel** never sends it. The justification
+stays for the team and is never mailed.
+
+### Email of a job
+
+A job that came by email shows an **Email** section on its Job page. Any other job has none. The section shows:
+
+- **Mail account**, the account the email reached.
+- **Sender** and **Subject** of the email.
+- **Saved message**, the email's text as The Intern saved it.
+- **Request mark**, `Set` or `Not set`. The lead sets it when the email asks The Intern for something. See
+  [Triage](email.md#triage).
+- **Attachments**, each by name and size in bytes.
+- **Job thread**, the emails received and sent for the job, each with its direction, sender, recipients, subject and
+  date.
+
+The page offers no download of an attachment, and it sends none to the browser. Only the job's agents read attachments,
+as files. The section stays current without a reload.
 
 ### Follow an agent
 
@@ -247,6 +270,37 @@ current without a reload. [Schedules](schedules.md) describes the entries, the s
 Each entry has a collapsed **Skills** control that opens the [Skills panel](#the-skills-panel) of the entry's role, or
 of `bob` when the entry names none. It shows the role's skills, so you can check what a scheduled run starts with. A
 change there is a change to the role and affects only agents seated afterwards.
+
+## Mail
+
+The Mail page lists the mail accounts. [Email](email.md) explains the two kinds of account, the statuses and the
+sign-in. The page stays current without a reload, and it does what the [`bob mail`](commands.md#mail) commands do.
+
+Each account is a card with its address, kind, status, last error and last check, and with fields for its settings: the
+account's login details, the check interval, the triage role and the allowlist, one address per line. The status is
+`connecting`, `ready`, `needs_sign_in` or `failing`, and it changes on the card as the service checks the account.
+Each card has four actions:
+
+- **Save** changes the account with the fields as they stand. It can't change the name or the kind.
+- **Test** logs in to the account's IMAP server and, when it has one, its SMTP server, and shows `IMAP: ok` or
+  `IMAP: failed` with the reason, and the same for SMTP. It sends nothing.
+- **Sign in** starts the sign-in of a `google` or `microsoft` account. For Microsoft the page shows the address and the
+  code to enter there. For Google it shows a link, with the port to forward when you open it from another machine. The
+  instructions go away once the account is `ready`. [Sign in with Google](email.md#sign-in-with-google) and
+  [Sign in with Microsoft](email.md#sign-in-with-microsoft) describe the steps.
+- **Remove** removes the account and its secrets. Its jobs and their saved mail stay. It asks for no confirmation.
+
+**Add an account**, at the end of the page, creates one from its name, kind, address, servers, login and
+authentication, with the fields that kind of authentication needs. An account of kind `owned` turns each new email in
+its inbox into a job.
+
+A secret field, the password or the client secret, is never filled in. The service doesn't send a secret to the page.
+Leave the field empty and **Save** keeps the stored secret; type a new one to replace it. The page clears the field
+after each try.
+
+**Notice mail**, at the top, sets the notice address and the owned account that sends to it, with **Save** and
+**Clear**. See [The notice address](email.md#the-notice-address). When the service refuses an action, the page shows its
+message and changes nothing.
 
 ## Status
 
