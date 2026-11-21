@@ -274,6 +274,10 @@ async function run(model: string): Promise<void> {
             const status = (await daemon.invoke("daemon.status", {})) as { mailAccounts: { status: string }[] };
             return status.mailAccounts[0]?.status === "ready" ? true : undefined;
         });
+        // Intake takes only mail that arrives after its first check; wait for it before delivering any.
+        await until("intake of the account to watch the inbox", () =>
+            /mail intake watching.*account=work/.test(daemon.stderr()) ? true : undefined,
+        );
         await checkTriage(world);
         await checkQuestionAndSendTool(world);
         daemon.signal("SIGTERM");
