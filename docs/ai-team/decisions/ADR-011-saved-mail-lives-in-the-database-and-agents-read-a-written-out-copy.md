@@ -36,8 +36,9 @@ from it.
 
 ## Consequences
 
-- The database is the only source of saved mail. A copy that is deleted or edited is written again from it at the next
-  start, and an edit to it never reaches the job record.
+- The database is the only source of saved mail. A copy whose folder is missing is written again from it at the next
+  start; a file deleted or edited inside a folder that still exists stays as it is until its folder is removed. An edit
+  to the copy never reaches the job record.
 - The export and the database grow with every email kept, attachments included, and nothing deletes a saved email
   (S-009 Exclusions).
 - A large email is one long write on the one connection and delays the commits queued behind it once (ADR-001,
