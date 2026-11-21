@@ -109,6 +109,12 @@ describe("createInput", () => {
         assert.equal("smtp_host" in input, false);
     });
 
+    it("leaves out a blank number field instead of sending 0", () => {
+        const input = createInput(filled({ smtpPort: "", checkIntervalSeconds: "  " }));
+        assert.equal("smtp_port" in input, false);
+        assert.equal("check_interval_seconds" in input, false);
+    });
+
     it("sends the password command as a list of words", () => {
         const input = createInput(filled({ auth: "password_command", passwordCommand: "pass\nshow\nwork" }));
         assert.deepEqual(input.password_command, ["pass", "show", "work"]);
@@ -131,6 +137,13 @@ describe("changeInput", () => {
         const input = changeInput(account("work"), form);
         assert.deepEqual(input.allow, ["x@example.com"]);
         assert.equal(input.smtp_host, null);
+    });
+
+    it("sends null for a number field the form emptied, not 0", () => {
+        const form = { ...formFor(account("work")), smtpPort: "", checkIntervalSeconds: "" };
+        const input = changeInput(account("work"), form);
+        assert.equal(input.smtp_port, null);
+        assert.equal(input.check_interval_seconds, null);
     });
 
     it("sends a secret only when the field is filled", () => {

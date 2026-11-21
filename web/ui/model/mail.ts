@@ -169,7 +169,8 @@ const splitList = (text: string): string[] =>
 type Setting = { key: string; field: keyof MailForm; read: (text: string) => unknown };
 
 const asText = (text: string): string => text.trim();
-const asNumber = (text: string): number => Number(text.trim());
+// A blank field has no number: `Number("")` would be 0, so it reads as empty text and is left out or set to `null`.
+const asNumber = (text: string): number | string => (text.trim() === "" ? "" : Number(text.trim()));
 
 const SETTINGS: readonly Setting[] = [
     { key: "kind", field: "kind", read: asText },
