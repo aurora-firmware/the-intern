@@ -204,6 +204,15 @@ type ConversationEntry = {
     data: { messages?: { role?: string; toolName?: string; isError?: boolean }[] };
 };
 
+/** True when the entries hold the result of a handoff call the product accepted. */
+export function holdsAcceptedHandoff(entries: readonly ConversationEntry[]): boolean {
+    return entries.some(
+        (entry) =>
+            entry.kind === "pi.tool-result" &&
+            entry.data.messages?.some((message) => message.toolName === "handoff" && message.isError !== true),
+    );
+}
+
 /** True when the lead conversation holds the result of a handoff call the product accepted. */
 async function hasAcceptedHandoff(world: World, job: JobView): Promise<boolean> {
     assert.ok(job.leadConversation, `job ${job.number} has no lead conversation`);
@@ -211,11 +220,7 @@ async function hasAcceptedHandoff(world: World, job: JobView): Promise<boolean> 
         conversationId: job.leadConversation,
         limit: 500,
     })) as { entries: ConversationEntry[] };
-    return entries.some(
-        (entry) =>
-            entry.kind === "pi.tool-result" &&
-            entry.data.messages?.some((message) => message.toolName === "handoff" && message.isError !== true),
-    );
+    return holdsAcceptedHandoff(entries);
 }
 
 async function conversationText(world: World, job: JobView): Promise<string> {
@@ -325,4 +330,5 @@ async function main(): Promise<void> {
     }
 }
 
-await main();
+// Run only as the script, so a check can import the pure helpers without a model.
+if (import.meta.main) await main();
