@@ -45,8 +45,8 @@ The Intern uses four directories, each in a folder named `the-intern`:
 
 | Directory | Holds                                    | Default                                                 |
 | --------- | ---------------------------------------- | ------------------------------------------------------- |
-| config    | `config.toml`                            | `$XDG_CONFIG_HOME/the-intern`, else `~/.config/the-intern` |
-| state     | the database, `the-intern.sqlite`        | `$XDG_STATE_HOME/the-intern`, else `~/.local/state/the-intern` |
+| config    | `config.toml`, with no secret in it      | `$XDG_CONFIG_HOME/the-intern`, else `~/.config/the-intern` |
+| state     | the database, `the-intern.sqlite`, the secrets store in `secrets` and the saved mail in `mail` | `$XDG_STATE_HOME/the-intern`, else `~/.local/state/the-intern` |
 | data      | the default workspaces of your roles, the internal folder and `shipped-files.json` | `$XDG_DATA_HOME/the-intern`, else `~/.local/share/the-intern` |
 | runtime   | the socket's directory and the `bob` launcher in `bin` | `$XDG_RUNTIME_DIR/the-intern`, else the `run` folder inside the state directory |
 
@@ -59,6 +59,18 @@ The data directory holds more than workspaces:
   [Skills and instructions](skills_and_instructions.md#the-internal-folder).
 - **`shipped-files.json`.** The service's record of the shipped files it last copied. It decides which files you edited.
   Don't edit, move or delete it. See [The record of shipped files](skills_and_instructions.md#the-record-of-shipped-files).
+
+The state directory holds two more things besides the database:
+
+- **The secrets store.** The `secrets` folder holds the passwords, client secrets and sign-in tokens that team members
+  give the instance for its [mail accounts](email.md). Only the service account can read it, like the database. No
+  command, page or file shows a secret back, and the [export](#copy-the-database-as-a-backup) doesn't hold it. When
+  you remove an account, its secrets go with it. At every start the service also removes the secrets of any account
+  that `config.toml` no longer holds.
+- **The copy of saved mail.** The `mail` folder holds one folder for each email The Intern saved, with the message and
+  its attachments as files that agents read. The database is the only source of saved mail, and the folder is a copy.
+  If you delete or edit the copy, the service writes it again from the database at the next start. It never reads the
+  copy back.
 
 The runtime directory holds `bin/bob`, a launcher that the service writes at every start. An agent's `bash` tool finds
 it first on `PATH`, so the `bob` an agent runs is the version of the running service and reaches this instance. Only
@@ -124,6 +136,9 @@ another computer running the same version, or to restore a backup. Run it with
 
 The file is `config.toml` in the config directory. It is optional: without it, The Intern uses its built-in defaults.
 
+- The mail sections, `[mail]` and `[[mail_account]]`, are described in [Email](email.md). They hold no secret: a
+  password or a client secret never goes into the file. The instance keeps it in the secrets store in the state
+  directory.
 - The service reads the file at start. When you edit it by hand, the edit applies at the next restart.
 - If the file can't be parsed, has a key The Intern doesn't know or holds an invalid value, the service refuses to start
   and names the file, the key and the reason.
@@ -136,6 +151,11 @@ The file is `config.toml` in the config directory. It is optional: without it, T
 
 Models and their logins come from the service account's pi login. The Intern uses it in place: it doesn't copy the
 credentials. Log in with pi as the service account before you start the service.
+
+Every other credential The Intern acts with, such as for a wiki, a repository or another host, is the service
+account's, in that account's usual places. The one exception is the account secrets a team member gives The Intern:
+it keeps those, and only those, in the secrets store in the state directory. It copies no other credential into its
+directories.
 
 The service needs a default model to start. At startup it seats the [front desk](front_desk.md) as the `desk` role with
 that role's defaults, so it needs the default model of the pi login or a `model` set for `desk` in `config.toml`. When
