@@ -11,6 +11,7 @@ const POLL_MS = 100;
 const TEST_TIMEOUT_MS = scaled(120_000);
 const ACTIONS = "main .job-actions";
 const JUSTIFICATION = `${ACTIONS} .job-finish textarea`;
+const MAIL_TEXT = `${ACTIONS} .job-finish [name="mailText"]`;
 const REFUSAL = `${ACTIONS} .refusal`;
 const RELATED_LINKS = "main [data-section='related'] a";
 const BANNER = ".connection-banner";
@@ -57,6 +58,15 @@ const waitForField = (page: Page, name: string, text: string) =>
 async function openJob(page: Page, port: number, number: string): Promise<void> {
     await page.goto(pageUrl(port, `/ui/#/jobs/${number}`));
     await page.waitForSelector(`${ACTIONS} .job-edit`, { timeout: WAIT_MS });
+}
+
+/** Clicks the button and returns the body of the call it sends to the operation. */
+async function bodyOfCall(page: Page, operation: string, button: string): Promise<Record<string, unknown>> {
+    const sent = page.waitForRequest((request) => request.url().endsWith(`/operations/${operation}`), {
+        timeout: WAIT_MS,
+    });
+    await page.click(button);
+    return (await sent).postDataJSON();
 }
 
 describe("editing, finishing and relating a job from its page in chrome", () => {
@@ -147,6 +157,51 @@ describe("editing, finishing and relating a job from its page in chrome", () => 
         await page.waitForSelector(REFUSAL, { timeout: WAIT_MS });
         t.assert.match((await page.locator(REFUSAL).textContent()) ?? "", /definition of done/i);
         t.assert.equal(await fieldText(page, "status").textContent(), before);
+    });
+
+    it("calls jobs.complete with the mail text when the field is filled", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { daemon, port, jobs } = await startJobs(1);
+        await daemon.invoke("jobs.update", { job: jobs[0].id, definitionOfDone: "The shed is green" });
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openJob(page, port, jobs[0].number);
+
+        await page.fill(JUSTIFICATION, "both coats dry");
+        await page.fill(MAIL_TEXT, "The shed is painted.");
+        const body = await bodyOfCall(page, "jobs.complete", `${ACTIONS} .job-complete`);
+
+        t.assert.equal(body.mailText, "The shed is painted.");
+        await waitForField(page, "status", "Done");
+        t.assert.equal(await page.inputValue(MAIL_TEXT), "");
+    });
+
+    it("calls jobs.complete without mailText when the field is empty", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { port, jobs } = await startJobs(1);
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openJob(page, port, jobs[0].number);
+
+        await page.fill(JUSTIFICATION, "both coats dry");
+        const body = await bodyOfCall(page, "jobs.complete", `${ACTIONS} .job-complete`);
+
+        t.assert.equal("mailText" in body, false);
+    });
+
+    it("calls jobs.cancel without mailText even when the field is filled", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+        const { port, jobs } = await startJobs(1);
+        const browser = await launchBrowser(t, "chrome");
+        if (browser === undefined) return;
+        const page = await browser.newPage();
+        await openJob(page, port, jobs[0].number);
+
+        await page.fill(JUSTIFICATION, "no longer needed");
+        await page.fill(MAIL_TEXT, "Never mind.");
+        const body = await bodyOfCall(page, "jobs.cancel", `${ACTIONS} .job-cancel`);
+
+        t.assert.equal(body.justification, "no longer needed");
+        t.assert.equal("mailText" in body, false);
     });
 
     it("shows the related job with its link, on both pages, then takes them away", {
