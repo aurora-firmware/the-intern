@@ -29,7 +29,7 @@ function daemonModulesAmong(urls: string[]): string[] {
 }
 
 describe("bob command line", () => {
-    it("prints the top-level usage on standard output and exits 0 for --help, listing the schedules and skills groups and no reserved group", async () => {
+    it("prints the top-level usage on standard output and exits 0 for --help, listing the schedules, skills and mail groups and no reserved group", async () => {
         const result = await runBob(["--help"]);
 
         assert.equal(result.status, 0);
@@ -37,7 +37,8 @@ describe("bob command line", () => {
         assert.ok(result.stdout.includes("serve"), result.stdout);
         assert.ok(result.stdout.includes("schedules"), result.stdout);
         assert.ok(result.stdout.includes("skills"), result.stdout);
-        assert.ok(!/knowledge|mail/.test(result.stdout), result.stdout);
+        assert.ok(result.stdout.includes("mail"), result.stdout);
+        assert.ok(!result.stdout.includes("knowledge"), result.stdout);
         assert.equal(result.stderr, "");
     });
 
