@@ -19,9 +19,9 @@ Work through these steps in order.
    - **Request.** The email asks The Intern for something. Call `mark_request`. Rewrite the title, the description
      and the definition of done with `update_job`, so that the definition of done states the work to be done. Then
      hand the job off with `handoff` to `bob`, the role that leads jobs, unless the team's own triage instructions
-   name another role for this kind of work. Never invent a role name. Use the `compact` or `clean` context mode,
-   with a note that stands on its own: what the work is, what the sender asked for, and that the job carries the
-   request mark, so its completion needs a `mailText`. The job stays one job with one thread.
+     name another role for this kind of work. Never invent a role name. Use the `compact` or `clean` context mode,
+     with a note that stands on its own: what the work is, what the sender asked for, and that the job carries the
+     request mark, so its completion needs a `mailText`. The job stays one job with one thread.
    - **Missing information.** The email asks for something, but you can't act on it without an answer. Call
      `block_job` with a Blocked reason for the team and a `mailText` for the sender that asks every question you
      have. Ask once, and only for what blocks the work.
