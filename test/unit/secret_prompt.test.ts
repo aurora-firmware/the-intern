@@ -81,10 +81,7 @@ describe("a secret read from a terminal", () => {
     it("refuses_without_a_terminal_when_the_secret_is_not_read_from_standard_input", async () => {
         const stdin = new PassThrough();
         const { io } = ioWith(stdin, false);
-        await assert.rejects(
-            readSecret({ io, prompt: "Password: ", fromStdin: false }),
-            /--secret-stdin/,
-        );
+        await assert.rejects(readSecret({ io, prompt: "Password: ", fromStdin: false }), /--secret-stdin/);
     });
 });
 

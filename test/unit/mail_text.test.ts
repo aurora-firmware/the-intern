@@ -119,13 +119,21 @@ describe("the detail of bob mail show", () => {
 
 describe("the sign-in start", () => {
     it("prints_the_microsoft_code_and_address", () => {
-        const text = formatSignInStart({ kind: "device_code", code: "ABCD-1234", address: "https://example.org/device" });
+        const text = formatSignInStart({
+            kind: "device_code",
+            code: "ABCD-1234",
+            address: "https://example.org/device",
+        });
         assert.ok(text.includes("ABCD-1234"));
         assert.ok(text.includes("https://example.org/device"));
     });
 
     it("prints_the_google_address_to_open_and_the_port_to_forward", () => {
-        const text = formatSignInStart({ kind: "browser", address: "https://accounts.example.org/auth?x=1", port: 38123 });
+        const text = formatSignInStart({
+            kind: "browser",
+            address: "https://accounts.example.org/auth?x=1",
+            port: 38123,
+        });
         assert.ok(text.includes("https://accounts.example.org/auth?x=1"));
         assert.ok(text.includes("38123"));
     });
