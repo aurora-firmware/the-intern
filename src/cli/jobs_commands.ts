@@ -10,7 +10,7 @@ import type { HistoryEntry, Job, WorklogEntry } from "../jobs/job_store.ts";
 import type { CommandInput, CommandSpec, OptionSpec } from "./command_line.ts";
 import { EXIT_CODES } from "./command_line.ts";
 import { withClient } from "./connection.ts";
-import { formatCreated, formatJobDetail, formatJobLine } from "./job_text.ts";
+import { formatCreated, formatJobDetail, formatJobLine, type JobRecord } from "./job_text.ts";
 import { writeError, writeJson, writeLine } from "./output.ts";
 
 const ENTRY_PAGE_SIZE = 500;
@@ -100,6 +100,7 @@ const list = jobsCommand(
             letter: "Only jobs with this origin letter.",
             related: "Only jobs Related to this job.",
             schedule: "Only the scheduled runs of this schedule entry.",
+            mail: "Only the jobs that came through this mail account.",
             limit: "The most jobs to list.",
             cursor: "Continue after the cursor an earlier listing printed.",
         }),
@@ -110,6 +111,7 @@ const list = jobsCommand(
             letter: "letter",
             related: "relatedTo",
             schedule: "schedule",
+            mail: "mailAccount",
             cursor: "cursor",
         });
         const limit = stringOption(input, "limit");
@@ -144,7 +146,7 @@ const show = jobsCommand(
     async (client, input) => {
         const [ref] = input.positionals;
         const page = { job: ref, limit: ENTRY_PAGE_SIZE };
-        const job = (await client.invoke("jobs.get", { job: ref })) as Job;
+        const job = (await client.invoke("jobs.get", { job: ref })) as JobRecord;
         const worklog = (await client.invoke("jobs.worklog.list", page)) as EntryPage<WorklogEntry>;
         const history = (await client.invoke("jobs.history.list", page)) as EntryPage<HistoryEntry>;
         if (input.json) {
@@ -217,10 +219,14 @@ function finishCommand(verb: "complete" | "cancel", summary: string): CommandSpe
                 { name: "job", required: true },
                 { name: "justification", required: true },
             ],
+            ...(verb === "complete" && {
+                options: stringOptions({ "mail-text": "The text the sender of an email job receives as the reply." }),
+            }),
         },
         async (client, input) => {
             const [job, justification] = input.positionals;
-            const finished = (await client.invoke(`jobs.${verb}`, { job, justification })) as Job;
+            const mail = givenFields(input, { "mail-text": "mailText" });
+            const finished = (await client.invoke(`jobs.${verb}`, { job, justification, ...mail })) as Job;
             return printJob(input, finished);
         },
     );

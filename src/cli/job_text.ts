@@ -6,6 +6,7 @@
  */
 import type { JobAuthor, JobStatus } from "../jobs/job_model.ts";
 import type { HistoryEntry, Job, WorklogEntry } from "../jobs/job_store.ts";
+import type { JobEmail } from "../jobs/mail_policy.ts";
 import { continued, flat } from "./terminal_text.ts";
 
 const STATUS_LABELS: Record<JobStatus, string> = {
@@ -17,8 +18,11 @@ const STATUS_LABELS: Record<JobStatus, string> = {
 const LATEST_ENTRY_COUNT = 10;
 const NOTHING = "(none)";
 
+/** What `jobs.get` returns: the job, and for a job that came by email its details. */
+export type JobRecord = Job & { email?: JobEmail };
+
 export type JobDetail = {
-    job: Job;
+    job: JobRecord;
     worklog: readonly WorklogEntry[];
     history: readonly HistoryEntry[];
 };
@@ -63,11 +67,37 @@ function latest<T>(entries: readonly T[]): readonly T[] {
     return entries.slice(-LATEST_ENTRY_COUNT);
 }
 
+function emailLines(job: JobRecord): string[] {
+    const { email } = job;
+    if (email === undefined) return [];
+    const lines = [
+        "Email:",
+        `  Account: ${flat(email.account)}`,
+        `  Sender: ${flat(email.sender)}`,
+        `  Subject: ${flat(email.subject)}`,
+        `  Request mark: ${flat(job.requestMark ?? "false")}`,
+    ];
+    if (email.message !== null) {
+        lines.push(`  Saved message: ${flat(email.message.path)}`);
+        for (const file of email.message.attachments)
+            lines.push(`  Attachment: ${flat(file.name)} (${file.size} bytes) ${flat(file.path)}`);
+    }
+    lines.push("  Thread:");
+    for (const entry of email.thread) {
+        const recipients = flat(entry.recipients.join(", "));
+        const date = entry.date === null ? "" : ` (${flat(entry.date)})`;
+        lines.push(`    ${entry.direction} ${flat(entry.sender)} -> ${recipients}: ${flat(entry.subject)}${date}`);
+    }
+    if (email.thread.length === 0) lines.push(`    ${NOTHING}`);
+    return lines;
+}
+
 export function formatJobDetail({ job, worklog, history }: JobDetail): string[] {
     const lines = [`${flat(job.number)}  ${flat(job.title)}`, ...statusLines(job)];
     lines.push(`Description: ${orNothing(job.description)}`);
     lines.push(`Definition of done: ${orNothing(job.definitionOfDone)}`);
     lines.push(`Related jobs: ${job.related.length === 0 ? NOTHING : flat(job.related.join(", "))}`);
+    lines.push(...emailLines(job));
     lines.push("Worklog:");
     for (const entry of latest(worklog))
         lines.push(`  ${flat(entry.at)} ${authorText(entry.author)}: ${continued(entry.text)}`);
