@@ -12,15 +12,16 @@ A role is what an agent is made from. A role brings:
 - skills, which the agent reads when it needs them, by name
 - a default model, a default thinking level and a default workspace
 
-The Intern ships three roles:
+The Intern ships four roles:
 
 | Role  | What it is for                                                                                          |
 | ----- | ------------------------------------------------------------------------------------------------------- |
 | `bob` | Leads jobs. It is the default lead: a job starts with `bob` unless its source names another role. `bob` defines the job (goal, needs, plan and definition of done), asks for what is missing, then does the work itself, hands it to a better-suited role or invokes other agents for parts of it, and finally verifies the result against the definition of done. |
 | `gp`  | A general-purpose executor. It carries out a part of a job to completion and reports back. It comes with a shipped skill that describes how. |
 | `desk` | Assists team members in the [front desk](front_desk.md). It answers questions about the work from jobs, conversations, status and usage, turns every request for real work into a job instead of doing it, reports the new job's short number, sets up and runs schedules, and passes answers and steering to a job's conversations when a team member asks. |
+| `triage` | Leads the triage job of an email that reaches an owned mail account. See [The `triage` role](#the-triage-role). |
 
-You can create your own roles, change any role (including `bob`, `gp` and `desk`) and remove the roles you created. You
+You can create your own roles, change any role (including `bob`, `gp`, `desk` and `triage`) and remove the roles you created. You
 can't remove a shipped role. You also can't remove a role that a schedule entry names, or a role whose default
 workspace, the one The Intern creates for it, a schedule entry names. The refusal names the entry. A role whose default
 workspace is one you set isn't held by that. A role that an open conversation is seated with can't be removed either:
@@ -49,7 +50,7 @@ and hyphens, in at most 40 characters in all.
 
 | Key              | Meaning                                                                       | Default                                  |
 | ---------------- | ----------------------------------------------------------------------------- | ---------------------------------------- |
-| `tools`          | A list of tool names: `read`, `write`, `edit` and `bash`.                      | None for your own roles: required. For `bob` and `gp`, all four. For `desk`, an empty list. |
+| `tools`          | A list of tool names: `read`, `write`, `edit`, `bash` and `mail`.              | None for your own roles: required. For `bob` and `gp`, `read`, `write`, `edit` and `bash`. For `desk`, an empty list. For `triage`, `read` and `mail`. |
 | `skills`         | A list of skill names. It is the set of skills an agent starts with.           | An empty list. For a shipped role, the defaults of the running version, listed below. |
 | `model`          | The role's default model, written `provider/id`.                               | The default model of the service account's pi login. |
 | `thinking_level` | The role's default thinking level. It must be one the model supports.          | The default thinking level of the pi login. |
@@ -80,6 +81,7 @@ The shipped roles start with these skills:
 | `bob`  | `about-the-intern`, `bob-command-line`  |
 | `gp`   | `carry-out-a-part`, `bob-command-line`  |
 | `desk` | `about-the-intern`                      |
+| `triage` | `about-the-intern`                    |
 
 A shipped role with no `skills` key gets the defaults of the running version. Once you change its skills, the list is
 yours and an upgrade doesn't change it.
@@ -115,9 +117,43 @@ The `desk` role has an empty tool set: it changes no file and runs no command. I
 tool and the tools for reading jobs, conversations, and the daemon's status and usage; for creating and editing jobs; for schedule
 entries; and for passing input to or stopping a job's conversations. See [The front desk and `bob chat`](front_desk.md).
 
+### The `mail` tool set entry
+
+`mail` is not one tool. It stands for the mail tools: list folders, search messages, read a message, save attachments,
+move messages, set flags, save a draft and send. An agent of a role whose `tools` list names `mail` is offered them in
+a job's conversation, and each names the mail account it acts on. The front desk is never offered them, whatever role
+its seat has. A role that doesn't name `mail` gets none. Write `mail` in the list as you write `read`, as in
+`tools = ["read", "mail"]`. See [Email](email.md) for the accounts the tools reach, and for what a monitored account
+refuses.
+
+The `mark_request` job tool isn't one of the mail tools. The lead of a job that came by email is offered it whatever
+its role's tools say, and any other agent or job is refused. See [The request mark](jobs.md#the-request-mark).
+
+### The `triage` role
+
+The shipped `triage` role leads the triage job of each email that reaches an owned mail account, unless you name
+another role as the account's triage role. Its tool set is `read` and `mail`, and its skill is `about-the-intern`. Its
+instructions direct the agent to:
+
+- write the job's definition of done as its first duty, then read the saved email and its attachments
+- take one decision: discard the email, record what matters and complete, hand a request off, or block the job to ask
+  for what is missing
+- set the request mark only when the email asks The Intern for something
+- rewrite a request so that its definition of done states the work, and hand it off to a suitable role
+- write each mail text for the person who reads it, with none of The Intern's internals
+- follow the team's own triage rules
+
+You change the role like any shipped role: its tools, skills, model, thinking level, workspace and instructions, and
+`bob roles restore triage` undoes the change. You can't remove it, and you can't remove a role that an owned mail
+account names as its triage role: the refusal is `conflict` and names the account.
+
+To add your own triage rules, add them as instructions and skills of the `triage` role. Edit
+`instructions/roles/triage.md`, or enable a skill with `bob skills enable <name> --role triage`. [Triage](email.md#add-triage-rules)
+shows both, and [Skills and instructions](skills_and_instructions.md) explains how they work.
+
 ### Undo a change to a shipped role
 
-A change to `bob`, `gp` or `desk` is kept in your configuration, and a change to its instructions in its file in the
+A change to `bob`, `gp`, `desk` or `triage` is kept in your configuration, and a change to its instructions in its file in the
 internal folder. The installed copy is never edited. To restore the shipped role while the service runs, use
 `bob roles restore <name>`. It removes the change from `config.toml`, so the role's skills are the defaults of the
 running version again, and it puts the shipped text back in the role's instruction file. Removing the role's table, or

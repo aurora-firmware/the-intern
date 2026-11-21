@@ -25,6 +25,8 @@ A job holds these fields:
 | `resolution`       | How a Done job ended: `completed` or `cancelled`, with a justification.                      |
 | `related`          | The short numbers of the jobs Related to this one.                                           |
 | `statedBy`         | A name the creator gave itself. It is kept apart from the request and is not checked.        |
+| `requestMark`      | For a job that came by email only: whether its email asks The Intern for something.           |
+| `email`            | For a job that came by email only: the account, the sender, the subject, the saved message and attachments, and the job's thread. |
 | `createdAt`, `updatedAt`, `doneAt` | When the job was created, last changed and became Done.                      |
 
 You can edit `title`, `description` and `definitionOfDone`. Every other field changes only through the actions below.
@@ -39,7 +41,7 @@ letter counts on its own, starting at 1. A number is never reused, even when the
 | ------ | --------------------------------------------------------- |
 | `C`    | A request through the local socket (the command line).    |
 | `W`    | A request through the network listener (the web interface). |
-| `E`    | A request by email.                                       |
+| `E`    | A request by email. See [Jobs that come by email](#jobs-that-come-by-email). |
 | `S`    | A schedule.                                               |
 | `A`    | A follow-up job, created by an agent while it worked on another job. |
 
@@ -136,6 +138,64 @@ the evidence that the definition of done is met, and for a cancelled job the rea
 C-7". If The Intern can't start the lead of a new job after it wrote the job, it cancels the job with a justification
 that names the refusal.
 
+## Jobs that come by email
+
+Every new email in the inbox of an owned mail account becomes a job. Its short number has the letter `E`. The
+[Email](email.md) page explains the accounts. This section explains what such a job is and how it moves.
+
+### A triage job
+
+The Intern saves the email and each attachment as files, then creates the job. Its request holds the sender, the
+subject, the date, the text and where the saved message and attachments are, and its lead has the account's triage
+role, the shipped `triage` role unless you chose another. A job that comes by email starts as a triage job: the lead
+writes the definition of done "a decision is taken about this email" first, reads the email and takes one decision.
+It discards the email, records what matters and completes the job, hands a request to the role that should do the
+work, or blocks the job to ask for what is missing. A request stays one job with one thread. See
+[Triage](email.md#triage) and [the `triage` role](roles_and_agents.md#the-triage-role).
+
+Nobody creates a job with the way in `email` by hand. A job that a team member or an agent creates never has the
+letter `E`, whatever its text says.
+
+### The request mark
+
+The request mark says that the email asks The Intern for something. Only the lead of a job that came by email sets or
+clears it, with its `mark_request` job tool, and only until the job is Done. Any other agent, and any job that didn't
+come by email, is refused. A discarded email and an email that only informs get no mark. `jobs.get` and the Job page
+show the mark, and `bob jobs show` prints it under `Email:`. The mark decides whether the sender gets a result reply.
+
+### Questions and replies by email
+
+When the lead of a job blocks it, it writes the Blocked reason for the team and, when the question can be mailed, a
+mail text for the person who answers. The block is refused without the mail text in that case. The Intern mails the
+mail text and never the Blocked reason:
+
+- To the job's sender, as a reply in the job's thread, when the job came by email, its account can send and the
+  allowlist allows the sender.
+- Otherwise to the notice address, in a thread of its own for the job, when one is set. A job from the command line
+  or a schedule has no sender to ask, so its question goes there.
+
+When no notice address is set and the sender can't be asked, nothing is mailed. The Blocked reason waits on the Job page
+and in `bob` either way. A mail text that equals the last one mailed for the job isn't mailed again, and a block The
+Intern makes itself, such as "no definition of done", is never mailed.
+
+A reply to the question resumes the job. An email in an owned inbox that answers an email of the job, by its
+`In-Reply-To` or `References` header, reaches the lead as input from its sender, like any answer to a
+[Blocked job](#a-blocked-job). A later reply while the job is In progress reaches the lead the same way. A reply to a
+Done job becomes a new triage job related to it. An email that names no mail of a job becomes a new triage job that
+relates to nothing.
+
+### The result reply
+
+When the lead completes a job that has the request mark, it gives a mail text, and The Intern mails it to the job's
+sender as a reply in the job's thread, from the account the job came through, when that account can send and the
+allowlist allows the sender. The completion justification is never mailed.
+
+A job without the mark sends nothing when it completes, and a cancelled job sends nothing. When you complete a job with
+the mark yourself, give a mail text with `bob jobs complete <job> <justification> --mail-text <text>`, with the
+`mailText` of `jobs.complete`, or in the Mail text box of the Job page. Without it no reply goes out, and the history
+says "result reply not sent: no mail text". See [Complete or cancel a job](#complete-or-cancel-a-job) and
+[What The Intern sends](email.md#what-the-intern-sends).
+
 ## The worklog and the history
 
 Each job has two records. You read both with `jobs.get`, or page them with `jobs.worklog.list` and
@@ -148,6 +208,19 @@ Each job has two records. You read both with `jobs.get`, or page them with `jobs
   done, the status, the Blocked reason, the resolution and the Related links, with the old value, the new value, the
   author and the time. An author is an agent (with its conversation and role), a team member (with the way in), or the
   daemon.
+
+  A job that came by email also has one history entry with the field `mail` for each email it receives, sends, holds
+  back or fails to send. Its old value is null, and its new value holds the kind, the sender, the recipients and the
+  subject of the email. The daemon is the author, except for an email an agent sent through the mail tools, whose
+  author is that agent. The kinds are:
+
+  - `received`: an email that reached the job.
+  - `sent`: an email sent from the job, by The Intern or by an agent.
+  - `held_back`: an email the allowlist held back. The entry names the recipients that weren't allowed.
+  - `may_not_have_gone_out`: an email whose sending began when the service stopped. It is not sent again.
+  - `refused`: an email the mail server permanently refused, with the server's message.
+  - `account_removed`: an email owed but never sent because its account was removed.
+  - `not_sent`: a result reply not sent because it was completed with the request mark and no mail text.
 
   When The Intern starts, it checks each job against its conversations and repairs what a crash left out of step. Each
   repair is one history entry with the field `repair`, the daemon as author, an old value of null, and a new value
@@ -212,6 +285,7 @@ Intern records it from the way in you used.
 
 List jobs, newest first. `jobs.list` takes the optional `status` (`to_do`, `in_progress`, `blocked` or `done`),
 `letter` (`C`, `W`, `E`, `S` or `A`), `relatedTo` (a job), `schedule` (a schedule entry's name, for the jobs it ran),
+`mailAccount` (a mail account's name, for the jobs that came through it; `bob jobs list --mail <name>` does the same),
 `limit` (1 to 500, 50 when you give none) and `cursor`.
 It answers a page of jobs without worklog and history, and a `cursor` for the next page when there is one:
 
@@ -267,7 +341,9 @@ member resumed the job. `jobs.resume` on a job that isn't Blocked is refused as 
 ### Complete or cancel a job
 
 Both take `job` and a `justification`. The lead completes a job through its own tool, so you complete one only when you
-have checked the result yourself; the job must have a definition of done.
+have checked the result yourself; the job must have a definition of done. `jobs.complete` takes one more optional
+input, `mailText`: the result reply for a job that came by email and has the request mark (see
+[The result reply](#the-result-reply)). Without it that job sends no reply.
 
 ```
 curl --unix-socket "$SOCKET" -X POST -H 'Content-Type: application/json' \
