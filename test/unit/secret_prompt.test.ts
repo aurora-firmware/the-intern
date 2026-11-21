@@ -78,6 +78,15 @@ describe("a secret read from a terminal", () => {
         assert.deepEqual(stdin.rawModes, [true, false]);
     });
 
+    it("refuses_an_empty_line_typed_on_a_terminal_and_restores_the_terminal", async () => {
+        const stdin = fakeStdin();
+        const { io } = ioWith(stdin, true);
+        const pending = readSecret({ io, prompt: "Password: ", fromStdin: false });
+        stdin.write("\r");
+        await assert.rejects(pending, /empty/);
+        assert.deepEqual(stdin.rawModes, [true, false]);
+    });
+
     it("refuses_without_a_terminal_when_the_secret_is_not_read_from_standard_input", async () => {
         const stdin = new PassThrough();
         const { io } = ioWith(stdin, false);
