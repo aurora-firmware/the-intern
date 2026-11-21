@@ -97,7 +97,12 @@ async function createMicrosoftAccount(rig: MailRig, name: string): Promise<void>
     });
 }
 
-/** Signs the account in through the device code flow and returns once it is `ready`, with the clock's moment. */
+const intakeWatching = (rig: MailRig, name: string) =>
+    until(`intake of ${name} to watch the inbox`, () =>
+        new RegExp(`mail intake watching.*account=${name}`).test(rig.process().stderr()) ? true : undefined,
+    );
+
+/** Signs the account in through the device code flow and returns once it is `ready` and intake watches, with the clock's moment. */
 async function signIn(rig: MailRig, name: string): Promise<number> {
     const started = (await rig.process().invoke("mail.accounts.signin", { name })) as SignInStart;
     rig.oauth.enterCode(started.code);
@@ -113,13 +118,9 @@ async function signIn(rig: MailRig, name: string): Promise<number> {
         await rig.setClock(new Date(clock));
         return undefined;
     });
+    await intakeWatching(rig, name);
     return clock;
 }
-
-const intakeWatching = (rig: MailRig, name: string) =>
-    until(`intake of ${name} to watch the inbox`, () =>
-        new RegExp(`mail intake watching.*account=${name}`).test(rig.process().stderr()) ? true : undefined,
-    );
 
 const rawMail = (to: string, subject: string): string =>
     `From: ${SENDER}\r\nTo: ${to}\r\nSubject: ${subject}\r\nMessage-ID: <${subject.replaceAll(" ", "-")}@example.test>\r\n\r\nbody\r\n`;
@@ -158,6 +159,7 @@ describe("OAuth token refresh with nobody present (S-009 AC-004.2)", () => {
         const newest = (await storedSecret(rig, "work")).refreshToken as string;
         await rig.restart();
         await rig.waitForStatus("work", "ready");
+        await intakeWatching(rig, "work");
         const afterRestart = await refreshOnce();
 
         assert.equal(new Set([...spent, newest]).size, REFRESH_ROUNDS + 1);
