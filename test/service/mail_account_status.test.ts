@@ -253,7 +253,7 @@ describe("an account checked against a slow server (S-009 AC-005.2)", () => {
         assert.equal((await statusOf(daemon, "slow")).status, "ready");
     });
 
-    it("shows connecting after a restart until the first connection ends and then ready on the feed", {
+    it("shows connecting after a restart until the first connection ends and then ready, which reaches the feed", {
         timeout: TEST_TIMEOUT_MS,
     }, async () => {
         const { server, env, daemon } = await startFixture({ trustAuthority: false });
@@ -272,6 +272,33 @@ describe("an account checked against a slow server (S-009 AC-005.2)", () => {
         await ready;
         assert.equal((await statusOf(restarted, "slow")).status, "ready");
     });
+});
+
+// A client can open the feed only once the daemon is ready, and the mail component publishes `connecting` while it
+// starts, so the delta has no reader. Every status delta of the account that the feed carries, up to `ready`, is kept.
+it("sends connecting and then ready to the feed after a restart", {
+    timeout: TEST_TIMEOUT_MS,
+    todo: "B-050",
+}, async () => {
+    const { server, env, daemon } = await startFixture({ trustAuthority: false });
+    await daemon.invoke("mail.accounts.create", ownedInput(server, "slow", FIRST_ADDRESS));
+    await waitForStatus(daemon, "slow", "ready");
+    daemon.signal("SIGTERM");
+    await daemon.exited;
+    server.setSlow(SLOW_ANSWER_MS);
+
+    const restarted = launch(env, false);
+    await restarted.ready;
+    const feed = await watchStatusFeed(restarted);
+    const seen: string[] = [];
+    await feed.nextDelta((delta) => {
+        const change = delta as FeedDelta & { name?: string; status?: string };
+        if (change.type !== "mail_account_status" || change.name !== "slow") return false;
+        seen.push(change.status ?? "");
+        return change.status === "ready";
+    });
+
+    assert.deepEqual(seen, ["connecting", "ready"]);
 });
 
 describe("a login that fails", () => {
