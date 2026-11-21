@@ -291,7 +291,7 @@ triage role. It reads the saved email and takes one decision:
 | -------- | ------------------ |
 | Discard | For spam, auto-replies and delivery failures. It completes the job and says why. |
 | Information only | It records what matters, relates the job to others where useful and completes it. |
-| Request | It sets the request mark, rewrites the job and hands it off to the role that does the work. The job stays one job. |
+| Request | It sets the request mark, rewrites the job and hands it off to `bob`, or to the role your triage rules name. The job stays one job. |
 | Missing information | It blocks the job with a question for the sender. |
 
 The **request mark** says that the email asks The Intern for something. Only the lead of a job that came by email sets
@@ -313,6 +313,7 @@ The shipped `triage` role follows your own rules. Add them as instructions and s
 
 - Edit `<data dir>/instructions/roles/triage.md`, or [change it on the Roles page](web_interface.md#roles). For example,
   add "Forward every invoice to the `accounts` role."
+  A triage instruction can name the role that takes a kind of request.
 - Add a skill and enable it for the role with `bob skills enable <name> --role triage`.
 
 You can also create a role of your own, name it as an account's triage role, and give it the `mail` tool.

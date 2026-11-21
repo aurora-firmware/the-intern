@@ -237,6 +237,25 @@ async function conversationText(world: World, job: JobView): Promise<string> {
     return JSON.stringify(entries);
 }
 
+/** Prints each job's history and lead conversation tail, so a model stall and a product fault can be told apart. */
+async function printStall(world: World): Promise<void> {
+    for (const mail of [REQUEST, QUESTION_FIRST]) {
+        const job = await jobsAbout(world, mail.subject);
+        if (!job) continue;
+        print("diagnostic", job);
+        for (const entry of await historyOf(world, job))
+            console.log(`    history ${entry.field} ${JSON.stringify(entry.old)} -> ${JSON.stringify(entry.new)}`);
+        const { entries } = (await world.daemon.invoke("conversations.entries", {
+            conversationId: job.leadConversation,
+            limit: 500,
+        })) as { entries: ConversationEntry[] };
+        console.log(`    lead conversation: ${entries.length} entries; last 14:`);
+        for (const entry of entries.slice(-14))
+            console.log(`      ${entry.kind} ${JSON.stringify(entry.data).slice(0, 900)}`);
+    }
+    console.log(`    sent emails: ${world.server.received().length}`);
+}
+
 async function checkQuestionAndSendTool(world: World): Promise<void> {
     const before = world.server.received().length;
     world.server.deliver(OWNED, rawMail(QUESTION_FIRST));
@@ -314,6 +333,9 @@ async function run(model: string): Promise<void> {
         await checkQuestionAndSendTool(world);
         daemon.signal("SIGTERM");
         await expectCleanExit(daemon);
+    } catch (error) {
+        await printStall(world).catch((printError: unknown) => console.log(`  diagnostic failed: ${printError}`));
+        throw error;
     } finally {
         daemon.kill9();
         await daemon.exited;

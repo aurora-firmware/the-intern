@@ -95,6 +95,13 @@ const invokeParameters = Type.Object({
 
 type InvokedAgentArguments = Static<typeof invokedAgentParameters>;
 
+// An unknown role keeps the refused name and lists the roles that exist, so the agent need not guess again.
+function refusalText(runtime: AgentsRuntime, error: RoleRefusedError | WorkspaceRefusedError): string {
+    if (!(error instanceof RoleRefusedError) || error.kind !== "not_found") return error.message;
+    const names = runtime.catalog.list().map((role) => role.name);
+    return `${error.message}. The roles are: ${names.join(", ")}`;
+}
+
 function resolveSeat(runtime: AgentsRuntime, args: HandoffArguments): Seat | string {
     const { role, contextMode, note, ...overrides } = args;
     if (contextMode !== "full" && (note === undefined || note === "")) {
@@ -103,7 +110,9 @@ function resolveSeat(runtime: AgentsRuntime, args: HandoffArguments): Seat | str
     try {
         return runtime.catalog.seatFor(role, overrides);
     } catch (error) {
-        if (error instanceof RoleRefusedError || error instanceof WorkspaceRefusedError) return error.message;
+        if (error instanceof RoleRefusedError || error instanceof WorkspaceRefusedError) {
+            return refusalText(runtime, error);
+        }
         throw error;
     }
 }
@@ -204,7 +213,9 @@ function resolveInvocationSeats(runtime: AgentsRuntime, agents: InvokedAgentArgu
         try {
             requests.push({ seat: runtime.catalog.seatFor(role, overrides), contextMode, jobPrompt });
         } catch (error) {
-            if (error instanceof RoleRefusedError || error instanceof WorkspaceRefusedError) return error.message;
+            if (error instanceof RoleRefusedError || error instanceof WorkspaceRefusedError) {
+                return refusalText(runtime, error);
+            }
             throw error;
         }
     }
