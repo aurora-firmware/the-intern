@@ -101,7 +101,12 @@ async function start(): Promise<World> {
     const agents = await createAgentsComponent({ logger: quietLogger });
     const jobs = await createJobsComponent({ agents, logger: quietLogger, turnEndRule: false });
     let captured: ServiceContext | undefined;
-    const probe: DaemonComponent = { name: "probe", start: async (ctx) => void (captured = ctx) };
+    const probe: DaemonComponent = {
+        name: "probe",
+        start: async (ctx) => {
+            captured = ctx;
+        },
+    };
     const running = runDaemon({
         flags: { configDir: env.configDir, stateDir: env.stateDir, dataDir: env.dataDir, runtimeDir: env.runtimeDir },
         env: env.env,
@@ -216,23 +221,26 @@ describe("bob jobs with email", () => {
         assert.doesNotMatch(listed.stdout, new RegExp(work.number));
     });
 
-    scenario("shows an email job's account, sender, subject, message, attachments, thread and mark (AC-2)", async () => {
-        const world = await start();
-        const job = await world.emailJob("intern", 1);
-        await world.ctx.jobStore.setRequestMark(job.id, true, daemonAuthor);
+    scenario(
+        "shows an email job's account, sender, subject, message, attachments, thread and mark (AC-2)",
+        async () => {
+            const world = await start();
+            const job = await world.emailJob("intern", 1);
+            await world.ctx.jobStore.setRequestMark(job.id, true, daemonAuthor);
 
-        const shown = await world.bob(["jobs", "show", job.number]);
+            const shown = await world.bob(["jobs", "show", job.number]);
 
-        assert.equal(shown.status, 0, shown.stderr);
-        assert.match(shown.stdout, /^Email:$/m);
-        assert.match(shown.stdout, /Account: intern/);
-        assert.match(shown.stdout, new RegExp(`Sender: ${SENDER}`));
-        assert.match(shown.stdout, new RegExp(`Subject: ${SUBJECT}`));
-        assert.match(shown.stdout, /Request mark: true/);
-        assert.match(shown.stdout, /Saved message: \S*message\.eml/);
-        assert.match(shown.stdout, /Attachment: a\.pdf \(12 bytes\) \S*a\.pdf/);
-        assert.match(shown.stdout, new RegExp(`received ${SENDER} -> ${ADDRESS}: ${SUBJECT}`));
-    });
+            assert.equal(shown.status, 0, shown.stderr);
+            assert.match(shown.stdout, /^Email:$/m);
+            assert.match(shown.stdout, /Account: intern/);
+            assert.match(shown.stdout, new RegExp(`Sender: ${SENDER}`));
+            assert.match(shown.stdout, new RegExp(`Subject: ${SUBJECT}`));
+            assert.match(shown.stdout, /Request mark: true/);
+            assert.match(shown.stdout, /Saved message: \S*message\.eml/);
+            assert.match(shown.stdout, /Attachment: a\.pdf \(12 bytes\) \S*a\.pdf/);
+            assert.match(shown.stdout, new RegExp(`received ${SENDER} -> ${ADDRESS}: ${SUBJECT}`));
+        },
+    );
 
     scenario("carries the email data in the --json of show (AC-2)", async () => {
         const world = await start();
