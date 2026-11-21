@@ -69,8 +69,8 @@ The state directory holds two more things besides the database:
   that `config.toml` no longer holds.
 - **The copy of saved mail.** The `mail` folder holds one folder for each email The Intern saved, with the message and
   its attachments as files that agents read. The database is the only source of saved mail, and the folder is a copy.
-  If you delete or edit the copy, the service writes it again from the database at the next start. It never reads the
-  copy back.
+  If an email's folder is missing, the service writes it again from the database at the next start. It never reads the
+  copy back, so an edit to a file in a folder that is there stays as you left it and never reaches the database.
 
 The runtime directory holds `bin/bob`, a launcher that the service writes at every start. An agent's `bash` tool finds
 it first on `PATH`, so the `bob` an agent runs is the version of the running service and reaches this instance. Only
