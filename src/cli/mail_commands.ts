@@ -1,37 +1,17 @@
 /**
  * The `bob mail` commands that read and remove accounts and set the notice mail (S-009 REQ-017): each calls one
  * `mail.*` operation with the arguments given and prints the answer with `mail_text.ts`. The service validates every
- * value, so a refusal is printed as the service gives it. Imports no daemon code.
+ * value, so a refusal is printed as the service gives it. `create`, `change` and `signin` are in
+ * `mail_setup_commands.ts`. Imports no daemon code.
  */
 import type { Client } from "../client/client.ts";
 import type { MailAccountView, MailNoticeView, MailTestResult } from "../service/mail_operations.ts";
 import type { CommandInput, CommandSpec } from "./command_line.ts";
 import { EXIT_CODES } from "./command_line.ts";
-import { withClient } from "./connection.ts";
+import { mailCommand, namePositional, printAnswer } from "./mail_command_kit.ts";
+import { mailChange, mailCreate, mailSignIn } from "./mail_setup_commands.ts";
 import { formatAccountDetail, formatAccountLine, formatNotices, formatTestResult } from "./mail_text.ts";
 import { writeError, writeJson, writeLine } from "./output.ts";
-
-const namePositional = { name: "name", required: true };
-
-function mailCommand(
-    spec: Pick<CommandSpec, "verb" | "summary" | "positionals" | "options">,
-    action: (client: Client, input: CommandInput) => Promise<number>,
-): CommandSpec {
-    return {
-        group: "mail",
-        ...spec,
-        isData: true,
-        callsService: true,
-        run: (input) => withClient(input, (client) => action(client, input)),
-    };
-}
-
-// Prints the answer as JSON, or the text of it.
-function printAnswer(input: CommandInput, answer: unknown, text: string): number {
-    if (input.json) writeJson(input.io, answer);
-    else writeLine(input.io, text);
-    return EXIT_CODES.ok;
-}
 
 const mailList = mailCommand(
     { verb: "list", summary: "List mail accounts.", positionals: [], options: {} },
@@ -111,4 +91,13 @@ const mailNotices = mailCommand(
     },
 );
 
-export const MAIL_COMMANDS: readonly CommandSpec[] = [mailList, mailShow, mailTest, mailRemove, mailNotices];
+export const MAIL_COMMANDS: readonly CommandSpec[] = [
+    mailList,
+    mailShow,
+    mailCreate,
+    mailChange,
+    mailSignIn,
+    mailTest,
+    mailRemove,
+    mailNotices,
+];
