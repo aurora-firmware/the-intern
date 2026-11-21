@@ -25,14 +25,14 @@ lines. Stop it with Ctrl-C. For a second instance, use another folder under `.tm
 Run the live checks, which start the daemon over your own pi login, with `npm run test:live`,
 `npm run test:live:agents`, `npm run test:live:jobs`, `npm run test:live:schedules`, `npm run test:live:desk`,
 `npm run test:live:skills` and `npm run test:live:mail`. The schedules check creates an entry that fires every minute
-for a file in `gp`'s workspace, and waits for the fire at the next whole minute. The desk check asks the front desk for a piece of work,
-then pipes the same request to `bob chat` and runs `bob jobs follow` on the job it names until it is Done. The skills
-check adds a search path holding a skill `lint`, asks the front desk how to add a search path, then runs a `gp` job that
-enables `lint` for itself through `bob` and uses it. The mail check delivers a request, a newsletter and an
-out-of-office reply to an owned account on the fake mail server, checks the `triage` decisions and the one reply, then
-works a request that is blocked with a question and checks that no sent email names a short number or an internal
-name. Each takes `--model <provider/id>` after `--`, and each runs in a
-short folder under the system temp folder, since a socket path over 107 bytes fails.
+for a file in `gp`'s workspace, and waits for the fire at the next whole minute. The desk check asks the front desk for
+a piece of work, then pipes the same request to `bob chat` and runs `bob jobs follow` on the job it names until it is
+Done. The skills check adds a search path holding a skill `lint`, asks the front desk how to add a search path, then
+runs a `gp` job that enables `lint` for itself through `bob` and uses it. The mail check delivers a request, a
+newsletter and an out-of-office reply to an owned account on the fake mail server, checks the `triage` decisions and the
+one reply, then works a request that is blocked with a question and checks that no sent email names a short number or an
+internal name. Each takes `--model <provider/id>` after `--`, and each runs in a short folder under the system temp
+folder, since a socket path over 107 bytes fails.
 
 ## Checking the network listener from the LAN
 
