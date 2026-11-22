@@ -5,6 +5,7 @@
             "src/**",
             "test/**",
             "web/**",
+            "release/**",
             "package.json",
             "tsconfig.json",
             "biome.json",
