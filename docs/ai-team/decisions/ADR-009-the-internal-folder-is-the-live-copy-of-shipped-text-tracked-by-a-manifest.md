@@ -27,7 +27,8 @@ they are.
    by that relative path. The daemon only reads the package.
 2. **The manifest.** `<data dir>/shipped-files.json` maps each relative path to the SHA-256 of the bytes last copied
    (`fingerprintOf`). It sits beside `instructions/` and `skills/`, so it travels and is wiped with them, and only the
-   daemon writes it, owner-only and atomically. A shipped file is **edited** when the manifest records it and it is
+   daemon writes it, owner-only and atomically. The one exception is S-010's switch-back and rollback, which put back
+   the internal folder and its manifest together from the pre-upgrade copy while no daemon runs (ADR-013 decision 7). A shipped file is **edited** when the manifest records it and it is
    missing or its hash differs; a skill is edited when any of its shipped files is.
 3. **The start rule.** At step 3 the daemon creates the missing folders, then:
    - copies each shipped file the manifest doesn't record, unless a file is already at its path, and records the

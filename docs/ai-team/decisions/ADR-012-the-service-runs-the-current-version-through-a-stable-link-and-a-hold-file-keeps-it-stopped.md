@@ -63,8 +63,9 @@ folder that every installation command creates to keep the service stopped and r
 - Unverified until a Mac is available (S-010 Success Criteria 5): that launchd starts the job when the hold file goes,
   that `PathState` alone restarts it after `kill -9`, and that a Mac with FileVault starts it before the disk is
   unlocked. A failed check is a bug against this decision, not a spec change.
-- The service's agents run tools with the `PATH` of the shell that ran `bob service install`; running it again picks
-  up a changed `PATH`.
+- The service's agents run tools with the `PATH` of the shell that ran `bob service install`. Running it again keeps
+  the record as it is (S-010 REQ-004), so a new `PATH`, like new directories, takes `bob service remove` and then
+  `bob service install`.
 
 ## Alternatives Considered
 
