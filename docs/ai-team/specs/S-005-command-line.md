@@ -30,9 +30,10 @@ of `docs/system_overview.html`. It adds these terms:
 |---|---|
 | Command | One thing `bob` does: a group and a verb (`bob jobs list`), or a top-level command (`bob chat`). |
 | Group | The first word of a grouped command, one noun per S-000 component or service area: `jobs`, `conversations`, `roles`, `workspaces`, `models`, and the groups later specs add, such as `skills` and `instructions` (S-008 REQ-012) and `mail` (S-009 REQ-017). |
-| Top-level command | A command with no group: `chat`, `follow`, `status`, `usage`, `serve`, `export`, `import`. |
+| Top-level command | A command with no group: `chat`, `follow`, `status`, `usage`, `serve`, `export`, `import`, and S-010's `upgrade`, `rollback` and `uninstall`. |
+| Installation command | One of S-010's commands that manage the program and the service: `bob service install`, `remove` and `status`, `bob upgrade`, `bob rollback` and `bob uninstall`. S-010 owns their behaviour, output and exit codes. |
 | Reserved group | A group name kept for a later spec (`knowledge`). It has no command yet (REQ-001). |
-| Data command | A command that prints data from the service: every command except `serve` and `import` (REQ-003). |
+| Data command | A command that prints data from the service: every command except `serve`, `import` and the installation commands (REQ-003). |
 | Following command | A command that keeps printing changes until it ends or the team member stops it: `bob chat`, `bob follow`, `bob jobs follow` (REQ-015). |
 | Text output | The readable lines a data command prints by default. Its wording is not a contract. |
 | JSON output | What a data command prints with `--json`: the service's answer unchanged, one JSON value per line when following (REQ-003). |
@@ -74,7 +75,8 @@ What this specification explicitly does NOT cover:
 - **Remote daemons.** `bob` reaches only the daemon on the machine, through the local socket. Reaching The Intern
   from elsewhere is the web interface's, through the network listener; `bob` has no `--host` option and no login.
 - **State or logic of its own.** `bob` keeps no configuration file, cache or local history, and resolves no short
-  number itself: the service validates, resolves and refuses (REQ-016).
+  number itself: the service validates, resolves and refuses (REQ-016). The installation commands are the exception:
+  they manage the program, the service and the upgrades folder as S-010 specifies.
 - **Commands for later components.** Knowledge sources get only their reserved group name here (REQ-001); their spec
   adds the commands. S-007 adds `bob schedules`, S-008 adds `bob skills` and `bob instructions`, S-009 adds
   `bob mail`, and S-010 adds `bob service`, `bob upgrade`, `bob rollback` and `bob uninstall`.
@@ -278,7 +280,8 @@ socket path, and exit 3.
 Every data command SHALL print text output by default and, with `--json`, the service's answer unchanged on standard
 output, one JSON value per line for a following command. Errors, notices and hints SHALL go to standard error and data
 to standard output. A command SHALL exit 0 on success; 1 when the service refuses or fails, printing the service's
-error code and message on standard error; 2 on a usage error; 3 when the daemon can't be reached (REQ-002). Text output
+error code and message on standard error; 2 on a usage error; 3 when the daemon can't be reached (REQ-002). The
+installation commands exit 2 on a usage error and otherwise exit as S-010 states. Text output
 SHALL use colour only when standard output is a terminal. Command names, `--json` output and exit codes are a
 contract: changing them needs an amendment of this spec.
 
@@ -650,12 +653,14 @@ only a Ctrl-C withdraws queued lines (REQ-009).
 ### REQ-016 — Thin and quick
 
 `bob` SHALL keep no state of its own: no configuration file, cache or local history, and no short-number resolution or
-validation the service does. A command that only calls the service SHALL NOT load the daemon's code, as ADR-005 states.
-As a reference, not an acceptance threshold, `bob jobs list` answers in under half a second on a development machine.
+validation the service does. The installation commands are outside this rule: they write the program folder, the
+upgrades folder and the service registration as S-010 specifies. A command that only calls the service SHALL NOT load
+the daemon's code, as ADR-005 states. As a reference, not an acceptance threshold, `bob jobs list` answers in under
+half a second on a development machine.
 
 #### AC-016.1 — No state and no daemon code
 
-- **Given:** the `bob` entry point and its command modules
+- **Given:** the `bob` entry point and its command modules, apart from the installation commands
 - **When:** a reviewer reads them, and runs `bob jobs list` with module loading traced
 - **Then:** no file is written outside standard output and standard error, and the modules loaded follow ADR-005
 
@@ -724,9 +729,11 @@ sense.
 - **S-001 v0.14, S-002 v0.13 and S-004 v0.12.** The front desk, `desk.get`, closed conversations and the job operations
   exist as specified.
 - **S-004's import step** (REQ-017) runs in-process and holds single ownership of the instance (S-002 REQ-001).
-- **Installation and service setup** puts `bob` on the `PATH`; until then the manual shows `node src/cli/bob.ts`.
+- **Installation and service setup** (S-010) puts `bob` on the `PATH`; from a checkout the manual shows
+  `node src/cli/bob.ts`.
 - **Later specs.** Team knowledge adds its group under the reserved name and follows the conventions of Interfaces.
   S-007 adds `schedules`, S-008 adds `skills` and `instructions`, and S-009 adds `mail`, following those conventions.
+  S-010 adds the installation commands, which follow REQ-001 and own their output and exit codes.
 
 ## Success Criteria
 
@@ -772,4 +779,4 @@ None.
 | 2026-11-13 | v0.7. Definitions (Group, Reserved group), Users, Exclusions (Commands for later components), Interfaces (the conventions' reserved groups) and Dependencies: `skills` and `instructions` leave the reserved groups because S-008 adds `bob skills` and `bob instructions`; `knowledge` and `mail` stay reserved. Interfaces, the command table: one row names S-008's commands by reference to S-008 Interfaces and REQ-012, which own them; the `bob roles change` row calls `roles.list` first for the instructions' version token when the change gives instructions, because `roles.change` writes instructions only with that token (S-008 REQ-007). AC-001.3: the reserved-group example becomes `bob knowledge list`. No identifier added or retired. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, finding B7. The `bob roles change` row follows from S-008 REQ-007. | S-008's tasks |
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.7 confirmed: knowledge and mail stay reserved, bob skills and bob instructions exist, bob roles change reads the token first (T-366 to T-369) | none |
 | 2026-11-18 | v0.8. Definitions (Group, Reserved group), Users (Later specs), Exclusions (Commands for later components), Interfaces (the conventions' reserved groups) and Dependencies: `mail` leaves the reserved groups because S-009 adds `bob mail`; only `knowledge` stays reserved. Interfaces, the command table: one row names S-009's `bob mail` commands by reference to S-009 Interfaces and REQ-017, which own them; `bob jobs list` gains `--mail`, the account filter; `bob jobs show` prints the email details and request mark that `jobs.get` carries; `bob jobs complete` gains `--mail-text`, sent as `jobs.complete`'s `mailText`. REQ-004: `bob jobs show` prints a job's email details and request mark, and `bob jobs complete` takes `--mail-text`. No identifier added or retired. | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18. | S-009's tasks |
-| 2026-11-22 | v0.9. REQ-001: the top-level commands include S-010's `upgrade`, `rollback` and `uninstall`. Users (Later specs), Exclusions (Commands for later components, An install launcher) and Interfaces, the command table: S-010 adds the `service` group and the three top-level commands, and its install script puts `bob` on the `PATH`; one row names them by reference to S-010 Interfaces and REQ-004 to REQ-011, which own them. No identifier added or retired. | Cross-spec amendment carried by S-010 Installation and service setup, product owner decisions of 2026-11-22. | S-010's tasks |
+| 2026-11-22 | v0.9. Definitions: "Top-level command" adds S-010's `upgrade`, `rollback` and `uninstall`; new "Installation command" for S-010's commands that manage the program and the service; "Data command" leaves them out. REQ-001: the top-level commands include S-010's. REQ-003: the installation commands exit 2 on a usage error and otherwise as S-010 states, which owns their output. REQ-016, AC-016.1 and Exclusions (State or logic of its own): the installation commands are outside the no-state rule. Users (Later specs), Exclusions (Commands for later components, An install launcher), Interfaces (the command table) and Assumptions: S-010 adds the `service` group and the three top-level commands, and its install script puts `bob` on the `PATH`. No identifier added or retired. | Cross-spec amendment carried by S-010 Installation and service setup; S-010 architecture consistency review, findings B3 and B4, 2026-11-22. | S-010's tasks |

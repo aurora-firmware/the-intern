@@ -31,14 +31,14 @@ daemon, ready, supervisor, export, import step, internal folder, secrets store) 
 | Term | Meaning in this spec |
 |---|---|
 | Release | One published version of The Intern, named by its version number `X.Y.Z` and its tag `vX.Y.Z` (REQ-001). |
-| Bundle | The archive of a release for one platform: a Node 24 runtime, The Intern's code and its locked dependencies (REQ-002). |
+| Bundle | The archive of a release for one platform: The Intern with everything it needs to run, its runtime included, at the versions the release was tested with (REQ-002). |
 | Install script | The script published with each release that downloads, checks and installs a bundle (REQ-003). |
 | Program folder | The folder under the installing person's home that holds the installed versions. It is apart from the instance directories (REQ-003). |
 | Current version | The installed version `bob` and the service run. |
 | Previous version | The version that was current before the last upgrade, kept so `bob rollback` can return to it. At most one exists (REQ-006, REQ-009). |
-| Service | The registration with the operating system's supervisor that runs `bob serve` for the instance as the service account (REQ-004). |
-| Pre-upgrade copy | The copy of the instance's saved state that `bob upgrade` takes after it stops the service and before the new version first starts: the database in the export format, the configuration file, the internal folder and the secrets store (REQ-006). |
-| Set-aside database | A database that a version couldn't use, moved out of the state directory and kept, never deleted, by upgrade or rollback (REQ-008, REQ-009). |
+| Service | The registration with the operating system's supervisor that runs `bob serve` for the instance as the service account. It fixes the instance directories and the pi agent folder the service runs with (REQ-004). |
+| Pre-upgrade copy | The copy of the instance's saved state that `bob upgrade` takes after it stops the service and before the new version first starts: the database in the export format, the configuration file, and the internal folder with its record of shipped files. It never holds the secrets store (REQ-006). |
+| Set-aside database | A database moved out of the state directory and kept, never deleted: one the new version couldn't read (REQ-008), one a failed new version may have changed (REQ-007), or the one a rollback replaces (REQ-009). |
 | Unreadable database | A database the new version's startup refuses at S-002 REQ-002 step 4 because it can neither read nor migrate it: a newer job schema, or conversation data its pi-durable can't read (REQ-008). |
 | Upgrades folder | The folder `upgrades` in the instance's state directory that holds pre-upgrade copies and set-aside databases. |
 | Download location | Where `bob` and the install script fetch releases: the project's GitHub Releases, or a developer's override (Configuration Requirements). |
@@ -83,6 +83,11 @@ What this specification explicitly does NOT cover:
 - **More than one registered instance per machine.** The service covers the one instance with the default instance
   directories. Developers still run more instances by hand with the directory flags (S-002 REQ-006).
 - **macOS signing and notarization.**
+- **Linux x64 without glibc or without systemd.** S-000 supports Linux on x64; this spec narrows it to systems with
+  glibc and systemd, which the bundle and the supervisor contract (S-002 REQ-004) need. The install script refuses
+  others.
+- **Copying the secrets store.** Upgrade, switch-back and rollback never copy or restore it: secrets live only in the
+  secrets store (S-002 REQ-018; S-009 REQ-002, REQ-020). Product owner decision, 2026-11-22.
 - **Migrating a database the new version can't read.** S-000 excludes converting saved state between versions. A
   failed upgrade asks to switch back instead (REQ-008). Migrating databases from earlier versions is a later direction.
 - **Going back more than one version.** Only the previous version is kept, and `bob rollback` reaches only it.
@@ -101,8 +106,7 @@ What this specification explicitly does NOT cover:
 - **An npm package that needs Node 24 installed beforehand.** Rejected: the team member must provide Node 24, the
   service breaks when that Node moves or changes version, and the Node and SQLite versions vary per machine.
   `docs/development/release_form.md` (form A) has the comparison.
-- **A single executable per platform.** Rejected: it needs a bundling step the tests don't exercise, and is a less
-  mature Node feature (`release_form.md`, form C).
+
 - **OS packages (a `.deb` and a Homebrew formula).** Rejected: two packaging systems to build and maintain, each with
   its own idea of services and upgrades.
 - **Everything in the install script** (download, service registration, upgrade and removal as script flags).
@@ -115,6 +119,12 @@ What this specification explicitly does NOT cover:
 - **Take a copy, go back by hand.** Rejected: the most manual steps at the moment they matter most.
 - **Leave the service stopped after a failed upgrade.** Rejected: a failed upgrade would leave The Intern down while
   nobody watches. It switches back instead (REQ-007).
+- **Copy the secrets store with the rest, so a rollback restores it too.** Rejected at the architecture consistency
+  review: it makes a second copy of every secret, against S-002 REQ-018 and S-009 REQ-002 and REQ-020. A rollback
+  instead leaves the secrets store as it is (REQ-009).
+- **Pause mail intake and sending after a rollback until a team member resumes them.** Rejected: a new behaviour in
+  S-009 and one more step after every rollback. The rollback warning says mail may be taken in or sent again, and
+  S-009's guarantees are clarified to hold within one database's history (REQ-009).
 - **Delete everything on uninstall after one confirmation.** Rejected: a slip loses the job record and the secrets. The
   data is kept unless the team member asks (REQ-010).
 - **Build and upload releases by hand, or publish on every merge to `main`.** Rejected: by hand is slow and error-prone;
@@ -129,13 +139,12 @@ What this specification explicitly does NOT cover:
 | Asset | Content |
 |---|---|
 | `the-intern-X.Y.Z-linux-x64.tar.gz` | The Linux x64 bundle (REQ-002) |
-| `the-intern-X.Y.Z-linux-x64.tar.gz.sha256` | Its SHA-256 checksum, in the format `sha256sum -c` reads |
+| `the-intern-X.Y.Z-linux-x64.tar.gz.sha256` | Its SHA-256 checksum, in the format `sha256sum -c` and `shasum -a 256 -c` read |
 | `the-intern-X.Y.Z-darwin-arm64.tar.gz` | The macOS Apple silicon bundle (REQ-002) |
 | `the-intern-X.Y.Z-darwin-arm64.tar.gz.sha256` | Its SHA-256 checksum, in the same format |
 | `install.sh` | The install script (REQ-003) |
 
-The repository is public, so the
-assets download without a login.
+The repository is public, so the assets download without a login.
 
 ### Install script
 
@@ -155,28 +164,44 @@ curl -fsSL https://github.com/aurora-firmware/the-intern/releases/latest/downloa
 
 ### Commands
 
-These groups join `bob` (S-005 amendment). They follow S-005 REQ-001 and REQ-003: `--help` at every level, usage
-errors exit 2, notices and questions on standard error. They don't call the daemon's operations, except that
-`bob service status` reads the version the running service reports (S-002 `daemon.status`).
+These are the installation commands: the `service` group and the top-level `upgrade`, `rollback` and `uninstall`
+(S-000 Command line, Boundary, and S-005, as amended on this branch). Like every `bob` command they take `--help` at
+every level and exit 2 on a usage error (S-005 REQ-001). They aren't S-005 data commands: this spec owns their output
+and exit codes, as the table states. Notices, questions and errors go to standard error. They call no operation of the
+Intern service, except that `bob service status` reads the running version with `daemon.status` (S-002 REQ-012). Every
+command after `bob service install` acts on the instance directories and the pi agent folder the service registration
+holds (REQ-004), not on those of its own environment.
 
 | Command | Behaviour | Exit |
 |---|---|---|
 | `bob service install` | Registers and starts the service, asking for admin rights when the machine needs them, and waits for ready (REQ-004). Run again, it points the registration at the current version | 0 ready; 1 not registered or not ready, naming the reason and the command that shows the service's log |
 | `bob service remove` | Stops the service and removes its registration. Program and data stay (REQ-005) | 0; 1 on failure |
-| `bob service status` | Whether the service is registered, starts at boot and is running, and the version it runs; `--json` prints the same fields (REQ-005) | 0 |
+| `bob service status [--json]` | Whether the service is registered, starts at boot and is running, the version it runs, and the directories it runs with (REQ-005) | 0 |
 | `bob upgrade [<version>] [--yes]` | Upgrades to the latest release, or to `<version>` (REQ-006 to REQ-008). Asks before stopping the service unless `--yes` | 0 upgraded, or upgraded with a fresh database by the team member's choice, or already on that version; 1 failed and switched back, refused, or declined |
 | `bob rollback [--yes]` | Returns to the previous version and its pre-upgrade copy after saying what will be lost and asking (REQ-009) | 0; 1 refused, declined or failed |
 | `bob uninstall [--yes] [--remove-data]` | Removes the service and the program, and asks whether to keep the data, keeping it by default (REQ-010) | 0; 1 on failure |
 
+**Contract:** `bob service status --json` prints one JSON object:
+
+| Field | Value |
+|---|---|
+| `registered` | `true` or `false` |
+| `startsAtBoot` | `true` or `false`; `false` when not registered |
+| `running` | `true` when the registered service's daemon answers `daemon.status`, else `false` |
+| `version` | the version the running daemon reports, or `null` when it isn't running |
+| `configDir`, `stateDir`, `dataDir`, `runtimeDir` | the instance directories the registration holds, or `null` when not registered |
+| `piAgentDir` | the pi agent folder the registration holds, or `null` when not registered |
+
 ### Files
 
 - **Program folder.** Under the installing person's home, outside the instance directories, holding the current version
-  and at most one previous version. Its path contains no `node_modules` segment. `bob` is linked into a folder under
-  the home that is usually on the `PATH`. The exact paths are decided in Feature Architecture (Open Questions).
+  and at most one previous version. `bob` is linked into a folder under the home that is usually on the `PATH`. The
+  exact paths are decided in Feature Architecture (Open Questions).
 - **Upgrades folder.** `upgrades` in the instance's state directory, owner-only like the state directory (S-002
   REQ-006). It holds the latest pre-upgrade copy, named after its date, the version it was taken from and the version it
-  was taken for, and every set-aside database, named after its date and the version that couldn't use it.
-- **Instance directories.** Unchanged (S-002 REQ-006). Installation reads and writes the default ones only.
+  was taken for, any copy kept by REQ-008's "no", and every set-aside database, named after its date, the version
+  that used it last and why it was set aside.
+- **Instance directories.** Unchanged (S-002 REQ-006). Installation uses the ones the registration holds (REQ-004).
 
 ### Consumed
 
@@ -184,7 +209,8 @@ errors exit 2, notices and questions on standard error. They don't call the daem
   shutdown bound and the version report.
 - S-004 REQ-001, REQ-016 and REQ-017: migration forward, the export format and the import step, which refuses when a
   database is present.
-- S-005 REQ-001 and REQ-003: command shape, output and exit codes.
+- S-002 REQ-001: single ownership of the instance, held while the database is copied, switched or restored.
+- S-005 REQ-001: command shape and help.
 - GitHub Releases on the public repository; systemd on Linux and launchd on macOS.
 
 ## Workflow
@@ -208,15 +234,16 @@ bob upgrade [version]                                                           
   → no service / another daemon owns the instance / another upgrade runs → refuse
   → same version → "already on X.Y.Z", exit 0; older → refuse, point to bob rollback
   → download and check → confirm → stop service → take pre-upgrade copy → switch → start → ready → done
-  → not ready, any other cause → switch back, start previous → exit 1                            REQ-007
+    → not ready, any other cause → switch back, restore config and internal folder
+        (and the database from the copy if the new version opened it), start previous → exit 1   REQ-007
   → not ready, unreadable database → ask "Switch back to X.Y.Z?" (no terminal: yes)                         REQ-008
         yes → as above
         no  → set the database aside, start new version on a new database → exit 0
 
 bob rollback                                                                                             REQ-009
   → no previous version or copy / no terminal and no --yes → refuse
-  → state what is lost → confirm → stop → set the database aside → previous version
-  → import the copy → start
+    → state what is lost or may repeat → confirm → stop → set the database aside → previous version
+  → import the copy, restore config and internal folder (not the secrets) → start
 
 bob uninstall                                                                                            REQ-010
   → stop and remove the service → remove the program
@@ -257,10 +284,10 @@ demonstration of one mismatched tag in CI.
 
 ### REQ-002 — The bundle
 
-A bundle SHALL hold a Node 24 runtime for its platform, The Intern's code and its production dependencies at the
-versions the lockfile pins, and SHALL run `bob` with nothing installed on the machine beforehand except the C library
-and the tools the install script needs (Assumptions). The version `bob` reports (S-002 REQ-020, `bob status`) SHALL be
-the release's version.
+A bundle SHALL hold everything The Intern needs to run on its platform, its runtime included, with its dependencies at
+the versions the release was tested with, and SHALL run `bob` with nothing installed on the machine beforehand except
+the system's own libraries and the tools the install script needs (Assumptions). The version `bob` reports (S-002
+REQ-020, `bob status`) SHALL be the release's version.
 
 #### AC-002.1 — It runs on a clean machine
 
@@ -315,10 +342,15 @@ cycle test for the already-installed and missing-version cases.
 directories as the service account, never as root, when the machine starts and without anyone logging in, and restarts
 it after a non-zero exit (S-002 REQ-004), using systemd on Linux and launchd on macOS. It SHALL ask for admin rights
 only for the steps the machine requires them for, and stop with nothing registered when they are refused or the machine
-doesn't allow a user's service to run at boot. It SHALL start the service and wait until the daemon reports ready. When
-it isn't ready within the bound of REQ-015, it SHALL exit 1 naming the reason the daemon logged and the command that
-shows the service's log. Run again, it SHALL point the registration at the current version and leave everything else as
-it was.
+doesn't allow the service account's own service to run at boot. It SHALL start the service and wait until the daemon
+reports ready. When it isn't ready within the bound of REQ-015, it SHALL exit 1 naming the reason the daemon logged and
+the command that shows the service's log. Run again, it SHALL point the registration at the current version and leave
+everything else as it was.
+
+The registration SHALL fix the instance directories and the pi agent folder that `bob service install` resolves from
+its environment (S-002 REQ-006; S-002 Configuration Requirements, `PI_CODING_AGENT_DIR`), so the service runs with them
+whatever the supervisor's environment holds. `bob service status` SHALL show them, and `bob upgrade`, `bob rollback`
+and `bob uninstall` SHALL act on them.
 
 #### AC-004.1 — Registered, started and ready
 
@@ -341,8 +373,8 @@ half of S-002 live acceptance test 3; the same on a real Mac (Success Criteria 5
 
 #### AC-004.3 — Not ready, or not allowed
 
-- **Given:** no pi login; the web port already in use; admin rights refused; a machine that doesn't let a user's
-  service run at boot
+- **Given:** no pi login; the web port already in use; admin rights refused; a machine that doesn't let the service
+  account's own service run at boot
 - **When:** `bob service install` runs
 - **Then:** for the first two it exits 1 naming the daemon's reason and the log command; for the last two it exits 1
   naming the reason, with no registration left
@@ -350,10 +382,22 @@ half of S-002 live acceptance test 3; the same on a real Mac (Success Criteria 5
 **Verification:** test — the installation cycle test for the first two; unit tests of the refusal paths for the last
 two, on both platforms' registration.
 
+#### AC-004.4 — The registration fixes the instance and the pi login
+
+- **Given:** `bob service install` run in a shell where `XDG_STATE_HOME` and `PI_CODING_AGENT_DIR` name non-default
+  folders
+- **When:** the service starts at the next boot, and `bob service status --json` and `bob upgrade --yes` run later in a
+  shell where neither variable is set
+- **Then:** the daemon runs with those folders, the status shows them, and the upgrade's copy is taken from that state
+  directory
+
+**Verification:** test — the installation cycle test.
+
 ### REQ-005 — Checking and removing the service
 
 `bob service status` SHALL report whether the service is registered, whether it starts at boot, whether it is running,
-and the version it runs, and SHALL exit 0 in every state. `bob service remove` SHALL stop the service and remove its
+the version it runs and the directories it runs with, with `--json` as the contract in Interfaces states, and SHALL
+exit 0 in every state. `bob service remove` SHALL stop the service and remove its
 registration, leaving the program folder and the instance directories as they were.
 
 #### AC-005.1 — Status in each state
@@ -379,19 +423,22 @@ registration, leaving the program folder and the instance directories as they we
 confirmation before stopping the service unless `--yes` is given. It SHALL then stop the service (S-002 REQ-005), take
 the pre-upgrade copy, install the new version as current while keeping the version it replaces as the previous one,
 start the service and wait until the daemon reports ready. The pre-upgrade copy SHALL hold the database with everything
-committed before the service stopped, in the format `bob import` reads (S-004 REQ-016), and the configuration file, the
-internal folder (S-008 REQ-002) and the secrets store (S-009 REQ-002) as they were at that moment. It SHALL replace the
-older pre-upgrade copy only after the upgrade succeeds. It SHALL print each step as it runs. It SHALL refuse, changing
-nothing, when the service isn't registered, when a daemon the service didn't start owns the instance, when another
-upgrade or rollback is running, and when `<version>` is older than the current version, pointing to `bob rollback`. When
-the current version is the one asked for, it SHALL say so and exit 0.
+committed before the service stopped, in the format `bob import` reads (S-004 REQ-016), and the configuration file and
+the internal folder with its record of shipped files (S-008 REQ-002, REQ-003) as they were at that moment. It SHALL NOT
+hold the secrets store (S-002 REQ-018). From stopping the service until it starts a version again, `bob upgrade` SHALL
+hold single ownership of the instance (S-002 REQ-001), as the import step does, so no daemon opens the database while it
+is copied, switched, set aside or restored; REQ-007 to REQ-009 hold it the same way. It SHALL replace the older
+pre-upgrade copy only after the upgrade succeeds, and never a copy kept by REQ-008's "no" (REQ-012). It SHALL print each
+step as it runs. It SHALL refuse, changing nothing, when the service isn't registered, when a daemon the service didn't
+start owns the instance, when another upgrade or rollback is running, and when `<version>` is older than the current
+version, pointing to `bob rollback`. When the current version is the one asked for, it SHALL say so and exit 0.
 
 #### AC-006.1 — An upgrade with work running
 
 - **Given:** version 0.1.0 running as the service with a job's run in the middle of a tool call
 - **When:** `bob upgrade 0.2.0 --yes` runs
-- **Then:** the upgrades folder holds a copy from 0.1.0 for 0.2.0 with the database, the configuration file, the
-  internal folder and the secrets store, the daemon reports 0.2.0 and ready, the job's run
+- **Then:** the upgrades folder holds a copy from 0.1.0 for 0.2.0 with the database, the configuration file and the
+  internal folder, and no secret; the daemon reports 0.2.0 and ready, the job's run
   resumes with an interrupted result (S-002 REQ-005), 0.1.0 is the previous version, and the command exits 0
 
 **Verification:** test — the installation cycle test with two locally built versions on the fake model.
@@ -414,14 +461,24 @@ the current version is the one asked for, it SHALL say so and exit 0.
 
 **Verification:** test — unit test of the confirmation.
 
+#### AC-006.4 — No daemon starts during the copy
+
+- **Given:** an upgrade stopped by a test hook after it took single ownership and before it starts a version
+- **When:** `bob serve` is started for the instance
+- **Then:** it is refused at startup step 3, and the upgrade then completes
+
+**Verification:** test — the installation cycle test.
+
 ### REQ-007 — A failed upgrade switches back
 
 When the new version doesn't report ready within the bound of REQ-015 for any reason other than an unreadable database,
-`bob upgrade` SHALL name the reason the daemon logged, make the previous version current again, put back the
-configuration file, the internal folder and the secrets store from the pre-upgrade copy, because the new version's
-startup may have changed them before it failed (S-002 REQ-002 steps 1 and 3), start the previous version on the
-database as it was before the upgrade, wait until it reports ready, remove the version that failed, and exit 1. It
-SHALL not ask.
+`bob upgrade` SHALL name the reason the daemon logged, make the previous version current again, and put back the
+configuration file and the internal folder from the pre-upgrade copy, because the new version's startup may have
+changed them before it failed (S-002 REQ-002 steps 1 and 3). When the new version's startup got as far as opening the
+database (step 4), `bob upgrade` SHALL also set that database aside and restore the database from the copy with the
+previous version's import step (S-004 REQ-017), because the new version may have migrated it or resumed work in it. It
+SHALL then start the previous version, wait until it reports ready, remove the version that failed, and exit 1. It
+SHALL NOT ask, and SHALL leave the secrets store as it is.
 
 #### AC-007.1 — The new version crashes at startup
 
@@ -429,10 +486,20 @@ SHALL not ask.
   database
 - **When:** `bob upgrade 0.2.0 --yes` runs
 - **Then:** it reports the failure and its reason, 0.1.0 is current and ready with every job as before, the
-  configuration file, the internal folder and the secrets store are byte-identical to the copy, 0.2.0 is no longer
-  installed, and the exit status is 1
+    configuration file and the internal folder are byte-identical to the copy, the database is the one 0.1.0 left, 0.2.0
+  is no longer installed, and the exit status is 1
 
 **Verification:** test — the installation cycle test with a deliberately failing build.
+
+#### AC-007.2 — The new version fails after opening the database
+
+- **Given:** 0.1.0 running with jobs, and a locally built 0.2.0 that migrates the database and then fails at startup
+  step 8 because the web port is taken
+- **When:** `bob upgrade 0.2.0 --yes` runs
+- **Then:** the database 0.2.0 opened is set aside in the upgrades folder, 0.1.0 is current and ready with every job of
+  the copy, and the exit status is 1
+
+**Verification:** test — the installation cycle test.
 
 ### REQ-008 — An unreadable database asks first
 
@@ -466,21 +533,26 @@ With no terminal to ask on, it SHALL take the default and switch back.
 ### REQ-009 — Rollback
 
 `bob rollback` SHALL name the previous version, the time of the upgrade its pre-upgrade copy was taken for, and say that
-everything done since then will be lost: jobs and conversations, and changes to the configuration, roles, instructions,
-skills and accounts. It SHALL ask for confirmation unless `--yes` is given. On confirmation it SHALL stop the service,
-set the current database aside in the upgrades folder, make the previous version current, restore the database from the
-pre-upgrade copy with the previous version's import step (S-004 REQ-017), put back the configuration file, the internal
-folder and the secrets store from the copy, start the service and wait until it reports ready. The version it leaves
-SHALL be removed, so no previous version remains. It SHALL refuse, changing nothing, when there is no previous version
-or no pre-upgrade copy for it, and when standard input isn't a terminal and `--yes` isn't given.
+everything done since then will be lost: jobs and conversations, and changes to the configuration, roles, instructions
+and skills, including mail accounts added since, which won't be set up any more. It SHALL also say that work in progress
+at the time of the upgrade may run again, that mail received since may be taken in again, and that mail sent since may
+be sent again (S-009 REQ-021, REQ-022, as clarified on this branch). It SHALL ask for confirmation unless `--yes` is
+given. On confirmation it SHALL stop the service, set the current database aside in the upgrades folder, make the
+previous version current, restore the database from the pre-upgrade copy with the previous version's import step (S-004
+REQ-017), put back the configuration file and the internal folder from the copy, start the service and wait until it
+reports ready. It SHALL leave the secrets store as it is; the secrets of accounts the restored configuration no longer
+holds go at the next start (S-002 REQ-002 step 8). The version it leaves SHALL be removed, so no previous version
+remains. It SHALL refuse, changing nothing, when there is no previous version or no pre-upgrade copy for it, and when
+standard input isn't a terminal and `--yes` isn't given.
 
 #### AC-009.1 — Back to the previous version
 
 - **Given:** an upgrade from 0.1.0 to 0.2.0, then one new job on 0.2.0
 - **When:** `bob rollback` runs and the team member confirms
-- **Then:** the warning named 0.1.0 and the upgrade's time; 0.1.0 is current and ready with every job of the copy and
-  without the new job; the configuration file, internal folder and secrets store match the copy; the 0.2.0 database is
-  set aside; no previous version remains; the exit status is 0
+- **Then:** the warning named 0.1.0, the upgrade's time, what is lost and the work and mail that may repeat; 0.1.0 is
+  current and ready with every job of the copy and without the new job; the configuration file and internal folder
+  match the copy, and the secrets store is unchanged; the 0.2.0 database is set aside; no previous version remains;
+  the exit status is 0
 
 **Verification:** test — the installation cycle test.
 
@@ -536,13 +608,12 @@ naming the running command, while another of them runs for the same installation
 ### REQ-012 — No data lost without asking, and safe to cut off
 
 No installation command SHALL delete a database, a pre-upgrade copy that is still needed, or a set-aside database,
-except `bob uninstall` when the team member chose to remove the data. Pre-upgrade copies and set-aside databases SHALL
-be owner-only (S-002 REQ-006). The copy of the secrets store SHALL keep the secrets store's protection (S-009 REQ-020)
-and be the only copy of it outside the instance's secrets store; a pre-upgrade copy that is replaced or removed takes
-its secrets with it. When `bob upgrade` or `bob rollback` is cut off at any step (interrupt, kill, power
-loss), afterwards exactly one complete version SHALL be current, `bob service status` SHALL report it, the database
-SHALL be either untouched or covered by a pre-upgrade copy, and a new `bob upgrade` or `bob rollback` SHALL be able to
-complete.
+except `bob uninstall` when the team member chose to remove the data. A pre-upgrade copy is still needed while it is the
+latest one; a copy taken for an upgrade that ended with REQ-008's "no" is kept, like a set-aside database, until the
+team member deletes it. Pre-upgrade copies and set-aside databases SHALL be owner-only (S-002 REQ-006). When `bob
+upgrade` or `bob rollback` is cut off at any step (interrupt, kill, power loss), afterwards exactly one complete version
+SHALL be current, `bob service status` SHALL report it, the database SHALL be either untouched or covered by a
+pre-upgrade copy, and a new `bob upgrade` or `bob rollback` SHALL be able to complete.
 
 #### AC-012.1 — Cut off at each step
 
@@ -616,10 +687,11 @@ evidence.
 ### REQ-016 — Documentation
 
 The user manual SHALL have an "Installing and upgrading" page that covers the install script, `bob service install`, the
-pi login prerequisite, `bob service status` and `remove`, `bob upgrade` and its two failure paths, `bob rollback`, `bob
-uninstall`, the upgrades folder, and that macOS hasn't yet been verified on a real Mac. `docs/manual/commands.md` SHALL
-lose its "Until installation puts `bob` on your `PATH`" note and list the new commands. The developer docs SHALL say how
-to cut a release and how to run the installation cycle test against local bundles.
+pi login prerequisite, `bob service status` and `remove`, `bob upgrade` and its two failure paths, `bob rollback` with
+what it loses and may repeat and that it leaves the secrets store as it is, `bob uninstall`, the upgrades folder, which
+instance directories and pi login the service uses, and that macOS hasn't yet been verified on a real Mac.
+`docs/manual/commands.md` SHALL lose its "Until installation puts `bob` on your `PATH`" note and list the new commands.
+The developer docs SHALL say how to cut a release and how to run the installation cycle test against local bundles.
 
 #### AC-016.1 — The manual and the developer docs
 
@@ -663,35 +735,53 @@ No setting is added to `config.toml`.
 
 ## Assumptions and Dependencies
 
-- **The bundle form.** A per-platform archive carrying Node 24 runs the same TypeScript sources the tests run, by type
-  stripping, provided its path has no `node_modules` segment. Confirmed in `docs/development/release_form.md` (sections
-  2 and 5, measured on Linux x64), and accepted by the product owner in this spec's brainstorm. The darwin-arm64 bundle
-  can be assembled on the Linux runner from the official macOS Node build (`release_form.md` section 7).
-- **Start at boot without admin rights for upgrades.** A user's systemd service can start at boot without a login once
-  lingering is on, and its owner can stop and start it without root. Confirmed by systemd's documentation in
-  `release_form.md` section 3. Whether turning lingering on asks for admin rights depends on the machine; REQ-004 asks
-  when it must. On macOS, starting at boot without a login needs a system-wide launchd service that runs as the service
-  account, which needs admin rights to register (`release_form.md` section 3). Whether `bob upgrade` and `bob rollback`
-  can stop and start it without admin rights, and whether a Mac with FileVault starts it before the disk is unlocked,
-  are unverified until a Mac is available (Open Questions).
-- **The machine.** Linux x64 with glibc and systemd, or macOS on Apple silicon; `curl`, `tar` and `sha256sum`, network
-  access to GitHub, and an installing person who can get admin rights once. Not confirmed per distribution; the install
-  script and REQ-004 refuse with a reason when one is missing.
+- **The bundle form.** A per-platform archive that carries its own runtime was compared with the other forms in
+  `docs/development/release_form.md` and accepted by the product owner in this spec's brainstorm. How it is built is
+  recorded in the architecture documents in Feature Architecture.
+- **Start at boot without admin rights for upgrades.** On Linux, a systemd service of the service account's own can
+  start at boot without a login once lingering is on, and its owner can stop and start it without root. Confirmed by
+  systemd's documentation in `release_form.md` section 3. Whether turning lingering on asks for admin rights depends on
+  the machine; REQ-004 asks when it must. On macOS, starting at boot without a login needs a system-wide launchd service
+  that runs as the service account, which needs admin rights to register (`release_form.md` section 3). Its daemon runs
+  as the service account, so `bob upgrade` and `bob rollback` can stop it without admin rights, and the registration can
+  let it start again without them (architecture consistency review of 2026-11-22; designed in Feature Architecture).
+  That design, and whether a Mac with FileVault starts the service before the disk is unlocked, are unverified until a
+  Mac is available (Open Questions).
+- **The machine.** Linux x64 with glibc and systemd, or macOS on Apple silicon; `curl`, `tar` and a SHA-256 tool
+  (`sha256sum` on Linux, `shasum` on macOS), network access to GitHub, and an installing person who can get admin rights
+  once. Not confirmed per distribution; the install script and REQ-004 refuse with a reason when one is missing.
 - **The pi login** stays in the service account's home and is used in place (S-002 REQ-018).
 - **Upgrade relies on existing guarantees.** Running work survives a stop (S-002 REQ-005, REQ-008); a version refuses a
   database it can't read before changing it (S-002 REQ-002 step 4; S-004 REQ-001, REQ-017); the import step refuses an
   existing database (S-004 REQ-017), which is why rollback sets the current database aside first.
-- **The configuration file, the secrets store and the internal folder across versions.** A new version may convert the
-  configuration file and upgrade the internal folder at startup before it opens the database (S-002 REQ-002 steps 1
-  and 3; S-008 REQ-003, REQ-011). The pre-upgrade copy therefore holds all three with the database, so a switch-back
-  and a rollback restore exactly what the previous version ran on. Product owner decision in this spec's review,
-  2026-11-22: the secrets store is copied too, so accounts added after an upgrade go on rollback.
+- **The configuration file and the internal folder across versions.** A new version may convert the configuration
+  file and upgrade the internal folder at startup before it opens the database (S-002 REQ-002 steps 1 and 3; S-008
+  REQ-003, REQ-011). The pre-upgrade copy therefore holds both with the database, so a switch-back and a rollback
+  restore what the previous version ran on.
+- **The secrets store is never copied.** Product owner decision of 2026-11-22, after the architecture consistency
+  review: secrets stay only in the secrets store (S-002 REQ-018; S-009 REQ-002, REQ-020; ADR-010). After a rollback,
+  an account added since the upgrade is gone from the configuration and its secrets go at the next start (S-002
+  REQ-002 step 8); an account whose secrets changed since keeps the new ones.
+- **A rollback repeats outside effects.** Restoring an older database makes the previous version resume the work that
+  was in progress at the upgrade again (as S-004 REQ-017 says of an import), take in mail that arrived since again, and
+  send mail it still owed that the newer version already sent. Product owner decision of 2026-11-22: rollback warns
+  about it (REQ-009), and S-009 REQ-021 and REQ-022 are clarified to hold within one database's history.
 - **Dependencies:** GitHub Releases and Actions on the public repository; the self-hosted CI runner (S-000, Continuous
   integration); the official Node 24 builds for linux-x64 and darwin-arm64.
-- **Cross-spec amendments carried by this branch:** S-000 and S-002 need none: S-000 keeps both platforms, and S-002
-  REQ-004 and Success Criteria 4 already expect systemd and launchd registration measured by hand on each platform.
-  - **S-005 v0.9:** Exclusions and Interfaces: S-010 puts `bob` on the `PATH` and adds the `service`, `upgrade`,
-    `rollback` and `uninstall` groups.
+- **Cross-spec amendments carried by this branch**, for approval at Gate 1 with this spec. S-000's platform list and
+  S-002 REQ-004 and Success Criteria 4 need no change: they already expect both platforms, with each measured by hand.
+  - **S-000 v0.10:** Command line, Boundary, gains a third exception, the installation commands, which manage the
+    program and the service and call no operation apart from reading the version; Command line, Responsibility, names
+    them; Installation and service setup and Command line name each other in Works with, and Installation also names
+    Jobs and Skills and instructions, whose saved state its copy holds; Installation's Decisions needed are answered
+    here and removed.
+  - **S-002 v0.18:** Exclusions, Installation: release form and supervisor registration belong to S-010.
+  - **S-005 v0.9:** S-010 adds the `service` group and the top-level `upgrade`, `rollback` and `uninstall`, and its
+    install script puts `bob` on the `PATH`. They are installation commands: not data commands, outside REQ-016's "no
+    state of its own", with their output and exit codes owned by S-010 (Definitions, REQ-001, REQ-003, REQ-016,
+    Exclusions, Interfaces, Assumptions).
+  - **S-009 v0.5:** REQ-021 and REQ-022: "exactly once" and "at most once" hold within one database's history, not
+    across a rollback or an import of an older copy, which can take in or send mail again.
 
 ## Success Criteria
 
@@ -720,12 +810,10 @@ No setting is added to `config.toml`.
 ## Open Questions
 
 - **Program folder and link paths.** Owner: Architect. Resolution: decided in Feature Architecture, within REQ-003's
-  constraints (under the home, apart from the instance directories, no `node_modules` segment), and recorded in the
-  manual.
+  constraints (under the home, apart from the instance directories), and recorded in the manual.
 - **How the service is registered** on Linux (for example a user unit with lingering, as `release_form.md` recommends)
   and on macOS (for example a launchd daemon running as the service account), within REQ-004 and REQ-014. Owner:
-  Architect. Resolution: decided in Feature Architecture. If no design lets `bob upgrade` and `bob rollback` stop and
-  start the macOS service without admin rights, the Architect escalates REQ-014 to the product owner before Gate 2.
+  Architect. Resolution: decided in Feature Architecture; the consistency review found REQ-014 can be met on both.
 - **macOS behaviour on a real Mac**: start at boot without a login, FileVault, the restart after a failure. Owner:
   product owner, who provides the Mac. Resolution: Success Criteria 5, run once a Mac is available; it can't change the
   specified behaviour, only confirm it or raise a bug.

@@ -1,7 +1,7 @@
 ---
 id: S-009
 title: Email
-version: '0.4'
+version: '0.5'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-17'
 author: planner
@@ -925,7 +925,9 @@ The service account can read that store, as it can read every credential it acts
 Every email that arrives in an owned inbox after the account's starting point SHALL be taken in exactly once, whatever
 crashes, restarts, server outages or sign-in pauses happen in between. The email stays on the server, so intake that
 was interrupted resumes at the next connection. If the server can no longer tell old mail from new, the daemon SHALL
-take in none of the mail present at that moment, and the account's last error SHALL say so. The record this needs
+take in none of the mail present at that moment, and the account's last error SHALL say so. The guarantee holds within
+one database's history: a rollback (S-010 REQ-009) or an import of an older copy (S-004 REQ-017) can take in again mail
+that arrived after the copy was taken. The record this needs
 amends ADR-001 decision 4 and S-004 REQ-018 (Assumptions and Dependencies).
 
 #### AC-021.1 — Kill and restart
@@ -942,7 +944,9 @@ amends ADR-001 decision 4 and S-004 REQ-018 (Assumptions and Dependencies).
 Each email The Intern sends SHALL go out at most once. A blocked question or result reply SHALL be recorded as owed in
 the same step as the job change that causes it, so a crash between the two leaves neither. After a restart, an owed
 email whose sending never began SHALL be sent. When a crash leaves it unknown whether an email that began sending went
-out, the daemon SHALL NOT send it again, and SHALL record in the job's history that it may not have gone out.
+out, the daemon SHALL NOT send it again, and SHALL record in the job's history that it may not have gone out. The
+guarantee holds within one database's history: a rollback (S-010 REQ-009) or an import of an older copy (S-004
+REQ-017) can send again an email the copy still records as owed.
 
 When the mail server permanently refuses an email The Intern sends, such as an address that doesn't exist, the daemon
 SHALL NOT try it again, SHALL record "refused by the server" with the server's message in the job's history, and SHALL
@@ -1138,3 +1142,4 @@ and the request id of an email follow-up in ADR-004 decisions 3 and 5.
 | 2026-11-21 | spec-truth reconciliation — PASS | v0.4 confirmed after B-053: two live runs of `npm run test:live:mail` on openai-codex/gpt-6-sol exited 0, closing the B-053 gap on AC-016.2 and Success Criterion 7 (AC-008.2 shown again); triage now hands requests to `bob` or the role the team's rules name and sends interim mail itself before the handoff, within REQ-008, REQ-016, REQ-019 and AC-011.1 | none |
 | 2026-11-22 | spec-truth reconciliation — PASS | Corrects the row above: openai-codex/gpt-6-sol is the top tier, not a low-cost model (light = luna, workhorse = terra, top = sol; the base name decides, not the version). The low-cost evidence for AC-008.2, AC-016.2 and Success Criterion 7 is one live run of `npm run test:live:mail` on openai-codex/gpt-6-luna at 49944bc1, which exited 0 with "PASS triage decisions, one reply, and mail without internals". The sol runs remain supporting evidence | Product owner correction, 2026-11-22 | none |
 | 2026-11-22 | Gate 5 sign-off | S-009 v0.4 signed off by the product owner: T-396 to T-463 completed, B-049 to B-054 resolved, the spec-truth reconciliation passed, and the live check passed on the low-cost model (gpt-6-luna) | Product owner decision, 2026-11-22 | none |
+| 2026-11-22 | v0.5. REQ-021 and REQ-022: "exactly once" and "at most once" hold within one database's history; a rollback (S-010 REQ-009) or an import of an older copy (S-004 REQ-017) can take in or send mail again. No behaviour changes and no identifier added or retired. | S-010 architecture consistency review, finding M4; product owner decision of 2026-11-22: rollback warns about repeated mail, and S-009's guarantees are clarified. | None |
