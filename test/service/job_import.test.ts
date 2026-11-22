@@ -11,6 +11,7 @@ import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { OwnershipRefusedError } from "../../src/daemon/ownership.ts";
+import { STARTUP_REPORT_FILE } from "../../src/daemon/startup_report.ts";
 import { ImportRefusedError, importDatabase } from "../../src/host/database_import.ts";
 import { JOB_SCHEMA_VERSION } from "../../src/jobs/job_store.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
@@ -390,7 +391,7 @@ describe("the import step", () => {
 
         assert.equal(meanwhile, 1);
         assert.ok(lines.some((line) => /step=3/.test(line) && line.includes(`pid ${process.pid}`)));
-        assert.deepEqual((await readdir(target.stateDir)).sort(), ["secrets", DATABASE_NAME]);
+        assert.deepEqual((await readdir(target.stateDir)).sort(), ["secrets", STARTUP_REPORT_FILE, DATABASE_NAME]);
     });
 
     it("releases the lock after a refusal", async () => {

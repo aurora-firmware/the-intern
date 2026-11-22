@@ -17,6 +17,7 @@ import {
     type ServiceContext,
 } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
+import { STARTUP_REPORT_FILE } from "../../src/daemon/startup_report.ts";
 import { openHarnessHost, openHostDatabase, type Storage } from "../../src/host/harness_host.ts";
 import { recordOpenedVersions, runningVersions } from "../../src/host/versions.ts";
 import { JOB_SCHEMA_VERSION } from "../../src/jobs/job_store.ts";
@@ -393,7 +394,12 @@ describe("runDaemon startup failures", () => {
         assert.match(failure[0], /step=1/);
         assert.match(failure[0], /load configuration/);
         assert.match(failure[0], /no configuration section owns this key/);
-        assert.deepEqual(await readdir(fixture.env.stateDir), []);
+        const entries = await readdir(fixture.env.stateDir);
+        assert.equal(entries.includes("the-intern.sqlite"), false);
+        assert.deepEqual(
+            entries.filter((entry) => entry !== STARTUP_REPORT_FILE),
+            [],
+        );
     });
 
     it("names step 2 and creates no database file when a directory is unsafe", async () => {
