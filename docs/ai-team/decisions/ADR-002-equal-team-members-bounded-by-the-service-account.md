@@ -42,6 +42,8 @@ Intern runs as bounds what it can do, not logins or per-action rules.
    existing file a team member edits through the service (S-008 REQ-010): the file is the team's, not one The Intern
    creates, so the save keeps its mode bits, and its group where the service account may set it, at the target of
    any symbolic link. Only its owner becomes the service account, because an atomic write puts a new file in place.
+   The supervisor registration is outside this rule too where the operating system dictates its ownership: on macOS
+   the system-wide launchd file must be owned by root and writable by root only (S-010 REQ-004). It holds no secret.
 
 ## Consequences
 
