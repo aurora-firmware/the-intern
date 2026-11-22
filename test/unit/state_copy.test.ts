@@ -5,7 +5,6 @@ import { afterEach, describe, it } from "node:test";
 import { type InstanceDirs, resolveInstanceDirs } from "../../src/daemon/state_layout.ts";
 import { importDatabase } from "../../src/host/database_import.ts";
 import { openHostDatabase } from "../../src/host/harness_host.ts";
-import { createJobStore, migrateJobStore } from "../../src/jobs/job_store.ts";
 import {
     type CopyInfo,
     copyFor,
@@ -17,6 +16,7 @@ import {
     takeCopy,
     upgradesDir,
 } from "../../src/install/state_copy.ts";
+import { createJobStore, migrateJobStore } from "../../src/jobs/job_store.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 
 const OWNER_ONLY_FILE = 0o600;
@@ -43,7 +43,7 @@ async function newInstance(options: { config?: boolean } = {}): Promise<Instance
     await migrateJobStore(db);
     const store = createJobStore(db);
     const jobNumbers: string[] = [];
-    for (const letter of ["A", "B"] as const) {
+    for (const letter of ["A", "C"] as const) {
         const { job } = await store.insertJob({
             letter,
             requestText: `request ${letter}`,
@@ -105,10 +105,15 @@ describe("takeCopy", () => {
         const target = await createHermeticEnv();
         envs.push(target);
 
-        await importDatabase({ stateDir: target.stateDir, file: join(upgradesDir(dirs.stateDir), name, "database.sqlite") });
+        await importDatabase({
+            stateDir: target.stateDir,
+            file: join(upgradesDir(dirs.stateDir), name, "database.sqlite"),
+        });
 
         const imported = await openHostDatabase(join(target.stateDir, "the-intern.sqlite"), { readOnly: true });
-        const rows = await imported.all<{ letter: string; n: number }>("SELECT letter, n FROM intern_jobs ORDER BY letter");
+        const rows = await imported.all<{ letter: string; n: number }>(
+            "SELECT letter, n FROM intern_jobs ORDER BY letter",
+        );
         await imported.close();
         assert.deepEqual(
             rows.map((row) => `${row.letter}-${row.n}`),
@@ -183,7 +188,11 @@ describe("setAside", () => {
 
         assert.equal(name, "2026-11-22T11-00-00-000Z-0.1.0-failed-upgrade");
         const folder = join(upgradesDir(dirs.stateDir), name);
-        assert.deepEqual(await readdir(folder), ["the-intern.sqlite", "the-intern.sqlite-shm", "the-intern.sqlite-wal"]);
+        assert.deepEqual(await readdir(folder), [
+            "the-intern.sqlite",
+            "the-intern.sqlite-shm",
+            "the-intern.sqlite-wal",
+        ]);
         assert.ok((await readFile(join(folder, "the-intern.sqlite"))).equals(before));
         assert.equal(await readFile(join(folder, "the-intern.sqlite-wal"), "utf8"), "wal bytes");
         assert.equal((await readdir(dirs.stateDir)).filter((entry) => entry.startsWith("the-intern.sqlite")).length, 0);
@@ -269,9 +278,9 @@ describe("pruneCopies", () => {
         const kept = await takeCopy(dirs, "0.0.7", "0.0.8", at("2026-11-22T08:00:00.000Z"));
         await markKept(dirs, kept);
         const old = await takeCopy(dirs, "0.0.8", "0.0.9", at("2026-11-22T09:00:00.000Z"));
-        const aside = await setAside(dirs, "0.0.9", "failed-upgrade", at("2026-11-22T09:30:00.000Z"));
         const current = await takeCopy(dirs, "0.0.9", "0.1.0", at("2026-11-22T10:00:00.000Z"));
         const newer = await takeCopy(dirs, "0.1.0", "0.2.0", at("2026-11-22T11:00:00.000Z"));
+        const aside = await setAside(dirs, "0.0.9", "failed-upgrade", at("2026-11-22T09:30:00.000Z"));
 
         await pruneCopies(dirs, current);
 
