@@ -95,6 +95,11 @@ describe("checkLayout", () => {
         );
     });
 
+    it("refuses a program folder that holds an instance directory whose name starts with two dots", () => {
+        const layout = programLayout("/home/x");
+        assert.throws(() => checkLayout(layout, [`${layout.root}/..data`]), ProgramLayoutError);
+    });
+
     it("refuses an instance directory that is the program folder", () => {
         const layout = programLayout("/home/x");
         assert.throws(() => checkLayout(layout, [layout.root]), ProgramLayoutError);
