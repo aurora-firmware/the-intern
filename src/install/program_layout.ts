@@ -56,7 +56,7 @@ export function programLayout(homeDir: string): ProgramLayout {
 
 function isInside(inner: string, outer: string): boolean {
     const path = relative(outer, inner);
-    return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+    return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
 }
 
 /** Refuses a `node_modules` segment, and a program folder that lies inside an instance directory or holds one. */
