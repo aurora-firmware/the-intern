@@ -41,9 +41,9 @@ async function exists(path: string): Promise<boolean> {
     }
 }
 
-async function takeOwnership(stateDir: string) {
+async function takeOwnership(stateDir: string, handoverToken: string | undefined) {
     try {
-        return await acquireOwnership(stateDir);
+        return await acquireOwnership(stateDir, { handoverToken });
     } catch (error) {
         if (error instanceof OwnershipRefusedError) {
             throw new ImportRefusedError(
@@ -147,16 +147,18 @@ async function placeCopy(stateDir: string, databaseFile: string, file: string): 
  * Places `file`, an exported database, as the database of the instance whose state directory is `stateDir`. Refuses,
  * naming the reason and changing nothing, when a daemon runs, when the state directory holds the database file or
  * its `-wal` or `-shm` file, when the file isn't a SQLite database, and when its job or pi-durable schema is newer
- * than this release's. An older job schema is migrated at the next start. The copy is owner-only from its creation.
+ * than this release's. With `ownerLockToken` equal to the live owner lock's token, the lock's holder has handed the
+ * lock over: the import runs under it and leaves it held. An older job schema is migrated at the next start. The copy
+ * is owner-only from its creation.
  */
 export async function importDatabase(
-    input: { stateDir: string; file: string },
+    input: { stateDir: string; file: string; ownerLockToken?: string },
     options: ImportOptions = {},
 ): Promise<void> {
     const { stateDir } = input;
     const file = resolve(input.file);
     const { databaseFile } = resolveInstanceDirs({ flags: { stateDir }, env: {}, homeDir: stateDir });
-    const ownership = await takeOwnership(stateDir);
+    const ownership = await takeOwnership(stateDir, input.ownerLockToken);
     try {
         await refuseLeftovers(databaseFile);
         await options.whileOwned?.();

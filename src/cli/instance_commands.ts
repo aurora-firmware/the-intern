@@ -147,7 +147,11 @@ export const importCommand: CommandSpec = {
                 homeDir: io.homeDir,
             });
             const [file = ""] = input.positionals;
-            await importDatabase({ stateDir, file: resolve(io.cwd, file) });
+            await importDatabase({
+                stateDir,
+                file: resolve(io.cwd, file),
+                ownerLockToken: io.env.BOB_OWNER_LOCK_TOKEN,
+            });
             writeLine(io, `Imported ${resolve(io.cwd, file)} into ${stateDir}`);
             return EXIT_CODES.ok;
         } catch (error) {
