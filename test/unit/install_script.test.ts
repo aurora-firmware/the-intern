@@ -177,3 +177,104 @@ describe("install script refusals in a temporary home", () => {
         });
     }
 });
+
+const hostIsSupported = process.platform === "linux" && process.arch === "x64" && existsSync("/run/systemd/system");
+if (!hostIsSupported) {
+    console.warn(
+        "install_script.test: this host is not Linux x86_64 with systemd, so the failed-install cases are skipped",
+    );
+}
+
+describe("install script failures leave nothing behind", { skip: !hostIsSupported }, () => {
+    const VERSION = "1.0.0";
+    const ASSET = `the-intern-${VERSION}-linux-x64.tar.gz`;
+    let root = "";
+    let home = "";
+    let releases = "";
+
+    beforeEach(() => {
+        root = mkdtempSync(join(tmpdir(), "install-script-fail-"));
+        home = join(root, "home");
+        releases = join(root, "releases");
+        mkdirSync(home);
+        mkdirSync(join(releases, `v${VERSION}`), { recursive: true });
+    });
+
+    afterEach(() => {
+        rmSync(root, { recursive: true, force: true });
+    });
+
+    function publishBundle(): void {
+        const folder = join(root, "bundle", `the-intern-${VERSION}-linux-x64`);
+        mkdirSync(join(folder, "bin"), { recursive: true });
+        writeFileSync(join(folder, "bin", "bob"), "#!/bin/sh\n");
+        const dir = join(releases, `v${VERSION}`);
+        const tar = spawnSync("tar", [
+            "-czf",
+            join(dir, ASSET),
+            "-C",
+            join(root, "bundle"),
+            `the-intern-${VERSION}-linux-x64`,
+        ]);
+        assert.equal(tar.status, 0);
+        const sum = spawnSync("sha256sum", [ASSET], { cwd: dir, encoding: "utf8" });
+        writeFileSync(join(dir, `${ASSET}.sha256`), sum.stdout);
+    }
+
+    function install(): Run {
+        const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, BOB_RELEASE_URL: releases };
+        delete env.BOB_INSTALL_LIB;
+        const result = spawnSync("sh", [SCRIPT, "--version", VERSION], {
+            encoding: "utf8",
+            env,
+            timeout: scaled(20000),
+        });
+        return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+    }
+
+    function listing(): string[] {
+        return readdirSync(home, { recursive: true }).map(String).sort();
+    }
+
+    it("installs a published bundle", () => {
+        publishBundle();
+        const run = install();
+        assert.equal(run.status, 0, run.stderr);
+        assert.ok(existsSync(join(home, ".local", "lib", "the-intern", "current", "bin", "bob")));
+    });
+
+    it("leaves nothing behind when the version does not exist", () => {
+        const run = install();
+        assert.equal(run.status, 1);
+        assert.match(run.stderr, /download/);
+        assert.deepEqual(listing(), []);
+    });
+
+    it("leaves nothing behind when the checksum file is missing", () => {
+        publishBundle();
+        rmSync(join(releases, `v${VERSION}`, `${ASSET}.sha256`));
+        const run = install();
+        assert.equal(run.status, 1);
+        assert.match(run.stderr, /checksum/);
+        assert.deepEqual(listing(), []);
+    });
+
+    it("leaves nothing behind when the checksum does not match", () => {
+        publishBundle();
+        writeFileSync(join(releases, `v${VERSION}`, `${ASSET}.sha256`), `${"0".repeat(64)}  ${ASSET}\n`);
+        const run = install();
+        assert.equal(run.status, 1);
+        assert.match(run.stderr, /does not match/);
+        assert.deepEqual(listing(), []);
+    });
+
+    it("leaves no current link when the bob link cannot be made", () => {
+        publishBundle();
+        mkdirSync(join(home, ".local"));
+        writeFileSync(join(home, ".local", "bin"), "a file where the folder should be");
+        const before = listing();
+        const run = install();
+        assert.equal(run.status, 1);
+        assert.deepEqual(listing(), before);
+    });
+});
