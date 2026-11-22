@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -82,6 +82,7 @@ describe("operation journal", () => {
     });
 
     it("refuses a journal of a newer format, naming the file", async () => {
+        await mkdir(layout.root, { recursive: true });
         await writeFile(layout.journal, JSON.stringify({ ...journal(), format: 2 }), { mode: 0o600 });
         await assert.rejects(readJournal(layout), (error: Error) => {
             assert.ok(error.message.includes(layout.journal), error.message);
