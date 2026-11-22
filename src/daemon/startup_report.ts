@@ -3,13 +3,14 @@
  * and when it fails or reports ready, and which an installation command reads to tell the failures apart. This module
  * imports only Node modules (ADR-005 decision 2).
  */
-import { open, readFile, rename, rm, unlink } from "node:fs/promises";
+import { open, readFile, rename, rm, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
 export const STARTUP_REPORT_FILE = "startup.json";
 
 const SUPPORTED_FORMAT = 1;
 const OWNER_ONLY_FILE_MODE = 0o600;
+const GROUP_AND_OTHER_BITS = 0o077;
 
 export type StartupReport = {
     format: 1;
@@ -76,4 +77,18 @@ export async function readStartupReport(stateDir: string): Promise<StartupReport
 
 export async function removeStartupReport(stateDir: string): Promise<void> {
     await rm(join(stateDir, STARTUP_REPORT_FILE), { force: true });
+}
+
+/**
+ * Whether the report may be written there: the directory exists, belongs to this account and is closed to the group
+ * and others. A missing or unsafe directory is left to the daemon's own directory check to report.
+ */
+export async function isReportableStateDir(stateDir: string): Promise<boolean> {
+    try {
+        const info = await stat(stateDir);
+        return info.isDirectory() && info.uid === process.getuid?.() && (info.mode & GROUP_AND_OTHER_BITS) === 0;
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+        throw error;
+    }
 }

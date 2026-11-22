@@ -24,7 +24,13 @@ import {
 } from "../host/harness_host.ts";
 import { logCompactionFailures } from "../host/host_observation.ts";
 import { recordOpenedVersions, runningVersions } from "../host/versions.ts";
-import { checkJobSchemaVersion, createJobStore, type JobStore, migrateJobStore } from "../jobs/job_store.ts";
+import {
+    checkJobSchemaVersion,
+    createJobStore,
+    JobSchemaTooNewError,
+    type JobStore,
+    migrateJobStore,
+} from "../jobs/job_store.ts";
 import { createModelRuntime, type InternModels, resolvePiAgentDir } from "../models/model_runtime.ts";
 import { conversationControlOperations } from "../service/conversation_control_operations.ts";
 import { conversationReadOperations } from "../service/conversation_read_operations.ts";
@@ -36,6 +42,7 @@ import { createFileChangeHub, type FileChangeHub } from "../skills/file_store.ts
 import { STOP_BOUND_MS, WORKER_THREAD_COUNT } from "./constants.ts";
 import type { Logger } from "./logger.ts";
 import { acquireOwnership } from "./ownership.ts";
+import { isReportableStateDir, readStartupReport, type StartupReport, writeStartupReport } from "./startup_report.ts";
 import {
     ensureInstanceDirs,
     InstanceDirError,
@@ -45,6 +52,10 @@ import {
 } from "./state_layout.ts";
 
 const MAIL_OWNER = "mail";
+const DATABASE_STEP = 4;
+const LAST_STEP = 8;
+// The error pi-durable's SQLite migrations throw when the file's data is newer than the library's (no error class).
+const NEWER_DURABLE_SCHEMA_MESSAGE = /SQLite schema version \d+ is newer than supported version/;
 
 export type ServiceContext = {
     host: HarnessHost;
@@ -152,6 +163,24 @@ function resolveDirs(options: DaemonOptions): { dirs: InstanceDirs; failure?: St
     }
 }
 
+function causeChain(error: unknown): unknown[] {
+    const chain: unknown[] = [];
+    for (let link = error; link !== undefined && chain.length < 10; link = (link as Error | undefined)?.cause) {
+        chain.push(link);
+    }
+    return chain;
+}
+
+/** Whether step 4 refused the database: its job schema or its pi-durable data is newer than this release's. */
+function isUnreadableDatabase(failure: StartupFailure): boolean {
+    if (failure.step !== DATABASE_STEP) return false;
+    return causeChain(failure).some(
+        (link) =>
+            link instanceof JobSchemaTooNewError ||
+            (link instanceof Error && NEWER_DURABLE_SCHEMA_MESSAGE.test(link.message)),
+    );
+}
+
 export function runDaemon(options: DaemonOptions): RunningDaemon {
     const { logger } = options;
     const components = options.components ?? [];
@@ -164,6 +193,10 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
     let phase: DaemonPhase = "starting";
     let admission: Admission | undefined;
     let isHostClosedByStorageFailure = false;
+    const serviceLabel = options.env.BOB_SERVICE_LABEL || null;
+    let furthestStep = 0;
+    let isFurthestStepRead = false;
+    let reportWrites: Promise<void> = Promise.resolve();
 
     const { dirs, failure: pathFailure } = resolveDirs(options);
     const status: StatusSources = {
@@ -189,8 +222,48 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
     );
     context.catalogue = catalogue;
 
+    /** Writes the startup report after the earlier writes; a write that fails is logged and never stops the startup. */
+    function reportStartup(
+        update: Pick<Partial<StartupReport>, "ready" | "unreadableDatabase"> & {
+            failure?: StartupFailure;
+            reachedStep?: number;
+        },
+    ): Promise<void> {
+        reportWrites = reportWrites.then(() => writeReport(update));
+        return reportWrites;
+    }
+
+    async function writeReport(update: Parameters<typeof reportStartup>[0]): Promise<void> {
+        if (pathFailure) return;
+        try {
+            if (!(await isReportableStateDir(dirs.stateDir))) return;
+            if (!isFurthestStepRead) {
+                isFurthestStepRead = true;
+                furthestStep = (await readStartupReport(dirs.stateDir).catch(() => undefined))?.furthestStep ?? 0;
+            }
+            furthestStep = Math.max(furthestStep, update.reachedStep ?? 0);
+            await writeStartupReport(dirs.stateDir, {
+                format: 1,
+                version: versions.intern,
+                pid: process.pid,
+                serviceLabel,
+                furthestStep,
+                failedStep: update.failure?.step ?? null,
+                failedStepName: update.failure?.stepName ?? null,
+                reason: update.failure?.message ?? null,
+                unreadableDatabase: update.unreadableDatabase ?? false,
+                ready: update.ready ?? false,
+            });
+        } catch (error) {
+            logger.error("could not write the startup report", {
+                cause: error instanceof Error ? error.message : String(error),
+            });
+        }
+    }
+
     async function step<T>(number: number, name: string, action: () => Promise<T>): Promise<T> {
         logger.debug("startup step", { step: number, name });
+        await reportStartup({ reachedStep: number });
         try {
             return await action();
         } catch (error) {
@@ -383,6 +456,12 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
                 await undoAll();
                 return;
             }
+            await reportStartup({ reachedStep: LAST_STEP, ready: true });
+            if (shutdownInFlight) {
+                await shutdownInFlight;
+                await undoAll();
+                return;
+            }
             phase = "ready";
             logger.info("ready", {
                 stateDir: dirs.stateDir,
@@ -396,6 +475,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
             phase = "stopping";
             const failure = error instanceof StartupFailure ? error : new StartupFailure(0, "startup", error);
             logger.error("startup failed", { step: failure.step, name: failure.stepName, cause: failure.message });
+            await reportStartup({ failure, unreadableDatabase: isUnreadableDatabase(failure) });
             await undoAll();
             resolveExit(1);
         },
