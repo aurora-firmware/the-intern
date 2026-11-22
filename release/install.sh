@@ -123,9 +123,12 @@ cleanup() {
     if [ -n "$placed" ]; then
         rm -rf "$placed"
     fi
-    for made in $made_folders; do
-        rm -rf "$made"
-    done
+    if [ -n "$made_bin" ]; then
+        rm -rf "$made_bin"
+    fi
+    if [ -n "$made_program" ]; then
+        rm -rf "$made_program"
+    fi
 }
 
 fetch() {
@@ -150,7 +153,7 @@ install_bundle() {
     asset=$4
     url=$5
 
-    made_folders=$(first_missing "$program")
+    made_program=$(first_missing "$program")
     mkdir -p "$program" "$program/versions" || { refuse "cannot create $program"; return 1; }
     staging=$(mktemp -d "$program/.staging-XXXXXX") || { refuse "cannot create a staging folder in $program"; return 1; }
 
@@ -173,7 +176,6 @@ install_bundle() {
     linked_current="$program/current"
     ln -sfn "versions/$version" "$program/current" || { refuse "cannot link $program/current"; return 1; }
     made_bin=$(first_missing "$(dirname "$bin_link")")
-    made_folders="$made_folders $made_bin"
     mkdir -p "$(dirname "$bin_link")" || { refuse "cannot create $(dirname "$bin_link")"; return 1; }
     ln -sfn "$program/current/bin/bob" "$bin_link" || { refuse "cannot link $bin_link"; return 1; }
     done=yes
@@ -218,7 +220,8 @@ main() {
     staging=""
     placed=""
     linked_current=""
-    made_folders=""
+    made_program=""
+    made_bin=""
     done=""
     trap cleanup EXIT
     trap 'exit 1' HUP INT TERM
