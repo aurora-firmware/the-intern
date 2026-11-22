@@ -8,6 +8,9 @@ const INSTALL_LOCK_FILE_NAME = "install.lock";
 const LOCK_FILE_MODE = 0o600;
 const BOOT_TIME_TOLERANCE_MS = 60_000;
 
+// Tokens of the locks this process holds through an unreleased handle: only those make a lock with this pid live.
+const heldTokens = new Set<string>();
+
 type LockContent = { pid: number; bootTime: number; token: string; command?: string };
 
 export type OwnershipHandle = { release(): Promise<void> };
@@ -64,8 +67,9 @@ function isProcessAlive(pid: number): boolean {
 function isLive(lock: LockContent | undefined): lock is LockContent {
     if (lock === undefined) return false;
     if (Math.abs(lock.bootTime - currentBootTime()) > BOOT_TIME_TOLERANCE_MS) return false;
-    // The checker is itself running, so a lock naming its pid was left by a dead holder whose pid was reused.
-    if (lock.pid === process.pid) return false;
+    // The checker is itself running, so a lock naming its pid is live only while this process holds its handle;
+    // otherwise a dead holder left it and its pid was reused.
+    if (lock.pid === process.pid) return heldTokens.has(lock.token);
     return isProcessAlive(lock.pid);
 }
 
@@ -136,8 +140,10 @@ async function clearStaleLock(lockPath: string, staleRaw: string): Promise<numbe
 }
 
 function createHandle(lockPath: string, token: string): OwnershipHandle {
+    heldTokens.add(token);
     return {
         async release() {
+            heldTokens.delete(token);
             const raw = await readRaw(lockPath);
             if (raw === undefined || parseLock(raw)?.token !== token) return;
             await unlink(lockPath);
