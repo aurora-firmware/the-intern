@@ -8,8 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
-import { fetchBundle, latestVersion, type ReleaseSource, releaseSource } from "../../src/install/release_source.ts";
 import { type ProgramLayout, programLayout } from "../../src/install/program_layout.ts";
+import { fetchBundle, latestVersion, type ReleaseSource, releaseSource } from "../../src/install/release_source.ts";
 
 const PLATFORM = "linux-x64";
 
@@ -40,7 +40,8 @@ function publish(releases: string, version: string, bundle: Buffer, checksum: st
     const dir = join(releases, `v${version}`);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, assetName(version)), bundle);
-    if (checksum !== null) writeFileSync(join(dir, `${assetName(version)}.sha256`), `${checksum}  ${assetName(version)}\n`);
+    if (checksum !== null)
+        writeFileSync(join(dir, `${assetName(version)}.sha256`), `${checksum}  ${assetName(version)}\n`);
 }
 
 describe("release source", () => {
@@ -92,7 +93,10 @@ describe("release source", () => {
         });
 
         it("refuses a BOB_RELEASE_URL that is neither a path, a file URL nor an http URL", () => {
-            assert.throws(() => releaseSource({ BOB_RELEASE_URL: "ftp://host/x" }), /BOB_RELEASE_URL.*ftp:\/\/host\/x/s);
+            assert.throws(
+                () => releaseSource({ BOB_RELEASE_URL: "ftp://host/x" }),
+                /BOB_RELEASE_URL.*ftp:\/\/host\/x/s,
+            );
         });
     });
 
@@ -151,7 +155,10 @@ describe("release source", () => {
         it("refuses naming a version that does not exist and changes nothing", async () => {
             const source = releaseSource({ BOB_RELEASE_URL: releases });
 
-            await assert.rejects(fetchBundle(source, layout, "9.9.9", PLATFORM), /9\.9\.9.*(does not exist|not found)/is);
+            await assert.rejects(
+                fetchBundle(source, layout, "9.9.9", PLATFORM),
+                /9\.9\.9.*(does not exist|not found)/is,
+            );
 
             assert.deepEqual(programEntries(), []);
         });
@@ -174,6 +181,19 @@ describe("release source", () => {
             await assert.rejects(fetchBundle(source, layout, "1.4.0", PLATFORM), /unpack/i);
 
             assert.deepEqual(programEntries(), []);
+        });
+
+        it("refuses a version that is already installed and keeps that folder untouched", async () => {
+            const bundle = packBundle(dir, "1.4.0");
+            publish(releases, "1.4.0", bundle, sha(bundle));
+            mkdirSync(layout.versionDir("1.4.0"), { recursive: true });
+            writeFileSync(join(layout.versionDir("1.4.0"), "marker"), "kept");
+            const source = releaseSource({ BOB_RELEASE_URL: releases });
+
+            await assert.rejects(fetchBundle(source, layout, "1.4.0", PLATFORM), /already installed/);
+
+            assert.deepEqual(readdirSync(layout.versionDir("1.4.0")), ["marker"]);
+            assert.deepEqual(programEntries(), ["versions"]);
         });
 
         it("leaves the existing version folders alone when it refuses", async () => {
@@ -249,7 +269,10 @@ describe("release source", () => {
         it("refuses naming a version that does not exist when the server answers 404", async () => {
             const source = releaseSource({ BOB_RELEASE_URL: `${base}/rel` });
 
-            await assert.rejects(fetchBundle(source, layout, "9.9.9", PLATFORM), /9\.9\.9.*(does not exist|not found)/is);
+            await assert.rejects(
+                fetchBundle(source, layout, "9.9.9", PLATFORM),
+                /9\.9\.9.*(does not exist|not found)/is,
+            );
 
             assert.deepEqual(programEntries(), []);
         });
@@ -258,17 +281,24 @@ describe("release source", () => {
             routes.set("/releases/latest", (response) => {
                 response.writeHead(302, { location: `${base}/releases/tag/v3.1.4` }).end();
             });
-            const source: ReleaseSource = { assetUrl: () => "", latestUrl: `${base}/releases/latest`, latestIsRedirect: true };
+            const source: ReleaseSource = {
+                assetUrl: () => "",
+                latestUrl: `${base}/releases/latest`,
+                latestIsRedirect: true,
+            };
 
             assert.equal(await latestVersion(source), "3.1.4");
         });
 
         it("refuses a latest answer that is not a redirect when the source expects one", async () => {
             serve("/releases/latest", "page");
-            const source: ReleaseSource = { assetUrl: () => "", latestUrl: `${base}/releases/latest`, latestIsRedirect: true };
+            const source: ReleaseSource = {
+                assetUrl: () => "",
+                latestUrl: `${base}/releases/latest`,
+                latestIsRedirect: true,
+            };
 
             await assert.rejects(latestVersion(source), /redirect/i);
         });
     });
 });
-
