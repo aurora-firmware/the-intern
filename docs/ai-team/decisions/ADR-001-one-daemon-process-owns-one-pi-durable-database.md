@@ -28,7 +28,8 @@ store. pi-durable sits behind a narrow host, and durability comes from pi-durabl
 exceptions in decision 4.
 
 1. **One process, one database per instance.** The file lives in the state directory, and nothing but the daemon reads
-   or writes it, apart from the import step. A lock file in the state directory records the owner: a second daemon is
+   or writes it, apart from the import step and S-010's upgrade, switch-back and rollback, which copy, set aside and
+   restore it only while no daemon runs and while they hold the owner lock (S-010 REQ-006 to REQ-009). A lock file in the state directory records the owner: a second daemon is
    refused before it opens the file, and a stale lock is taken over (S-002 REQ-001). A second instance, with its own
    state directory, is the only wall between sets of conversations.
    - The job store keeps its tables, prefixed `intern_`, and its own schema version in that file, and never touches
@@ -38,7 +39,8 @@ exceptions in decision 4.
      Neither runs inside the other's transaction. The job store reaches the connection through the host's interface and
      imports no pi package.
    - `jobs.export` copies the whole file with SQLite's online backup while work goes on, and is the only way to copy
-     it (S-004 REQ-016). The import step runs while the daemon is stopped, under the owner lock, places a copy only
+     it while a daemon runs (S-004 REQ-016). With the daemon stopped, S-010's pre-upgrade copy produces the same
+     one-file format under the owner lock, so the import step reads it. The import step runs while the daemon is stopped, under the owner lock, places a copy only
      where no database, `-wal` or `-shm` file exists, and refuses a copy with a newer job or pi-durable schema (S-004
      REQ-017). Neither converts the file, and the first start on a copy repairs it as after a crash.
 2. **pi-durable sits behind a narrow host.** Only the harness host module (`src/host/`) and the-intern's own pi-durable
@@ -179,8 +181,8 @@ exceptions in decision 4.
 - With the crash-loop guard off, a task that crashes the daemon on every resume keeps it in a restart loop.
 - Without a supervisor, a storage error leaves The Intern stopped. Installation registers it (S-000).
 - A slow job store transaction delays every commit queued behind it.
-- No database is converted between versions; an upgrade that may need to go back exports first (S-004 REQ-016,
-  REQ-017). Storage only grows.
+- No database is converted between versions; an upgrade takes a copy in the export format first, and goes back by
+  setting the newer database aside and importing that copy (S-004 REQ-016, REQ-017; S-010 REQ-006 to REQ-009). Storage only grows.
 
 ## Alternatives Considered
 

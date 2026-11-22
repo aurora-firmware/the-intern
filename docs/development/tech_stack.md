@@ -33,8 +33,8 @@ in `README.md`. The bootstrap pins the latest release.
 `tsc --noEmit` checks types. Biome formats and lints, with 4-space indentation and 120 columns.
 
 **Which checks block a merge, and which only warn?**
-Every check blocks a merge into `dev-pi-durable`: format, lint, typecheck, tests and the user documentation build.
-Nothing only warns.
+Every check blocks a merge into `dev-pi-durable`: format, lint, typecheck, tests, the user documentation build and
+the installation cycle. Nothing only warns.
 
 **Where are the coding conventions written down, and who changes them?**
 In `docs/development/coding_guidelines.md`. Anyone can propose a change in a task or pull request; the product owner
@@ -48,7 +48,9 @@ including crash and resume) and `test/web` (real pages in real browsers against 
 all, `test/web` last and on its own, because its time checks suffer under the other folders' load; `test:unit`,
 `test:service` and `test:web` run one folder each. `test:web` runs at most 2 files at a time (`--test-concurrency=2`)
 and `test:service` at most 10 (`--test-concurrency=10`): on a busy machine, more files at once only slow each test past
-its waits. Each wait and timeout a test writes goes through `scaled()` in `test/support/time_scale.ts`. The environment
+its waits. `test/install` holds the installation cycle (S-010 REQ-017), which `npm run test:install` runs only inside
+its systemd container, so `npm test` leaves it out. Each wait and timeout a test writes goes through `scaled()` in
+`test/support/time_scale.ts`. The environment
 variable `TEST_TIME_SCALE` (1 to 10) multiplies them; without it, the factor is twice the one-minute load average per
 core, between 2 and 4. Each of the three scripts sends two reporters to two places: the `dot` reporter to the terminal,
 which then shows one character per test and a "Failed tests:" block with each failure's error and stack, and the `spec`
@@ -96,10 +98,13 @@ image from Docker Hub (Node, npm and git; the exact tag follows the Node version
 
 **Which jobs run on which events, and on which supported platforms?**
 The jobs run on pull requests and on pushes to `dev-pi-durable` and `main`. Linux runs in continuous integration.
-macOS (Apple silicon) is checked by hand before a release. No API documentation is generated.
+macOS (Apple silicon) is checked by hand before a release. No API documentation is generated. The `Installation
+Cycle` job runs on the runner's host instead of a job container, because it starts a systemd container with Docker. A
+version tag runs the release workflow, which calls the same jobs (see Installation and service setup).
 
 **Which job results are required before a change merges?**
-Every check listed under Quality checks: format, lint, typecheck, tests and the user documentation build.
+Every check listed under Quality checks: format, lint, typecheck, tests and the user documentation build, and the
+installation cycle (S-010 REQ-017).
 
 **How do the browser tests get real browsers in CI?** The `Tests` job keeps its name and image, so the required checks
 stay as they are. It sets `HOME=/root` for the whole job, because the runner's `/github/home` is owned by `node` and
@@ -114,22 +119,46 @@ prepared image is the way to cut that if the time matters; nothing depends on it
 
 ## Installation and service setup
 
+These answers settle S-010's Open Questions on the program folder and the service registration, and record its
+technology choices. The design is in [architecture.md](architecture.md), Installation and service setup, and the
+durable parts are in
+[ADR-012](../ai-team/decisions/ADR-012-the-service-runs-the-current-version-through-a-stable-link-and-a-hold-file-keeps-it-stopped.md)
+and
+[ADR-013](../ai-team/decisions/ADR-013-installed-versions-share-one-versioned-layout-and-resume-each-other-s-operations.md).
+S-010 adds no dependency.
+
 **What form does a release take: a package for an existing runtime, or a self-contained bundle?**
-Open, pending the comparison in `docs/development/release_form.md`, where it will be decided.
+A `.tar.gz` bundle per platform, linux-x64 and darwin-arm64, holding the official Node build the release was tested
+with, the sources as they are and the production `node_modules`, with a `bin/bob` launcher (form B of
+[release_form.md](release_form.md), accepted by the product owner for S-010). The sources run by type stripping, as in
+development, so there is still no build step.
 
 **How is a release triggered, built and published?**
-A version tag publishes a GitHub Release.
+A tag `vX.Y.Z` pushed on a commit of `main` runs the release workflow (`.github/workflows/deploy.yml`) on the
+self-hosted runner. It checks the tag against `package.json`'s version and `main`, runs the same checks as a change,
+builds both bundles on Linux with `release/build_bundle.ts` and GNU `tar`, and publishes them, their `.sha256` files
+and `install.sh` with the GitHub CLI (`gh release create`). Only the publishing job has `contents: write`.
+
+**Where is the program installed?**
+In `~/.local/lib/the-intern/`, with `bob` linked as `~/.local/bin/bob`, on both platforms (ADR-013 decision 1).
 
 **How is the background service registered with each supported operating system, and how does it start at boot
 without anyone logging in, on macOS in particular?**
-A `bob` command registers and removes the boot-time service: systemd on Linux, launchd on macOS. How the service
-starts at boot without a login on macOS is open, to be settled from the comparison in
-`docs/development/release_form.md`.
+On Linux, a systemd user unit with lingering turned on for the service account; on macOS, a LaunchDaemon in
+`/Library/LaunchDaemons` with `UserName` set to the service account. Both run `current/bin/bob serve` with the
+directories the registration fixes, and a hold file keeps either stopped, so upgrades and rollbacks need no admin
+rights (ADR-012). The macOS half is unverified until a Mac is available (S-010 Success Criteria 5).
 
-**How does an upgrade export the job record from the old version and import it into the new one, and what happens to
-jobs still in progress?**
-An upgrade exports and imports the job record automatically. What happens to jobs still in progress during an upgrade
-is open, to be settled from the comparison in `docs/development/release_form.md`.
+**How does an upgrade keep a copy of the saved state from before the new version opens it, and how does it go back?**
+With the service stopped and the owner lock held, `bob upgrade` copies the database with `node:sqlite`'s backup, in the
+export format, and copies the configuration file and the internal folder, never the secrets store. It goes back by
+setting the newer database aside and running the previous version's own `bob import` under the same lock (ADR-013).
+Work in progress resumes on the new version with interrupted results, as after any stop (S-002 REQ-005).
+
+**How does the installation cycle run in continuous integration?**
+In a privileged `debian:bookworm` container that runs systemd, started by Docker from the runner's host, with test
+bundles built from the change, a fake model server named in the test's pi agent folder, and `BOB_RELEASE_URL`
+pointing at the bundles (architecture.md, Installation and service setup, Tests).
 
 ## User manual
 

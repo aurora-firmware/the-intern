@@ -30,7 +30,9 @@ asks the layer for a credential each time it logs in.
    directories (S-002 REQ-006). Each account has one JSON file, `<owner>/<name>.json` (today `mail/<name>.json`), mode
    `0600`, holding its password or client secret and its tokens with their expiry. Every write runs in one in-process
    serial queue and replaces the file through a temporary file, `fsync` and a rename. Nothing but the layer reads or
-   writes the folder, and nothing it holds is returned, logged or published. The files are not encrypted.
+   writes the folder, and nothing it holds is returned, logged or published. The installation commands never copy or
+   restore it; `bob uninstall` removes it only with the instance directories, when the team member asks (S-010
+   REQ-006, REQ-010). The files are not encrypted.
 3. **Sign-in over plain HTTP.** OAuth uses Node's `fetch` against the providers' documented endpoints: the device code
    flow for `microsoft`, the loopback flow with PKCE (Proof Key for Code Exchange) and the client secret for `google`,
    and the client credentials flow for `microsoft_app` (S-009 REQ-004). Before a login, the layer refreshes an access
@@ -62,7 +64,7 @@ asks the layer for a credential each time it logs in.
 
 - **The secrets in the database:** rejected because the export carries the database (S-009 REQ-020, REQ-024).
 - **The store in the configuration directory:** rejected because team members edit that folder and may keep it in
-  version control; the state directory holds only what the daemon writes.
+  version control; the state directory holds only what the daemon and the installation commands write.
 - **Encrypting the files:** rejected because the key would sit beside them under the same account, so it can't
   reject anyone a `0600` file doesn't (`docs/development/coding_guidelines.md`, Security).
 - **The operating system's keyring:** rejected by S-009, Alternatives Considered: the macOS login keychain is locked
