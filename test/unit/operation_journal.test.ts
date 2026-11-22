@@ -120,8 +120,11 @@ describe("operation journal", () => {
             `import { stepDone } from ${JSON.stringify(JOURNAL_MODULE)};`,
             `import { programLayout } from ${JSON.stringify(join(JOURNAL_MODULE, "..", "program_layout.ts"))};`,
             `const journal = ${JSON.stringify(journal())};`,
+            `const keepAlive = setTimeout(() => {}, 2 ** 30);`,
+            `process.once("SIGUSR2", () => process.stdout.write("signalled\\n"));`,
             `await stepDone(programLayout(${JSON.stringify(home)}), journal, "copied");`,
             `process.stdout.write("returned\\n");`,
+            `clearTimeout(keepAlive);`,
         ].join("\n");
         const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
             env: { ...process.env, [HOOK_VARIABLE]: "copied" },
@@ -142,12 +145,10 @@ describe("operation journal", () => {
         const timer = setTimeout(() => child.kill("SIGKILL"), scaled(20_000));
         try {
             await stopped;
-            await new Promise((resolve) => setTimeout(resolve, scaled(300)));
-            assert.equal(out, "", "the child went on before SIGUSR2");
             assert.equal((await readJournal(layout))?.lastStep, "copied");
             child.kill("SIGUSR2");
             assert.equal(await exited, 0, err);
-            assert.equal(out, "returned\n");
+            assert.equal(out, "signalled\nreturned\n", "stepDone returned before the signal arrived");
         } finally {
             clearTimeout(timer);
             child.kill("SIGKILL");
