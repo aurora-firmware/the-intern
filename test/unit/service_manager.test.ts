@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { programLayout } from "../../src/install/program_layout.ts";
+import { type ProgramLayout, programLayout } from "../../src/install/program_layout.ts";
 import {
     hold,
     nodeCommandRunner,
@@ -30,6 +30,11 @@ async function freshLayout() {
     const home = join(scratch, `home-${counter}`);
     await mkdir(home);
     return programLayout(home);
+}
+
+async function writeRecordFile(layout: ProgramLayout, text: string): Promise<void> {
+    await mkdir(layout.root, { recursive: true });
+    await writeFile(layout.serviceRecord, text);
 }
 
 const RECORD: ServiceRecord = {
@@ -76,7 +81,7 @@ describe("the registration record", () => {
 
     it("refuses a newer format, naming the file", async () => {
         const layout = await freshLayout();
-        await writeFile(layout.serviceRecord, JSON.stringify({ ...RECORD, format: 2 }));
+        await writeRecordFile(layout, JSON.stringify({ ...RECORD, format: 2 }));
         await assert.rejects(readServiceRecord(layout), (error: Error) => {
             assert.ok(error.message.includes(layout.serviceRecord), error.message);
             assert.match(error.message, /format is 2/);
@@ -86,13 +91,13 @@ describe("the registration record", () => {
 
     it("refuses a file that is not valid JSON, naming the file", async () => {
         const layout = await freshLayout();
-        await writeFile(layout.serviceRecord, "{nope");
+        await writeRecordFile(layout, "{nope");
         await assert.rejects(readServiceRecord(layout), (error: Error) => error.message.includes(layout.serviceRecord));
     });
 
     it("refuses a file with no format number, naming the file", async () => {
         const layout = await freshLayout();
-        await writeFile(layout.serviceRecord, "{}");
+        await writeRecordFile(layout, "{}");
         await assert.rejects(readServiceRecord(layout), (error: Error) => error.message.includes(layout.serviceRecord));
     });
 
