@@ -1,8 +1,9 @@
 /**
- * The decisions of the installation commands (S-010), kept pure: this module imports nothing, so version order, the
+ * The decisions of the installation commands (S-010), kept pure: this module imports only types, so version order, the
  * platform check, the refusals and the confirmation are tested without a machine (architecture.md, Module rule,
  * Installation). The commands gather the facts and act on the decision.
  */
+import type { StartupReport } from "../daemon/startup_report.ts";
 
 export type Version = {
     major: number;
@@ -158,4 +159,71 @@ export function decideRollback(facts: RollbackFacts): RollbackDecision {
 export function confirmation(options: { yes: boolean; isStdinTerminal: boolean }): "skip" | "ask" | "declined" {
     if (options.yes) return "skip";
     return options.isStdinTerminal ? "ask" : "declined";
+}
+
+/** The steps of an upgrade, in order; the names are the ones the test hook takes (ADR-013 decision 4). */
+export const UPGRADE_STEPS = ["held", "stopped", "owned", "copied", "switched", "released", "ready"] as const;
+
+/** The steps of a rollback, in order. */
+export const ROLLBACK_STEPS = [
+    "held",
+    "stopped",
+    "owned",
+    "set-aside",
+    "switched",
+    "imported",
+    "restored",
+    "released",
+    "ready",
+] as const;
+
+/**
+ * The steps of a switch-back (S-010 REQ-007). `set-aside` and `imported` run only when the failed version opened the
+ * database. Its `switched` sets `current` back first, then `previous` back to the journal's `previousBefore`, removing
+ * the link only when that was `null`, so the copy from before the upgrade still serves a rollback (ADR-013 decisions
+ * 2, 4 and 7). `removed` removes only the failed version.
+ */
+export const SWITCH_BACK_STEPS = [
+    "held",
+    "stopped",
+    "owned",
+    "set-aside",
+    "switched",
+    "imported",
+    "restored",
+    "released",
+    "ready",
+    "removed",
+] as const;
+
+/** The steps of the fresh start REQ-008 offers for an unreadable database. */
+export const FRESH_START_STEPS = ["held", "stopped", "owned", "set-aside", "kept", "released", "ready"] as const;
+
+/** The resume rule: the step after the last one done, or null when the operation is complete. */
+export function nextStep(steps: readonly string[], lastDone: string | null): string | null {
+    if (lastDone === null) return steps[0] ?? null;
+    const index = steps.indexOf(lastDone);
+    if (index === -1) throw new Error(`the step "${lastDone}" is not one of: ${steps.join(", ")}`);
+    return steps[index + 1] ?? null;
+}
+
+export type StartupClassification =
+    | { kind: "ready" }
+    | { kind: "unreadable"; reason: string }
+    | { kind: "failed"; reason: string; databaseOpened: boolean };
+
+const DATABASE_STEP = 4;
+const NO_REPORT_REASON = "the new version wrote no startup report";
+const NO_REASON = "the new version failed without giving a reason";
+
+/** Tells the failures of a new version apart (ADR-013 decision 6): unreadable is REQ-008, any other failure REQ-007. */
+export function classifyStartup(report: StartupReport | undefined): StartupClassification {
+    if (report === undefined) return { kind: "failed", reason: NO_REPORT_REASON, databaseOpened: false };
+    if (report.unreadableDatabase) return { kind: "unreadable", reason: report.reason ?? NO_REASON };
+    if (report.ready) return { kind: "ready" };
+    return {
+        kind: "failed",
+        reason: report.reason ?? NO_REASON,
+        databaseOpened: report.furthestStep >= DATABASE_STEP,
+    };
 }
