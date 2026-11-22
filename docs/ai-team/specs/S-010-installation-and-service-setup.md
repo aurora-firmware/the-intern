@@ -16,11 +16,11 @@ repository as `node src/cli/bob.ts`, with Node 24 installed by hand, and nothing
 supervisor registration S-002 REQ-004 relies on doesn't exist, the release workflow is a placeholder, and S-002 live
 acceptance test 3 can't be run. S-001 to S-009 are built, so the product now needs a way onto a team's machine. When
 this spec is done, a maintainer tags a version and gets a published release, and a team member installs it on a Linux
-x64 machine with one command, registers it so it starts at boot without anyone logging in and restarts after a
-failure, upgrades it with a copy of the saved state taken first, goes back to the previous version, and removes it,
-without losing the job record by accident. Success is the whole cycle (install, service setup, upgrade, failed upgrade,
-rollback, uninstall) passing in CI against bundles CI built, and a real Linux machine running the service after a
-reboot with nobody logged in.
+x64 machine or an Apple silicon Mac with one command, registers it so it starts at boot without anyone logging in and
+restarts after a failure, upgrades it with a copy of the saved state taken first, goes back to the previous version, and
+removes it, without losing the job record by accident. Success is the whole cycle (install, service setup, upgrade,
+failed upgrade, rollback, uninstall) passing in CI against bundles CI built, and a real Linux machine running the
+service after a reboot with nobody logged in. The same check on a real Mac waits until one is available.
 
 ## Definitions
 
@@ -47,9 +47,9 @@ daemon, ready, supervisor, export, import step, internal folder, secrets store) 
 
 | Actor | Goal |
 |---|---|
-| Installing team member | Puts The Intern on a Linux x64 machine, makes it start at boot as their own account, upgrades it, goes back after a bad upgrade, removes it. Whoever installs is a team member like any other (S-000). |
+| Installing team member | Puts The Intern on a Linux x64 machine or an Apple silicon Mac, makes it start at boot as their own account, upgrades it, goes back after a bad upgrade, removes it. Whoever installs is a team member like any other (S-000). |
 | Maintainer | Cuts a release from `main` after Gate 5 and gets it published without manual packaging. |
-| Supervisor (systemd) | Starts the service at machine startup without a login and restarts it after a non-zero exit (S-002 REQ-004). |
+| Supervisor (systemd, launchd) | Starts the service at machine startup without a login and restarts it after a non-zero exit (S-002 REQ-004). |
 | Continuous integration | Builds and publishes releases, and runs the installation cycle against the bundles it built. |
 | Developer | Tests installation, upgrade and rollback against local bundles without publishing anything. |
 
@@ -58,8 +58,8 @@ Journeys, in priority order:
 1. **Install and set up the service.** The team member runs the install script, then `bob service install`, which asks
    for admin rights once and waits until The Intern is ready. After a reboot with nobody logged in, it is running
    (REQ-003, REQ-004, REQ-014, REQ-015).
-2. **Release.** The maintainer pushes a version tag on `main`; CI runs the checks, builds the bundles and publishes the
-   Linux one on a GitHub Release with its checksum and the install script (REQ-001, REQ-002).
+2. **Release.** The maintainer pushes a version tag on `main`; CI runs the checks, builds the bundles and publishes both
+   on a GitHub Release with their checksums and the install script (REQ-001, REQ-002).
 3. **Upgrade.** `bob upgrade` takes a pre-upgrade copy, switches to the new version keeping the previous one, and waits
    until it's ready. Running work resumes on the new version (REQ-006).
 4. **Recover from a failed upgrade.** A new version that fails to start is switched back without asking; one that
@@ -74,10 +74,9 @@ Journeys, in priority order:
 
 What this specification explicitly does NOT cover:
 
-- **macOS releases and launchd registration.** S-000 supports macOS on Apple silicon, but there is no Mac to verify a
-  release on. CI builds the darwin-arm64 bundle on every release so the build keeps working, but it isn't published,
-  the install script refuses macOS, and `bob service install` has no macOS path. Publishing it and the launchd
-  registration come in a later spec once a Mac can verify them (S-000 amendment, S-002 amendment).
+- **Verifying macOS on a real Mac in this spec's work.** macOS on Apple silicon is released and supported like Linux,
+  but no Mac is available yet. Its behaviour is covered by unit tests and its live check (Success Criteria 5) is pending
+  until a Mac is available; the release notes and the manual say so. Product owner decision, 2026-11-22.
 - **Automatic updates and version notices.** The Intern never checks for, announces or installs a new version by
   itself. A team member runs `bob upgrade`, which is the only command that looks up the latest release.
 - **A dedicated service account.** v1 runs as the installing person's account (S-000; ADR-002).
@@ -131,9 +130,11 @@ What this specification explicitly does NOT cover:
 |---|---|
 | `the-intern-X.Y.Z-linux-x64.tar.gz` | The Linux x64 bundle (REQ-002) |
 | `the-intern-X.Y.Z-linux-x64.tar.gz.sha256` | Its SHA-256 checksum, in the format `sha256sum -c` reads |
+| `the-intern-X.Y.Z-darwin-arm64.tar.gz` | The macOS Apple silicon bundle (REQ-002) |
+| `the-intern-X.Y.Z-darwin-arm64.tar.gz.sha256` | Its SHA-256 checksum, in the same format |
 | `install.sh` | The install script (REQ-003) |
 
-The darwin-arm64 bundle is built in the same run and kept as a CI artifact only. The repository is public, so the
+The repository is public, so the
 assets download without a login.
 
 ### Install script
@@ -148,7 +149,7 @@ curl -fsSL https://github.com/aurora-firmware/the-intern/releases/latest/downloa
 | Outcome | Message and exit |
 |---|---|
 | Installed | The version, the program folder, the `bob` path, and the next step: sign in to pi if needed, then `bob service install`. If the folder holding the `bob` link isn't on the `PATH`, the line to add it. Exit 0 |
-| Unsupported platform (macOS, Linux on ARM, a musl libc, no systemd) or run as root | Names the reason; nothing changes. Exit 1 |
+| Unsupported platform (Linux on ARM, an Intel Mac, a musl libc, Linux without systemd, any other system) or run as root | Names the reason; nothing changes. Exit 1 |
 | Already installed | Names the installed version and points to `bob upgrade`; nothing changes. Exit 1 |
 | Download fails, the checksum doesn't match, the version doesn't exist | Names the reason; nothing is left behind. Exit 1 |
 
@@ -184,14 +185,14 @@ errors exit 2, notices and questions on standard error. They don't call the daem
 - S-004 REQ-001, REQ-016 and REQ-017: migration forward, the export format and the import step, which refuses when a
   database is present.
 - S-005 REQ-001 and REQ-003: command shape, output and exit codes.
-- GitHub Releases on the public repository; systemd on the machine.
+- GitHub Releases on the public repository; systemd on Linux and launchd on macOS.
 
 ## Workflow
 
 ```
 Maintainer pushes vX.Y.Z on main                                                 ★ Gate 5 signed off  REQ-001
   → CI: tag = package version? no → stop, publish nothing                                                REQ-001
-  → checks pass → build both bundles → publish the Linux bundle, checksum and script             REQ-001, REQ-002
+  → checks pass → build both bundles → publish both bundles, checksums, script        REQ-001, REQ-002
 
 Team member runs the install script                                                                      REQ-003
   → unsupported platform / root / already installed → refuse, nothing changes
@@ -232,15 +233,14 @@ Any step cut off (Ctrl-C, power loss)                                           
 When a tag `vX.Y.Z` is pushed on a commit of `main`, continuous integration SHALL run the project's checks, build the
 linux-x64 and darwin-arm64 bundles, and publish a GitHub Release named after the tag with exactly the release assets of
 Interfaces. It SHALL publish nothing when the checks fail, when the tag's version differs from the package version, or
-when the tagged commit isn't on `main`. The darwin-arm64 bundle SHALL be kept as a CI artifact and not attached to the
-release.
+when the tagged commit isn't on `main`.
 
 #### AC-001.1 — A tag publishes a release
 
 - **Given:** the package version `0.1.0` on `main`, all checks passing
 - **When:** the maintainer pushes `v0.1.0`
-- **Then:** a release `v0.1.0` exists with `the-intern-0.1.0-linux-x64.tar.gz`, its `.sha256` file and `install.sh`;
-  the darwin-arm64 bundle is in the run's artifacts and not on the release
+- **Then:** a release `v0.1.0` exists with `the-intern-0.1.0-linux-x64.tar.gz`, `the-intern-0.1.0-darwin-arm64.tar.gz`,
+  their `.sha256` files and `install.sh`
 
 **Verification:** demonstration — a pre-release tag (for example `v0.1.0-rc.1` with a matching package version) pushed
 on `main`, then the release page and the run's artifacts inspected.
@@ -264,21 +264,22 @@ the release's version.
 
 #### AC-002.1 — It runs on a clean machine
 
-- **Given:** a Linux x64 machine with no Node installed
+- **Given:** a Linux x64 machine with no Node installed; an Apple silicon Mac with no Node installed
 - **When:** the bundle is installed and `bob serve` is run with directory flags
 - **Then:** the daemon reaches ready, and `bob status` reports the release's version and the pi versions the README
   lists
 
-**Verification:** test — the installation cycle test (REQ-017), in an environment without a Node on the `PATH`.
+**Verification:** test — the installation cycle test (REQ-017), in an environment without a Node on the `PATH`, for
+Linux; demonstration on a Mac for macOS, pending (Success Criteria 5).
 
 ### REQ-003 — The install script
 
 The install script SHALL install the latest release, or the version `--version` names, into the program folder and link
-`bob` into a folder under the person's home. It SHALL refuse, changing nothing, on any platform but Linux x64 with
-glibc and systemd, when run as root, and when The Intern is already installed. It SHALL check the bundle against its
-published checksum before unpacking and leave nothing behind when the download or the check fails. It SHALL end by
-printing the installed version, the paths, the line to add the link's folder to the `PATH` when it isn't there, and the
-next step.
+`bob` into a folder under the person's home. It SHALL refuse, changing nothing, on any platform but Linux x64 with glibc
+and systemd and macOS on Apple silicon, when run as root, and when The Intern is already installed. It SHALL check the
+bundle against its published checksum before unpacking and leave nothing behind when the download or the check fails. It
+SHALL end by printing the installed version, the paths, the line to add the link's folder to the `PATH` when it isn't
+there, and the next step.
 
 #### AC-003.1 — A fresh install
 
@@ -291,8 +292,8 @@ next step.
 
 #### AC-003.2 — Refusals
 
-- **Given:** the script run on macOS; on Linux on ARM; on a musl-based Linux; on a machine without systemd; as root;
-  with The Intern already installed; with `--version` naming a version that doesn't exist
+- **Given:** the script run on an Intel Mac; on Linux on ARM; on a musl-based Linux; on a machine without systemd; as
+  root; with The Intern already installed; with `--version` naming a version that doesn't exist
 - **When:** each runs
 - **Then:** each exits 1 with a message naming the reason, and the program folder and the `PATH` link are as they
   were
@@ -312,11 +313,12 @@ cycle test for the already-installed and missing-version cases.
 
 `bob service install` SHALL register the service so that the supervisor starts `bob serve` for the instance's default
 directories as the service account, never as root, when the machine starts and without anyone logging in, and restarts
-it after a non-zero exit (S-002 REQ-004). It SHALL ask for admin rights only for the steps the machine requires them
-for, and stop with nothing registered when they are refused or the machine doesn't allow a user's service to run at
-boot. It SHALL start the service and wait until the daemon reports ready. When it isn't ready within the bound of
-REQ-015, it SHALL exit 1 naming the reason the daemon logged and the command that shows the service's log. Run again,
-it SHALL point the registration at the current version and leave everything else as it was.
+it after a non-zero exit (S-002 REQ-004), using systemd on Linux and launchd on macOS. It SHALL ask for admin rights
+only for the steps the machine requires them for, and stop with nothing registered when they are refused or the machine
+doesn't allow a user's service to run at boot. It SHALL start the service and wait until the daemon reports ready. When
+it isn't ready within the bound of REQ-015, it SHALL exit 1 naming the reason the daemon logged and the command that
+shows the service's log. Run again, it SHALL point the registration at the current version and leave everything else as
+it was.
 
 #### AC-004.1 — Registered, started and ready
 
@@ -334,8 +336,8 @@ it SHALL point the registration at the current version and leave everything else
 - **Then:** `bob status` over SSH answers after the reboot; after the kill the daemon is restarted and the job's run
   resumes (S-002 REQ-008)
 
-**Verification:** demonstration — the live check on a real Linux machine (Success Criteria 3); closes the Linux half
-of S-002 live acceptance test 3.
+**Verification:** demonstration — the live check on a real Linux machine (Success Criteria 3), which closes the Linux
+half of S-002 live acceptance test 3; the same on a real Mac (Success Criteria 5), pending until a Mac is available.
 
 #### AC-004.3 — Not ready, or not allowed
 
@@ -346,7 +348,7 @@ of S-002 live acceptance test 3.
   naming the reason, with no registration left
 
 **Verification:** test — the installation cycle test for the first two; unit tests of the refusal paths for the last
-two.
+two, on both platforms' registration.
 
 ### REQ-005 — Checking and removing the service
 
@@ -577,7 +579,7 @@ SHALL stop, changing nothing installed, when the checksum is missing or doesn't 
 
 The service SHALL run as the service account and never as root (ADR-002). Only `bob service install`, `bob service
 remove` and `bob uninstall` MAY ask for admin rights. `bob upgrade` and `bob rollback` SHALL stop and start the service
-without admin rights. The install script SHALL never ask for them.
+without admin rights, on Linux and on macOS. The install script SHALL never ask for them.
 
 #### AC-014.1 — No root process, no sudo for upgrades
 
@@ -596,7 +598,7 @@ On the reference Linux machine (`docs/development/local_runs.md`), measured from
 | `bob service install`, after admin rights are given, to ready | under 60 seconds |
 | `bob upgrade` downtime, from the service stopping to the new version ready, not counting the download and the copy | under 60 seconds |
 | A switch back after a failed upgrade, from the failure to the previous version ready | under 60 seconds |
-| Compressed linux-x64 bundle | at most 150 MB |
+| Each compressed bundle, linux-x64 and darwin-arm64 | at most 150 MB |
 | Release workflow, from tag push to published release | under 30 minutes on the project's runner |
 
 The ready wait in REQ-004, REQ-006, REQ-007 and REQ-008 SHALL be 60 seconds, after which the version counts as not
@@ -606,18 +608,18 @@ ready.
 
 - **Given:** a release built by CI
 - **When:** the live check runs on the reference machine and the release workflow runs
-- **Then:** each measure is within its threshold, and the bundle's size on the release page is at most 150 MB
+- **Then:** each measure is within its threshold, and each bundle's size on the release page is at most 150 MB
 
 **Verification:** demonstration — the live check (Success Criteria 3) and the release run's timings, recorded as
 evidence.
 
 ### REQ-016 — Documentation
 
-The user manual SHALL have an "Installing and upgrading" page that covers the install script, `bob service install`,
-the pi login prerequisite, `bob service status` and `remove`, `bob upgrade` and its two failure paths, `bob rollback`,
-`bob uninstall`, the upgrades folder and that macOS isn't released yet. `docs/manual/commands.md` SHALL lose its
-"Until installation puts `bob` on your `PATH`" note and list the new commands. The developer docs SHALL say how to cut a
-release and how to run the installation cycle test against local bundles.
+The user manual SHALL have an "Installing and upgrading" page that covers the install script, `bob service install`, the
+pi login prerequisite, `bob service status` and `remove`, `bob upgrade` and its two failure paths, `bob rollback`, `bob
+uninstall`, the upgrades folder, and that macOS hasn't yet been verified on a real Mac. `docs/manual/commands.md` SHALL
+lose its "Until installation puts `bob` on your `PATH`" note and list the new commands. The developer docs SHALL say how
+to cut a release and how to run the installation cycle test against local bundles.
 
 #### AC-016.1 — The manual and the developer docs
 
@@ -631,7 +633,8 @@ release and how to run the installation cycle test against local bundles.
 
 CI SHALL run the installation cycle on Linux against bundles it built in the same run, through the download location
 override: install, service setup, upgrade, failed upgrade of both kinds, rollback, the cut-off cases of REQ-012 and
-uninstall, in an environment with systemd.
+uninstall, in an environment with systemd. macOS isn't in the CI cycle: its platform checks and launchd registration are
+covered by unit tests, and its live check is Success Criteria 5.
 
 #### AC-017.1 — Every change runs the cycle
 
@@ -661,15 +664,19 @@ No setting is added to `config.toml`.
 ## Assumptions and Dependencies
 
 - **The bundle form.** A per-platform archive carrying Node 24 runs the same TypeScript sources the tests run, by type
-  stripping, provided its path has no `node_modules` segment. Confirmed in `docs/development/release_form.md`
-  (sections 2 and 5, measured on Linux x64), and accepted by the product owner in this spec's brainstorm.
+  stripping, provided its path has no `node_modules` segment. Confirmed in `docs/development/release_form.md` (sections
+  2 and 5, measured on Linux x64), and accepted by the product owner in this spec's brainstorm. The darwin-arm64 bundle
+  can be assembled on the Linux runner from the official macOS Node build (`release_form.md` section 7).
 - **Start at boot without admin rights for upgrades.** A user's systemd service can start at boot without a login once
   lingering is on, and its owner can stop and start it without root. Confirmed by systemd's documentation in
   `release_form.md` section 3. Whether turning lingering on asks for admin rights depends on the machine; REQ-004 asks
-  when it must.
-- **The machine.** Linux x64 with glibc and systemd, `curl`, `tar` and `sha256sum`, network access to GitHub, and an
-  installing person who can get admin rights once. Not confirmed per distribution; the install script and REQ-004
-  refuse with a reason when one is missing.
+  when it must. On macOS, starting at boot without a login needs a system-wide launchd service that runs as the service
+  account, which needs admin rights to register (`release_form.md` section 3). Whether `bob upgrade` and `bob rollback`
+  can stop and start it without admin rights, and whether a Mac with FileVault starts it before the disk is unlocked,
+  are unverified until a Mac is available (Open Questions).
+- **The machine.** Linux x64 with glibc and systemd, or macOS on Apple silicon; `curl`, `tar` and `sha256sum`, network
+  access to GitHub, and an installing person who can get admin rights once. Not confirmed per distribution; the install
+  script and REQ-004 refuse with a reason when one is missing.
 - **The pi login** stays in the service account's home and is used in place (S-002 REQ-018).
 - **Upgrade relies on existing guarantees.** Running work survives a stop (S-002 REQ-005, REQ-008); a version refuses a
   database it can't read before changing it (S-002 REQ-002 step 4; S-004 REQ-001, REQ-017); the import step refuses an
@@ -681,18 +688,14 @@ No setting is added to `config.toml`.
   2026-11-22: the secrets store is copied too, so accounts added after an upgrade go on rollback.
 - **Dependencies:** GitHub Releases and Actions on the public repository; the self-hosted CI runner (S-000, Continuous
   integration); the official Node 24 builds for linux-x64 and darwin-arm64.
-- **Cross-spec amendments carried by this branch:**
-  - **S-000 v0.10:** Project exclusions and Installation and service setup: v1 releases are Linux x64 only until a Mac
-    can verify macOS; the component's decisions are answered by S-010.
-  - **S-002 v0.18:** REQ-004, AC-004.2, Assumptions and Success Criteria 4: installation registers the daemon with
-    systemd on Linux (S-010); launchd registration and the macOS half of live acceptance test 3 come with macOS
-    releases.
+- **Cross-spec amendments carried by this branch:** S-000 and S-002 need none: S-000 keeps both platforms, and S-002
+  REQ-004 and Success Criteria 4 already expect systemd and launchd registration measured by hand on each platform.
   - **S-005 v0.9:** Exclusions and Interfaces: S-010 puts `bob` on the `PATH` and adds the `service`, `upgrade`,
     `rollback` and `uninstall` groups.
 
 ## Success Criteria
 
-1. Pushing a pre-release tag on `main` publishes a release with exactly the three assets, and a mismatched tag
+1. Pushing a pre-release tag on `main` publishes a release with exactly the five assets, and a mismatched tag
    publishes nothing (REQ-001). Observed on the release page and the run's log.
 2. The installation cycle job passes in CI on every change: install, service setup, upgrade, both failed-upgrade paths,
    rollback, the cut-off cases and uninstall (REQ-002 to REQ-014, REQ-017). Observed in the CI run.
@@ -701,13 +704,16 @@ No setting is added to `config.toml`.
    an upgrade and a rollback between two releases keep every job. Each REQ-015 timing is within its threshold
    (REQ-004, REQ-006, REQ-009, REQ-015). Recorded by hand as evidence.
 4. The manual's "Installing and upgrading" page covers REQ-016's list, and `npm run docs:build` passes (REQ-016).
+5. Live check on a real Apple silicon Mac: the same steps as criterion 3, with the Mac restarted and nobody logged in
+   (REQ-002 to REQ-004, REQ-014). Pending until a Mac is available; until then the release notes and the manual say
+   macOS is unverified (product owner decision, 2026-11-22).
 
 ## Implementation Order
 
 | Phase | Outcome | Depends on |
 |---|---|---|
-| 1 | The bundle and the release workflow: a tag builds both bundles and publishes the Linux one with its checksum; a matching package version | Nothing |
-| 2 | The install script and `bob service install`, `status` and `remove`, with the installation cycle test for install and service setup in CI | Phase 1 |
+| 1 | The bundles and the release workflow: a tag builds and publishes both bundles with their checksums; a matching package version | Nothing |
+| 2 | The install script and `bob service install`, `status` and `remove` on both platforms, with the installation cycle test for install and service setup in CI on Linux | Phase 1 |
 | 3 | `bob upgrade` with both failure paths, `bob rollback`, the single-command lock and the cut-off cases | Phase 2 |
 | 4 | `bob uninstall`, the manual and developer docs, the live check on a real Linux machine | Phase 3 |
 
@@ -716,8 +722,13 @@ No setting is added to `config.toml`.
 - **Program folder and link paths.** Owner: Architect. Resolution: decided in Feature Architecture, within REQ-003's
   constraints (under the home, apart from the instance directories, no `node_modules` segment), and recorded in the
   manual.
-- **How the service is registered on Linux** (for example a user unit with lingering, as `release_form.md` recommends)
-  within REQ-004 and REQ-014. Owner: Architect. Resolution: decided in Feature Architecture.
+- **How the service is registered** on Linux (for example a user unit with lingering, as `release_form.md` recommends)
+  and on macOS (for example a launchd daemon running as the service account), within REQ-004 and REQ-014. Owner:
+  Architect. Resolution: decided in Feature Architecture. If no design lets `bob upgrade` and `bob rollback` stop and
+  start the macOS service without admin rights, the Architect escalates REQ-014 to the product owner before Gate 2.
+- **macOS behaviour on a real Mac**: start at boot without a login, FileVault, the restart after a failure. Owner:
+  product owner, who provides the Mac. Resolution: Success Criteria 5, run once a Mac is available; it can't change the
+  specified behaviour, only confirm it or raise a bug.
 
 ## Amendment Log
 
