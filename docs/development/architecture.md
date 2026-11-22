@@ -1468,7 +1468,7 @@ form is `docs/development/release_form.md`'s form B, which the product owner acc
 | `src/install/ready_wait.ts` | The 60-second wait: `daemon.status` through the client library over the registration's runtime directory, and the startup report |
 | `src/install/upgrade.ts`, `rollback.ts`, `uninstall.ts`, `service_commands.ts` | Each command's steps, the questions it asks, and what it prints |
 | `src/daemon/startup_report.ts` | The startup report's format, written by the daemon and read by the installation commands (ADR-013 decision 6). Imports only Node modules |
-| `src/daemon/ownership.ts` | The lock mechanism, shared by the owner lock and `install.lock`; a lock holding the checker's own pid is stale (B-056); the owner lock is handed to the import step by `BOB_OWNER_LOCK_TOKEN`, which only `importDatabase` accepts |
+| `src/daemon/ownership.ts` | The lock mechanism, shared by the owner lock and `install.lock`; a lock holding the checker's own pid is stale unless this process holds it through an unreleased handle (B-056); the owner lock is handed to the import step by `BOB_OWNER_LOCK_TOKEN`, which only `importDatabase` accepts |
 | `release/` | Release tooling, outside `src/`, so no bundle carries it: `check_release.ts`, `build_bundle.ts`, `install.sh`, `release_notes.md`. `tsconfig.json` and `biome.json` include the folder |
 
 ### The bundle
@@ -1618,8 +1618,10 @@ instance directories `service.json` names (the environment's when there is no re
 - **CI.** `build.yml` gains the job `Installation Cycle`. It runs on the self-hosted runner's host, without a job
   container, because it starts the privileged rig with Docker, and runs `test/install/run_cycle.sh`. It blocks a merge
   like the other checks, and uploads `.tmp/test-logs/install.log` when it fails.
-- **B-056.** Its fix, a lock that holds the checker's own pid counts as stale, is part of the shared lock mechanism, so
-  it lands before or with `install.lock`, and before the cycle kills and restarts processes.
+- **B-056.** Its fix, a lock that holds the checker's own pid counts as stale unless the checking process holds it
+  through a handle it has not released (known by the lock's token), is part of the shared lock mechanism, so it lands
+  before or with `install.lock`, and before the cycle kills and restarts processes. The held-handle exception keeps a
+  second acquisition in the same process refused, as the in-process service tests and `readOwnerLock` rely on.
 
 ## Rejected approaches
 
