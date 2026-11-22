@@ -98,13 +98,34 @@ asset_url() {
     esac
 }
 
+# first_missing <path>: the topmost folder of the path that does not exist yet, empty when all exist
+first_missing() {
+    missing=""
+    probe=$1
+    while [ ! -e "$probe" ] && [ ! -L "$probe" ]; do
+        missing=$probe
+        probe=$(dirname "$probe")
+    done
+    echo "$missing"
+}
+
+# Removes whatever a failed run made; done is set once the install is complete.
 cleanup() {
+    if [ -n "$done" ]; then
+        return
+    fi
+    if [ -n "$linked_current" ]; then
+        rm -f "$linked_current"
+    fi
     if [ -n "$staging" ]; then
         rm -rf "$staging"
     fi
     if [ -n "$placed" ]; then
         rm -rf "$placed"
     fi
+    for made in $made_folders; do
+        rm -rf "$made"
+    done
 }
 
 fetch() {
@@ -129,6 +150,7 @@ install_bundle() {
     asset=$4
     url=$5
 
+    made_folders=$(first_missing "$program")
     mkdir -p "$program" "$program/versions" || { refuse "cannot create $program"; return 1; }
     staging=$(mktemp -d "$program/.staging-XXXXXX") || { refuse "cannot create a staging folder in $program"; return 1; }
 
@@ -148,10 +170,13 @@ install_bundle() {
     [ ! -e "$program/versions/$version" ] || { refuse "$program/versions/$version already exists"; return 1; }
     placed="$program/versions/$version"
     mv "$folder" "$placed" || { refuse "cannot move the bundle into $placed"; return 1; }
+    linked_current="$program/current"
     ln -sfn "versions/$version" "$program/current" || { refuse "cannot link $program/current"; return 1; }
+    made_bin=$(first_missing "$(dirname "$bin_link")")
+    made_folders="$made_folders $made_bin"
     mkdir -p "$(dirname "$bin_link")" || { refuse "cannot create $(dirname "$bin_link")"; return 1; }
     ln -sfn "$program/current/bin/bob" "$bin_link" || { refuse "cannot link $bin_link"; return 1; }
-    placed=""
+    done=yes
 }
 
 main() {
@@ -192,6 +217,9 @@ main() {
 
     staging=""
     placed=""
+    linked_current=""
+    made_folders=""
+    done=""
     trap cleanup EXIT
     trap 'exit 1' HUP INT TERM
     install_bundle "$version" "$program" "$bin_link" "$asset" "$url" || exit 1
