@@ -13,7 +13,7 @@ const heldTokens = new Set<string>();
 
 type LockContent = { pid: number; bootTime: number; token: string; command?: string };
 
-export type OwnershipHandle = { release(): Promise<void> };
+export type OwnershipHandle = { token: string; release(): Promise<void> };
 
 export class InstallLockRefusedError extends Error {
     commandName: string;
@@ -142,6 +142,7 @@ async function clearStaleLock(lockPath: string, staleRaw: string): Promise<numbe
 function createHandle(lockPath: string, token: string): OwnershipHandle {
     heldTokens.add(token);
     return {
+        token,
         async release() {
             heldTokens.delete(token);
             const raw = await readRaw(lockPath);
@@ -179,13 +180,27 @@ async function currentHolder(lockPath: string, fallbackPid: number): Promise<Loc
 }
 
 /**
- * Takes the one-owner-per-database lock in the state directory. Refuses with OwnershipRefusedError while a live
- * daemon of the current boot holds it; takes over a stale lock.
+ * A handle for a lock another process holds and handed over: releasing it does nothing, so the lock stays held when
+ * the handed-over step ends.
  */
-export async function acquireOwnership(stateDir: string): Promise<OwnershipHandle> {
+function handedOverHandle(token: string): OwnershipHandle {
+    return { token, async release() {} };
+}
+
+/**
+ * Takes the one-owner-per-database lock in the state directory. Refuses with OwnershipRefusedError while a live
+ * daemon of the current boot holds it; takes over a stale lock. When `handoverToken` is the token of the live lock,
+ * the lock is accepted as held and the handle's release leaves it in place.
+ */
+export async function acquireOwnership(
+    stateDir: string,
+    options: { handoverToken?: string } = {},
+): Promise<OwnershipHandle> {
     const content: LockContent = { pid: process.pid, bootTime: currentBootTime(), token: randomUUID() };
     const result = await acquireLock(join(stateDir, OWNER_LOCK_FILE_NAME), content);
     if ("handle" in result) return result.handle;
+    const { handoverToken } = options;
+    if (handoverToken !== undefined && handoverToken === result.holder.token) return handedOverHandle(handoverToken);
     throw new OwnershipRefusedError(stateDir, result.holder.pid);
 }
 
