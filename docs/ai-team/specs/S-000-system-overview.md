@@ -1,7 +1,7 @@
 ---
 id: S-000
 title: System Overview
-version: '0.9'
+version: '0.10'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-27'
 author: planner
@@ -281,17 +281,11 @@ person's access.
 - **Responsibility:** Turns a release into something a team member can install on a machine of a supported platform,
   running as one account of that machine (the installing person's in the first version), and sets the service up so the
   operating system starts it when the machine starts, without anyone logging in, and restarts it after a failure. Covers
-  upgrading and removing it.
+  upgrading and removing it. Releases are Linux x64 only until a Mac can verify a macOS release; the macOS bundle is
+  built but not published (S-010).
 - **Boundary:** It does not define the service's own start-up and shutdown (Intern service) or the team's network
   setup that decides who can reach it.
 - **Works with:** Intern service, Continuous integration, User manual.
-- **Decisions needed:**
-  - What form does a release take: a package for an existing runtime, or a self-contained bundle?
-  - How is a release triggered, built and published?
-  - How is the background service registered with each supported operating system, and how does it start at boot
-    without anyone logging in, on macOS in particular?
-  - How does an upgrade keep a copy of the saved state from before the new version first opens it, how does it go
-    back, and what happens to jobs still in progress?
 
 #### User manual
 
@@ -347,7 +341,7 @@ person's access.
   knowledge sources only.
 - **Catching up on missed scheduled runs.** Runs due while the machine was off are skipped.
 - **Windows, Linux on ARM and Intel Macs.** Only Linux on x64 and macOS on Apple silicon are supported, to keep the
-  test matrix small.
+  test matrix small. Until a Mac can verify one, releases are for Linux on x64 only (S-010).
 - **Converting saved state between versions.** The underlying agent runtime is pinned and gives no compatibility
   promise for its saved state. The job record keeps its own format, which each version migrates forward; export and
   import copy the saved state, they don't convert it.
@@ -364,3 +358,4 @@ person's access.
 | 2026-11-07 | v0.7. Triggers leave the product: use case 4 rephrased so that an agent notices what happens and creates the job; the component becomes Schedules; every run starts fresh and its agent can read earlier runs, in place of a choice per schedule; Email reports no events. Users, use case 8, Solution overview, Command line, Web interface and User manual: triggers leave the wording. Agents and roles: the front desk sets up and runs schedules, and Works with names Schedules. Email's Works with no longer names Schedules. | Product owner ruling in the S-007 brainstorm: no job starts on an event; agents create jobs. Decisions confirmed section by section. | S-007's tasks |
 | 2026-11-13 | v0.8. Skills and instructions: it also owns where skills are found and which copy wins, the skills each role enables by default and each agent has enabled, how a team member or an agent changes them while the agent works, and the one way every agent reads its skills; its Boundary no longer leaves which role gets which skills to Agents and roles, which still owns roles and seats; Works with adds Intern service and Schedules. Agents and roles, Boundary: it doesn't keep the skills each agent has enabled. Intern service and Schedules, Works with: Skills and instructions, so both sides name each other. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, finding B9. | S-008's tasks, one of which updates `docs/system_overview.html` |
 | 2026-11-18 | v0.9. Users: team members reach The Intern at any number of its own email addresses, in place of its one email address. Email, Responsibility: any number of mail accounts, owned or monitored, in place of The Intern's own mailbox; an owned account is a way in and out where every new email becomes a triage job and The Intern writes about its own work to the team's notice address, and in a monitored account agents read, sort and draft. Email, Boundary: it may read, sort and draft in monitored mailboxes, never sends from them and makes no job from them, in place of "does not read or triage team members' own mailboxes"; it still doesn't decide what a job is. Email, Works with: adds Skills and instructions, Command line and Web interface. Command line and Web interface: Responsibility adds managing mail accounts, and Works with adds Email. Use case 6: email goes to one of The Intern's own addresses, every new email becomes a triage job, and questions with nobody to ask by email and held-back mail go to the notice address. | S-009 Email brainstorm and its architecture consistency review; approved by the product owner at Gate 1 with S-009, 2026-11-18. | S-009's tasks |
+| 2026-11-22 | v0.10. Installation and service setup: releases are Linux x64 only until a Mac can verify a macOS release, and the macOS bundle is built but not published; its Decisions needed are answered by S-010 (release form, release pipeline, service registration, upgrade with a pre-upgrade copy and rollback) and removed. Project exclusions, platforms: the same release limit. | S-010 brainstorm, product owner decisions of 2026-11-22: no Mac is available to verify a macOS release or the launchd registration. | S-010's tasks |

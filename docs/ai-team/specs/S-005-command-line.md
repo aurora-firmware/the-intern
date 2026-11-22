@@ -1,7 +1,7 @@
 ---
 id: S-005
 title: Command line
-version: '0.8'
+version: '0.9'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-03'
 author: planner
@@ -44,7 +44,7 @@ of `docs/system_overview.html`. It adds these terms:
 |---|---|
 | Team member on the machine | Talks to The Intern, gives and manages jobs, watches work, steers agents, shapes roles and workspaces, and runs, backs up and moves the instance, all from a shell on the machine. |
 | A script, run by hand or by cron | Calls `bob` with `--json` and acts on its JSON output and exit code. |
-| Later specs (downstream) | Team knowledge adds its command group under the name and conventions this spec reserves; S-007 adds `schedules`, S-008 adds `skills` and `instructions`, and S-009 adds `mail`. |
+| Later specs (downstream) | Team knowledge adds its command group under the name and conventions this spec reserves; S-007 adds `schedules`, S-008 adds `skills` and `instructions`, S-009 adds `mail`, and S-010 adds `service` and the top-level `upgrade`, `rollback` and `uninstall`. |
 | Developer | Tests every command against a test daemon on the fake model, and checks the manual's command reference against `bob --help`. |
 
 Journeys, in priority order:
@@ -76,12 +76,12 @@ What this specification explicitly does NOT cover:
 - **State or logic of its own.** `bob` keeps no configuration file, cache or local history, and resolves no short
   number itself: the service validates, resolves and refuses (REQ-016).
 - **Commands for later components.** Knowledge sources get only their reserved group name here (REQ-001); their spec
-  adds the commands. S-007 adds `bob schedules`, S-008 adds `bob skills` and `bob instructions`, and S-009 adds
-  `bob mail`.
+  adds the commands. S-007 adds `bob schedules`, S-008 adds `bob skills` and `bob instructions`, S-009 adds
+  `bob mail`, and S-010 adds `bob service`, `bob upgrade`, `bob rollback` and `bob uninstall`.
 - **Shell completion and colour themes.** This version prints plain output, with colour only on a terminal.
 - **A raw operation command.** There is no `bob call <operation> <json>` and no command generated from the operation
   catalogue (Alternatives Considered).
-- **An install launcher.** Installation and service setup puts `bob` on the `PATH`; until then it runs as
+- **An install launcher.** S-010's install script puts `bob` on the `PATH`; from a checkout it runs as
   `node src/cli/bob.ts`.
 - **Mail to the front desk and presentation in the browser.** Email doesn't reach the front desk (S-001), and the web
   chat and board belong to the Web interface spec.
@@ -139,6 +139,7 @@ resolved by the service, S-004 REQ-002):
 | `bob export <file>` | `jobs.export`, with the file made absolute against the current directory (S-004 REQ-016) | REQ-013 |
 | `bob import <file>` | none: S-004's import step, in-process (S-004 REQ-017) | REQ-013 |
 | `bob serve` | none: runs the daemon (S-002 Interfaces, the `bob serve` command) | REQ-014 |
+| `bob service install`, `remove`, `status`; `bob upgrade`, `bob rollback`, `bob uninstall` | none, apart from the version `bob service status` reads with `daemon.status`: S-010 Interfaces and REQ-004 to REQ-011 own them | S-010 |
 
 The names of the options other than `--json`, `--runtime-dir` and `--help`, and the layout of text output, are not
 contract; the tasks fix them and the manual's command reference records them (REQ-017). Every option a command takes
@@ -215,7 +216,8 @@ runtime directory named by `--runtime-dir`.
 ### REQ-001 — Command shape, help and reserved groups
 
 `bob` SHALL take a group and a verb (`bob jobs list`) or a top-level command (`chat`, `follow`, `status`, `usage`,
-`serve`, `export`, `import`), with the groups and commands of Interfaces. `bob --help`, `bob <group> --help` and
+`serve`, `export`, `import`, and S-010's `upgrade`, `rollback` and `uninstall`), with the groups and commands of
+Interfaces. `bob --help`, `bob <group> --help` and
 `bob <group> <verb> --help` SHALL print the usage of that level on standard output and exit 0. An unknown command or
 flag, or a missing argument, SHALL print the usage of the group concerned on standard error and exit 2. The reserved
 groups SHALL NOT appear in help; a command in one of them SHALL print that the group isn't available yet and exit 2.
@@ -770,3 +772,4 @@ None.
 | 2026-11-13 | v0.7. Definitions (Group, Reserved group), Users, Exclusions (Commands for later components), Interfaces (the conventions' reserved groups) and Dependencies: `skills` and `instructions` leave the reserved groups because S-008 adds `bob skills` and `bob instructions`; `knowledge` and `mail` stay reserved. Interfaces, the command table: one row names S-008's commands by reference to S-008 Interfaces and REQ-012, which own them; the `bob roles change` row calls `roles.list` first for the instructions' version token when the change gives instructions, because `roles.change` writes instructions only with that token (S-008 REQ-007). AC-001.3: the reserved-group example becomes `bob knowledge list`. No identifier added or retired. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, finding B7. The `bob roles change` row follows from S-008 REQ-007. | S-008's tasks |
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.7 confirmed: knowledge and mail stay reserved, bob skills and bob instructions exist, bob roles change reads the token first (T-366 to T-369) | none |
 | 2026-11-18 | v0.8. Definitions (Group, Reserved group), Users (Later specs), Exclusions (Commands for later components), Interfaces (the conventions' reserved groups) and Dependencies: `mail` leaves the reserved groups because S-009 adds `bob mail`; only `knowledge` stays reserved. Interfaces, the command table: one row names S-009's `bob mail` commands by reference to S-009 Interfaces and REQ-017, which own them; `bob jobs list` gains `--mail`, the account filter; `bob jobs show` prints the email details and request mark that `jobs.get` carries; `bob jobs complete` gains `--mail-text`, sent as `jobs.complete`'s `mailText`. REQ-004: `bob jobs show` prints a job's email details and request mark, and `bob jobs complete` takes `--mail-text`. No identifier added or retired. | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18. | S-009's tasks |
+| 2026-11-22 | v0.9. REQ-001: the top-level commands include S-010's `upgrade`, `rollback` and `uninstall`. Users (Later specs), Exclusions (Commands for later components, An install launcher) and Interfaces, the command table: S-010 adds the `service` group and the three top-level commands, and its install script puts `bob` on the `PATH`; one row names them by reference to S-010 Interfaces and REQ-004 to REQ-011, which own them. No identifier added or retired. | Cross-spec amendment carried by S-010 Installation and service setup, product owner decisions of 2026-11-22. | S-010's tasks |

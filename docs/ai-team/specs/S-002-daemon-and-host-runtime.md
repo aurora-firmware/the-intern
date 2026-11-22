@@ -1,6 +1,6 @@
 ---
 title: Daemon and host runtime
-version: '0.17'
+version: '0.18'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-16'
 author: planner
@@ -337,7 +337,8 @@ versions and the worker-thread count"), `test/service/bob_serve.test.ts`.
 The daemon SHALL run in the foreground and never fork itself into the background. It writes diagnostics to standard
 error. It exits with status 0 only after a requested shutdown. Every other exit (startup failure, storage failure,
 unexpected error) has a non-zero status. The supervisor restarts the daemon on a non-zero exit. Installation registers
-the daemon with systemd and launchd so that it starts when the machine starts, without anyone logging in.
+the daemon with systemd on Linux so that it starts when the machine starts, without anyone logging in (S-010 REQ-004).
+The launchd registration on macOS comes with macOS releases (S-000, Project exclusions).
 
 #### AC-004.1 — `bob serve` in the foreground
 
@@ -350,12 +351,12 @@ the daemon with systemd and launchd so that it starts when the machine starts, w
 
 #### AC-004.2 — Started and restarted by the supervisor
 
-- **Given:** the daemon registered with systemd on Linux and launchd on macOS as installation does it
+- **Given:** the daemon registered with systemd on Linux as installation does it (S-010 REQ-004)
 - **When:** the machine starts, and later the daemon is killed with a non-zero exit
 - **Then:** it starts without a login, is restarted, and its run resumes
 
-**Verification:** demonstration — S-002 live acceptance test 3 (Success Criteria 4), once Installation's supervisor
-registration exists (`docs/development/release_form.md`, "What is still unverified").
+**Verification:** demonstration — S-002 live acceptance test 3 (Success Criteria 4), on Linux, by S-010 AC-004.2. The
+macOS half waits for macOS releases.
 
 ### REQ-005 — Shutdown
 
@@ -1008,8 +1009,8 @@ records the two capacity constants by amendment.
 - **pi agent login, settings and model registry** of the service account (the `pi-coding-agent` package). The login
   refreshes its own token under its own lock (REQ-018).
 - **Platforms.** Linux x64 and Apple silicon macOS, with the XDG base directories as resolved in REQ-006. The
-  supervisor registration with systemd and launchd comes from S-000's Installation and service setup (REQ-004); until
-  it exists, live acceptance test 3 can't run.
+  supervisor registration with systemd comes from S-010 (REQ-004); the launchd registration comes with macOS releases,
+  and until then live acceptance test 3 runs on Linux only.
 - **S-001** defines the conversations, roles, seats and coordination this daemon runs, and the settings the
   configuration file holds.
 - **S-003, the control-endpoint spec**, defines the listeners that expose the catalogue.
@@ -1029,16 +1030,17 @@ records the two capacity constants by amendment.
    REQ-018). Measured by `npm run test:live` (`test/live/live_daemon.ts`) against a real model.
 3. Live acceptance test 2: a `kill -9` during a long `bash` call, then a restart by hand; the run continues with an
    interrupted result and its submission settles once (REQ-008). Measured by `npm run test:live`.
-4. Live acceptance test 3: registered with systemd on Linux and launchd on macOS as installation does it, the daemon
-   starts at machine startup without a login; killing it with a non-zero exit gets it restarted, and the run resumes
-   (REQ-004, REQ-007, REQ-008). Measured by hand on each platform once Installation's supervisor registration exists.
+4. Live acceptance test 3: registered with systemd on Linux as installation does it (S-010), the daemon starts at
+   machine startup without a login; killing it with a non-zero exit gets it restarted, and the run resumes (REQ-004,
+   REQ-007, REQ-008). Measured by hand on Linux by S-010 AC-004.2; the macOS half, with launchd, waits for macOS
+   releases.
 5. Without the test switch, `daemon.status` reports 32 worker threads, and no operation exists outside the catalogue's
    read and control marks (REQ-009, REQ-017). Measured by `npm test`.
 
 ## Implementation Order
 
-Delivered: every phase below is implemented, apart from live acceptance test 3, which waits for Installation's
-supervisor registration.
+Delivered: every phase below is implemented, apart from live acceptance test 3, which waits for S-010's systemd
+registration on Linux and for macOS releases on macOS.
 
 | Phase | What | Depends On |
 |---|---|---|
@@ -1046,7 +1048,7 @@ supervisor registration.
 | 2 | Real models: pi agent login, model validation, settings mapping, closing connections on shutdown; live test 1 | Phase 1 |
 | 3 | Service layer with the read and control catalogue, and the observation feed | Phase 1 |
 | 4 | Admission and worker threads, durable across restarts | Phase 3 |
-| 5 | Supervision: storage-failure exit, shutdown bound, live tests 2 and 3 with the installed supervisor registration | Phases 1–4, the bootstrap plan's supervisor registration |
+| 5 | Supervision: storage-failure exit, shutdown bound, live tests 2 and 3 with the installed supervisor registration | Phases 1–4, S-010's supervisor registration |
 
 S-001 phase 1 needs phases 1 to 3 of this spec. S-001 phase 4 needs phase 4.
 
@@ -1078,3 +1080,4 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-13 | v0.16. Skills and instructions (S-008). REQ-006: the data directory also holds the internal folder of instruction files and shipped skills. REQ-021 and Configuration Requirements, Configuration file: the file holds the shipped roles' changed settings other than their instructions, and S-008's `[skills]` section; instructions are files, and the older `instructions` key and skill paths are read as S-008 REQ-011 states. REQ-002, AC-002.1, AC-002.2 and Workflow: step 1 checks the `[skills]` table, its search paths and the older keys; step 3, after single ownership, seeds and upgrades the internal folder and converts the older keys; the step numbers stay. Interfaces and REQ-012: the catalogue adds `skills.list`, `skills.enable`, `skills.disable`, `skills.paths.list`, `skills.paths.add`, `skills.paths.remove`, `skills.restore`, `instructions.list`, `instructions.restore`, `files.read` and `files.write`; `roles.list` returns instructions with a version token and default skills as names; `conversations.get` and `conversations.list` return the enabled set. Interfaces, the feed, REQ-014 and AC-014.2: the instance snapshot carries each enabled set, and the new deltas `skills_changed` and `files_changed`. REQ-022 and AC-022.3: a role's tools, default skills, model, thinking level and workspace still apply only to agents seated afterwards, while an instructions edit reaches running agents from their next model request, and a role's instruction file is guarded by its version token. Assumptions name S-008. No identifier added or retired. The feed: a seat change is followed by a `skills_changed` delta with the new defaults. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, findings B1, B3 to B5, C1 and C2. S-002 owns the catalogue, the feed and startup. | S-008's tasks |
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.16 confirmed: startup steps 1 and 3, the eleven S-008 operations, enabled sets in reads and the snapshot, skills_changed and files_changed (T-331 to T-335, T-355 to T-364) | none |
 | 2026-11-18 | v0.17. Email (S-009). REQ-018 and AC-018.1: credentials are used in place, except that the instance keeps the mail passwords and client secrets a team member gives it, and the OAuth tokens it obtains, in its owner-only secrets store, never in the database or anywhere else; AC-018.1 allows credential strings in that store only. REQ-006: the instance directories hold the secrets store, in an owner-only directory, with owner-only files. REQ-021 and Configuration Requirements, Configuration file: the file holds S-009's `[mail]` and `[[mail_account]]` sections, and no mail secret. REQ-012: the email origin holds the message ID, the sender and the account name, which Email observes. REQ-002 and Workflow: step 8 removes the mail secrets of accounts the file no longer holds, then starts the listeners, the scheduler and mail intake; the step numbers stay. Interfaces and REQ-012: the catalogue adds `mail.accounts.list`, `mail.accounts.get`, `mail.accounts.create`, `mail.accounts.change`, `mail.accounts.remove`, `mail.accounts.signin`, `mail.accounts.test`, `mail.notices.get` and `mail.notices.set`. Interfaces, the feed, and REQ-014: the instance feed adds the `mail_account_status` delta. Interfaces, `daemon.status`, and REQ-012: the status operation reports each mail account's status. No identifier added or retired. Revised 2026-11-19 on the same branch: the store is the instance's secrets store for every account it connects to, not for mail only; mail accounts are its only users today (product owner decision). | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18 | S-009's tasks |
+| 2026-11-22 | v0.18. REQ-004, AC-004.2, Assumptions (Platforms) and Success Criteria 4: installation registers the daemon with systemd on Linux (S-010 REQ-004), and live acceptance test 3 runs on Linux by S-010 AC-004.2; the launchd registration and the macOS half of the test wait for macOS releases. No identifier added or retired. | Cross-spec amendment carried by S-010 Installation and service setup; product owner decision of 2026-11-22 that releases are Linux x64 only until a Mac can verify one. | S-010's tasks |
