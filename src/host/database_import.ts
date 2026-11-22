@@ -148,7 +148,8 @@ async function placeCopy(stateDir: string, databaseFile: string, file: string): 
  * naming the reason and changing nothing, when a daemon runs, when the state directory holds the database file or
  * its `-wal` or `-shm` file, when the file isn't a SQLite database, and when its job or pi-durable schema is newer
  * than this release's. With `ownerLockToken` equal to the live owner lock's token, the lock's holder has handed the
- * lock over: the import runs under it and leaves it held. An older job schema is migrated at the next start. The copy is owner-only from its creation.
+ * lock over: the import runs under it and leaves it held. An older job schema is migrated at the next start. The copy
+ * is owner-only from its creation.
  */
 export async function importDatabase(
     input: { stateDir: string; file: string; ownerLockToken?: string },
