@@ -2,7 +2,7 @@
 id: S-010
 title: Installation and service setup
 version: '0.1'
-status: review  # draft | review | approved | superseded
+status: approved  # draft | review | approved | superseded
 created: '2026-11-22'
 author: planner
 ---
