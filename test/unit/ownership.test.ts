@@ -244,6 +244,19 @@ describe("release", () => {
         await assert.rejects(stat(join(env.stateDir, "owner.lock")), { code: "ENOENT" });
     });
 
+    it("refuses a second acquisition in this process while the first handle is unreleased", async () => {
+        await acquireOwnership(env.stateDir);
+
+        await assert.rejects(acquireOwnership(env.stateDir), OwnershipRefusedError);
+    });
+
+    it("takes over again once the first handle is released", async () => {
+        const handle = await acquireOwnership(env.stateDir);
+        await handle.release();
+
+        await acquireOwnership(env.stateDir);
+    });
+
     it("leaves the lock file alone when another daemon's token is in it", async () => {
         const handle = await acquireOwnership(env.stateDir);
         const foreign = JSON.stringify({ pid: process.pid, bootTime: currentBootTime(), token: "someone-else" });
@@ -343,6 +356,17 @@ describe("acquireInstallLock", () => {
         assert.equal((await readInstallLock()).pid, process.pid);
     });
 
+    it("refuses a second acquisition in this process while the first handle is unreleased", async () => {
+        await acquireInstallLock(env.stateDir, "install");
+
+        await assert.rejects(acquireInstallLock(env.stateDir, "update"), (error: unknown) => {
+            assert.ok(error instanceof InstallLockRefusedError);
+            assert.equal(error.commandName, "install");
+            assert.equal(error.ownerPid, process.pid);
+            return true;
+        });
+    });
+
     it("does not touch owner.lock", async () => {
         await acquireInstallLock(env.stateDir, "install");
 
@@ -372,6 +396,24 @@ describe("readOwnerLock", () => {
         );
 
         assert.deepEqual(await readOwnerLock(env.stateDir), { pid: child.pid, token: "live-token" });
+    });
+
+    it("returns this process as the holder while its handle is unreleased", async () => {
+        await acquireOwnership(env.stateDir);
+
+        assert.deepEqual(await readOwnerLock(env.stateDir), {
+            pid: process.pid,
+            token: (await readFile(join(env.stateDir, "owner.lock"), "utf8")).match(/"token":"([^"]+)"/)?.[1],
+        });
+    });
+
+    it("returns undefined for a lock with this pid whose handle this process does not hold", async () => {
+        await writeFile(
+            join(env.stateDir, "owner.lock"),
+            JSON.stringify({ pid: process.pid, bootTime: currentBootTime(), token: "orphan" }),
+        );
+
+        assert.equal(await readOwnerLock(env.stateDir), undefined);
     });
 
     it("returns undefined when there is no owner lock", async () => {
