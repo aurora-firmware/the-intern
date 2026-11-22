@@ -225,6 +225,7 @@ describe("install script failures leave nothing behind", { skip: !hostIsSupporte
         const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, BOB_RELEASE_URL: releases };
         delete env.BOB_INSTALL_LIB;
         const result = spawnSync("sh", [SCRIPT, "--version", VERSION], {
+            cwd: root,
             encoding: "utf8",
             env,
             timeout: scaled(20000),
@@ -266,6 +267,19 @@ describe("install script failures leave nothing behind", { skip: !hostIsSupporte
         assert.equal(run.status, 1);
         assert.match(run.stderr, /does not match/);
         assert.deepEqual(listing(), []);
+    });
+
+    it("removes only its own folders when the home folder's name has a space", () => {
+        const parent = join(root, "people");
+        home = join(parent, "Ann Lee");
+        const sibling = join(parent, "Ann");
+        mkdirSync(home, { recursive: true });
+        mkdirSync(sibling);
+        writeFileSync(join(sibling, "precious"), "not the installer's");
+        const run = install();
+        assert.equal(run.status, 1);
+        assert.deepEqual(listing(), []);
+        assert.ok(existsSync(join(sibling, "precious")));
     });
 
     it("leaves no current link when the bob link cannot be made", () => {
