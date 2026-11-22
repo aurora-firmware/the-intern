@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { MAIL_HEADERS } from "../../src/mail/mail_model.ts";
 import { composeMessage, parseMessage } from "../../src/mail/mime.ts";
@@ -99,8 +100,14 @@ describe("composeMessage and parseMessage", () => {
     });
 
     function importersOf(pattern: string): string[] {
-        const output = execFileSync("git", ["grep", "-l", "-E", pattern, "--", "src"], { encoding: "utf8" });
-        return output.trim().split("\n");
+        const srcDir = join(import.meta.dirname, "..", "..", "src");
+        const matcher = new RegExp(pattern);
+        return readdirSync(srcDir, { recursive: true, encoding: "utf8" })
+            .filter((entry) => entry.endsWith(".ts"))
+            .map((entry) => entry.split("\\").join("/"))
+            .filter((entry) => matcher.test(readFileSync(join(srcDir, entry), "utf8")))
+            .map((entry) => `src/${entry}`)
+            .sort();
     }
 
     it("imports_nodemailer_only_in_the_mime_and_smtp_adapters", () => {
