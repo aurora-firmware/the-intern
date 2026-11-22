@@ -52,14 +52,14 @@ describe("bundle builder patches", () => {
     it("fails naming the file and the text when the text matches zero times", () => {
         assert.throws(
             () => applyPatches({ "src/a.ts": "one" }, [{ file: "src/a.ts", find: "missing", replace: "x" }]),
-            /src\/a\.ts.*missing.*0 times/s,
+            /missing.*0 times.*src\/a\.ts/s,
         );
     });
 
     it("fails naming the file and the text when the text matches more than once", () => {
         assert.throws(
             () => applyPatches({ "src/a.ts": "ab ab" }, [{ file: "src/a.ts", find: "ab", replace: "x" }]),
-            /src\/a\.ts.*ab.*2 times/s,
+            /"ab".*2 times.*src\/a\.ts/s,
         );
     });
 
@@ -110,7 +110,7 @@ describe("bundle launcher", () => {
 
         assert.equal(result.status, 0, result.stderr);
         const lines = result.stdout.trimEnd().split("\n");
-        assert.deepEqual(lines, [join(root, "bin", "..", "app", "src", "cli", "bob.ts"), "status", "two words"]);
+        assert.deepEqual(lines, [`${join(root, "bin")}/../app/src/cli/bob.ts`, "status", "two words"]);
     });
 
     it("is a POSIX sh script", () => {
