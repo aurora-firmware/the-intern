@@ -12,8 +12,9 @@ The Intern is one daemon process (`bob serve`) that owns one database, one SQLit
 directory. The file holds pi-durable's tables and the job store's `intern_` tables
 ([S-002](../ai-team/specs/S-002-daemon-and-host-runtime.md), [S-004](../ai-team/specs/S-004-jobs.md),
 [ADR-001](../ai-team/decisions/ADR-001-one-daemon-process-owns-one-pi-durable-database.md)).
-Nothing else reads or writes that file, except the import step while the daemon is stopped. The operating system's
-supervisor starts the daemon and restarts it after an error exit, and unfinished work resumes from its checkpoints.
+Nothing else reads or writes that file, except the import step and the installation commands while the daemon is
+stopped (see Installation and service setup). The operating system's supervisor starts the daemon and restarts it after
+an error exit, and unfinished work resumes from its checkpoints.
 
 ```
  ways in: command line (local) · web interface (network) · email
@@ -209,7 +210,9 @@ supervisor starts the daemon and restarts it after an error exit, and unfinished
   `bob jobs follow` and `bob chat`) read the feed through `followFeed` and `createEntryTracker` in `feed_follower.ts`:
   it subscribes, passes each snapshot and delta to the command, subscribes again when the feed ends `lagging` or the
   daemon is unreachable or `unavailable`, and pages `conversations.entries` forward from the cursor it kept, so a
-  restart or a lag costs no entry. The command line keeps no file, cache or history of its own (S-005 REQ-016).
+  restart or a lag costs no entry. The command line keeps no file, cache or history of its own (S-005 REQ-016), apart
+  from the installation commands (`install_commands.ts`), which load `src/install/` inside `run` and are described
+  under Installation and service setup.
 - **Failure.** A storage error closes the harness; the daemon exits non-zero rather than reopening the database
   (S-002, ADR-001). A failed job store write is one too: `createJobStore` reports it through `onWriteFailure`, and the
   daemon logs it and runs the same shutdown (S-004 REQ-020).
@@ -1427,6 +1430,197 @@ the logs, the recorded feed, command output and every request the fake model rec
 `npm run test:live:mail` runs `test/live/live_mail.ts`, a real low-cost model against the fake mail server, for
 AC-008.2 and AC-016.2.
 
+## Installation and service setup
+
+This is how S-010's behaviour is built. A requirement number with no spec named in this section is S-010's. The
+durable parts are in
+[ADR-012](../ai-team/decisions/ADR-012-the-service-runs-the-current-version-through-a-stable-link-and-a-hold-file-keeps-it-stopped.md)
+(the registration and the hold file) and
+[ADR-013](../ai-team/decisions/ADR-013-installed-versions-share-one-versioned-layout-and-resume-each-other-s-operations.md)
+(the layout every version shares, the journal, the handed-down owner lock and the startup report), and the module rule
+in [ADR-005](../ai-team/decisions/ADR-005-commands-load-no-daemon-code-unless-they-run-it.md) decision 2. The release
+form is `docs/development/release_form.md`'s form B, which the product owner accepted for S-010.
+
+```
+ tag vX.Y.Z on main ─► release workflow: verify ─► checks ─► bundles ─► publish: GitHub Release, 5 assets
+                                                                                    │
+ install.sh ── download, check, unpack ──► ~/.local/lib/the-intern/  ◄──────────────┘
+                                            versions/0.1.0/  versions/0.2.0/      (bin/bob, node/, app/)
+ ~/.local/bin/bob ─► current/bin/bob        current ─► versions/0.2.0   previous ─► versions/0.1.0
+                                            service.json  service.hold  install.lock  operation.json
+ systemd user unit or launchd daemon ─► current/bin/bob serve, with the directories service.json fixes
+                                            │ writes
+                                            ▼
+ <state dir>/startup.json                   <state dir>/upgrades/: pre-upgrade copies, set-aside databases
+```
+
+### Modules
+
+| Module | Holds |
+|---|---|
+| `src/cli/install_commands.ts` | The `service` group (`install`, `remove`, `status`) and the top-level `upgrade`, `rollback` and `uninstall`, as `CommandSpec` entries. Each `run` loads its code from `src/install/` by a dynamic `import()` (ADR-005 decision 2) |
+| `src/install/install_model.ts` | Pure: version parsing and order, the platform check, each command's refusals, the step order of an upgrade and a rollback, the resume rule, and the classification of a startup report |
+| `src/install/program_layout.ts` | The program folder's paths, the version folders and the atomic switch of `current` and `previous` (ADR-013 decisions 1 and 2) |
+| `src/install/operation_journal.ts` | `operation.json`: written atomically, read, and resumed (ADR-013 decision 4) |
+| `src/install/release_source.ts` | The download location: finding the latest release, downloading an asset, checking it against its `.sha256` file, and unpacking it with the system's `tar` |
+| `src/install/service_manager.ts`, `systemd_service.ts`, `launchd_service.ts` | Register, remove, stop, start and read the state of the service; the unit and plist are rendered by pure functions; the supervisors' commands go through an injected command runner (ADR-012) |
+| `src/install/state_copy.ts` | The pre-upgrade copy, setting a database aside, putting back the configuration file and the internal folder, and running the previous version's import step (ADR-013 decisions 5 and 7) |
+| `src/install/ready_wait.ts` | The 60-second wait: `daemon.status` through the client library over the registration's runtime directory, and the startup report |
+| `src/install/upgrade.ts`, `rollback.ts`, `uninstall.ts`, `service_commands.ts` | Each command's steps, the questions it asks, and what it prints |
+| `src/daemon/startup_report.ts` | The startup report's format, written by the daemon and read by the installation commands (ADR-013 decision 6). Imports only Node modules |
+| `src/daemon/ownership.ts` | The lock mechanism, shared by the owner lock and `install.lock`; a lock holding the checker's own pid is stale (B-056); the owner lock is handed to the import step by `BOB_OWNER_LOCK_TOKEN`, which only `importDatabase` accepts |
+| `release/` | Release tooling, outside `src/`, so no bundle carries it: `check_release.ts`, `build_bundle.ts`, `install.sh`, `release_notes.md`. `tsconfig.json` and `biome.json` include the folder |
+
+### The bundle
+
+- **Layout.** `the-intern-X.Y.Z-<platform>.tar.gz` unpacks to one folder holding `bin/bob`, `node/` and `app/`.
+  `node/` is the official Node build for the platform (`bin/node` and its licence; no `npm`, headers or docs). `app/`
+  holds `package.json`, `package-lock.json`, `README.md`, `src/`, `web/ui/` and the production `node_modules/`.
+- **Launcher.** `bin/bob` is a POSIX `sh` script. It finds its own real folder through the links, then runs
+  `exec <folder>/../node/bin/node <folder>/../app/src/cli/bob.ts "$@"`, so a command keeps its version's files while
+  `current` moves (ADR-013 decision 1).
+- **Node.** The version of the Node that runs the build job (`process.version`), which is the one CI tested with, from
+  `https://nodejs.org/dist/`, checked against that release's `SHASUMS256.txt` before use.
+- **Dependencies.** One `npm ci --omit=dev --ignore-scripts` serves both platforms. No production package is platform
+  specific (no `os` or `cpu` field in the lockfile, checked on 2026-11-22), and the two packages with install scripts
+  (`protobufjs`'s version notice and `@google/genai`'s `prepare`, which runs only for git installs) need neither.
+  `@earendil-works/pi-tui`'s prebuilt files for every platform ride along unchanged.
+- **Version.** `app/package.json`'s version is the release's, which the release workflow checks against the tag, so
+  `bob status` reports it (S-002 REQ-020).
+- **Build.** `release/build_bundle.ts <platform> [--version X.Y.Z] [--patch <file>]` stages the folder and writes the
+  archive with GNU `tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=<commit time>`, then the `.sha256`
+  file in `sha256sum` format. It fails when an archive is over 150 MB (REQ-015). Both platforms build on the Linux
+  runner: only `node/` differs. `--version` and `--patch` are for test bundles only (see Tests).
+
+### The program folder and the download location
+
+- **Paths.** `~/.local/lib/the-intern/` on both platforms, and the link `~/.local/bin/bob` (ADR-013 decision 1). The
+  install script and every installation command refuse a home path with a `node_modules` segment, and a program folder
+  that overlaps an instance directory. Every folder they create is `0700` and every file owner-only (`umask 077`).
+- **Download location.** Without `BOB_RELEASE_URL`, an asset is
+  `https://github.com/aurora-firmware/the-intern/releases/download/vX.Y.Z/<asset>`, and the latest version is the tag
+  that `https://github.com/aurora-firmware/the-intern/releases/latest` redirects to. With it, an asset is
+  `<BOB_RELEASE_URL>/vX.Y.Z/<asset>` and the latest version is the tag written in the text file
+  `<BOB_RELEASE_URL>/latest`. A value starting with `/` or `file:` is read from disk, `http:` and `https:` with
+  `fetch` (with `curl` in the script).
+- **Checking.** A bundle is downloaded into a `.staging-*` folder of the program folder, checked against its `.sha256`
+  file (a missing file is a refusal), unpacked there, checked to hold `bin/bob` and the expected version, and renamed
+  into `versions/` (REQ-013). A failure removes the staging folder.
+
+### The install script
+
+`release/install.sh` is POSIX `sh`, so it runs under `dash` and macOS's `sh`. The release workflow writes the release's
+version into the copy it publishes, so the script installs its own version unless `--version` names another. Its checks
+are functions that take the platform facts as arguments: the system and machine (`uname -s`, `uname -m`), the C library
+(`getconf GNU_LIBC_VERSION`, which fails on musl), systemd as the init system (`/run/systemd/system`), and the user id
+(`id -u`). It runs `main` only when `BOB_INSTALL_LIB` is unset, so unit tests source it and call each check. Installed
+means `current` exists; a `~/.local/bin/bob` that isn't the script's own link is a refusal too. It downloads with
+`curl -fsSL`, checks with `sha256sum -c` or `shasum -a 256 -c`, and removes its temporary folder on every exit
+(`trap`). It never runs `sudo`.
+
+### Service registration
+
+ADR-012 gives the unit, the plist, the hold file and the record. Every installation command but `bob service status`
+takes `install.lock` first and then finishes any operation `operation.json` shows (ADR-013 decisions 3 and 4);
+`bob service status` takes no lock and changes nothing. The rest:
+
+- **`bob service install`.** It resolves the instance directories (S-002 REQ-006) and the pi agent folder from its
+  environment, or takes them from `service.json` when it exists (REQ-004: run again, it changes nothing else). On
+  Linux it checks `systemctl --user` reaches the user manager, turns lingering on (as itself, then through `sudo` on a
+  terminal, `sudo -n` without one), then writes the unit and the record, runs `systemctl --user daemon-reload`,
+  `enable` and `start`. On macOS it writes `<state dir>/service.log` and the record, then runs one `sudo /bin/sh -c`
+  that installs the plist as root and runs `launchctl bootstrap system`. A refusal at any of these steps undoes the
+  ones before, so nothing stays registered. It then waits for ready.
+- **The log command** it names on failure: `journalctl --user -u the-intern.service` on Linux,
+  `tail -n 100 <state dir>/service.log` on macOS.
+- **`bob service status`.** `registered`: the unit file exists and `systemctl --user is-enabled` answers, or the plist
+  exists. `startsAtBoot`: registered and enabled, and on Linux lingering is on (`loginctl show-user <user> -p Linger`);
+  on macOS the label isn't in `launchctl print-disabled system`. `running` and `version`: `daemon.status` over the
+  record's runtime directory. The directories come from `service.json`. The text form also names the current and
+  previous versions, a hold, and an operation `operation.json` shows was cut off.
+- **`bob service remove`** stops the service, removes the unit (`disable`, then `daemon-reload`) or the plist
+  (`launchctl bootout system/<label>` and the file, in one `sudo` call), and removes `service.json` and the hold file.
+
+### Upgrade and rollback
+
+Both commands take the lock and finish a cut-off operation first, as every installation command does. The journal's
+step names are also the names the test hook takes.
+
+- **`bob upgrade`.** It refuses when `service.json` is missing, when the owner lock's pid isn't the service's daemon
+  (ADR-012 decision 6), and for an older version; an equal version is "already on". It downloads and checks the bundle
+  into `versions/`, asks, writes the journal, then runs `held` (create the hold file), `stopped` (stop the service),
+  `owned` (take the owner lock), `copied` (the pre-upgrade copy, ADR-013 decision 7), `switched` (`previous`, then
+  `current`), `released` (remove the startup report, release the lock, remove the hold file, start the service), and
+  `ready`. On ready it removes the older copies that REQ-008 doesn't keep, and the journal.
+- **Not ready.** The wait ends on ready or after 60 seconds, whatever the supervisor's restarts do in between. The
+  command then reads the report (ADR-013 decision 6), holds the service again (`held`, `stopped`, `owned`) and
+  branches:
+  REQ-008's question when the database was refused as unreadable (yes on no terminal); otherwise, and on yes,
+  REQ-007's switch-back: set the database aside when it was opened, switch `current` and `previous` back, run the
+  previous version's import step, put back the configuration file and the internal folder, start, wait, and remove the
+  failed version. On no: set the database aside, mark the copy kept in `copy.json`, start the new version and wait.
+- **`bob rollback`.** It refuses without a previous version, without a copy whose `from` and `to` match `previous` and
+  `current`, and without a terminal or `--yes`. It reads the copy's time for the warning, asks, writes the journal, and
+  runs `held`, `stopped`, `owned`, `set-aside`, `switched`, `imported`, `restored`, `released`, `ready`, then removes
+  the version it left and the `previous` link.
+- **Putting files back.** The configuration file is replaced by a copy written beside it and renamed; when the copy
+  holds none, the file is moved into the upgrades folder beside the set-aside database. `instructions/` and `skills/`
+  are copied into a staging folder in the data directory, the current ones are renamed aside, the copies renamed in,
+  then `shipped-files.json` is replaced, then the aside folders are removed. Each part is a journal step, so a resume
+  repeats only what was cut off.
+- **Questions** go to standard error and read standard input only on a terminal (S-005, Command line rules).
+
+### `bob uninstall`
+
+It finishes a cut-off operation, stops and removes the service as `bob service remove` does, turns lingering off when
+`service.json` says it turned it on, asks whether to keep the data, removes `~/.local/bin/bob` when it is the program's
+link, and removes the program folder last, since the command runs from it. With removal chosen, it removes the four
+instance directories `service.json` names (the environment's when there is no record), never the pi agent folder.
+
+### Releases
+
+- **`.github/workflows/deploy.yml`** becomes the release workflow, on tags `v*`. `verify` runs
+  `release/check_release.ts`: the tag is `v` plus `package.json`'s version (a pre-release part such as `-rc.1`
+  included), and the tagged commit is an ancestor of `origin/main` (checkout with `fetch-depth: 0`). `checks` calls
+  `build.yml` (which gains `workflow_call`), so a release runs the same checks as a change, the installation cycle
+  included. `bundles` builds both bundles, their `.sha256` files and the stamped `install.sh`, and uploads them as an
+  artifact. `publish` needs all of them and runs `gh release create vX.Y.Z <the 5 assets> --verify-tag --title vX.Y.Z
+  --notes-file release/release_notes.md`, with `--prerelease` for a tag with a pre-release part. The GitHub CLI comes
+  from Debian's packages in the job's container.
+- **Permissions.** The workflow sets `contents: read`; only `publish` sets `contents: write`, with `GH_TOKEN` from
+  `GITHUB_TOKEN`. A failure in any job before it publishes nothing, and a tag that already has a release fails
+  `gh release create`.
+- **Release notes** say that macOS on Apple silicon isn't yet verified on a real Mac (S-010 Exclusions).
+
+### Tests
+
+- **Unit tests** (`test/unit/`) cover `install_model.ts`, the unit and plist renderers, every supervisor command path
+  on both platforms with a fake command runner (refusals of AC-004.3 included), the lock and its handover, the journal
+  and resume, the startup report, `check_release.ts`, and `install.sh`'s checks, sourced in `sh` with the facts as
+  arguments.
+- **The installation cycle** (`test/install/`, `npm run test:install`, not part of `npm test`) runs the commands of
+  real bundles under systemd. `test/install/build_test_bundles.ts` builds linux-x64 bundles from the checkout with
+  `release/build_bundle.ts`: `0.1.0`, `0.2.0`, and variants of `0.2.0` made by `--patch` files of exact text
+  replacements (each must match once), for a startup that fails before the database and a job schema older than the
+  database's. The product carries no failure switch. It lays them out for `BOB_RELEASE_URL` with a `latest` file.
+- **The rig.** `test/install/Dockerfile` is a `debian:bookworm` image with systemd, `dbus-user-session`, `curl` and
+  `ca-certificates`, and no Node. `test/install/run_cycle.sh` builds the bundles in `node:24.22.0-bookworm`, starts the
+  image privileged with `/sbin/init`, creates an account `tester` without `sudo`, turns its lingering on as root (the
+  setup step), and runs the tests as `tester` with `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` set. The test
+  runner is the test bundle's own `node`, at a path not on the `PATH` the commands get, so the commands find no Node
+  (AC-002.1).
+- **The fake model.** `test/install/fake_model_server.ts` answers OpenAI-style chat completions on the loopback, each
+  reply a pure function of the transcript. The test's pi agent folder names it in `models.json` and `settings.json`, so
+  the shipped daemon reaches ready and runs jobs with no test code inside it.
+- **The test hook.** `BOB_INSTALL_TEST_STOP_AFTER=<step>` makes an upgrade or rollback write `stopped after <step>` to
+  standard error after that journal step and wait for SIGUSR2 to go on. The cut-off cases (AC-012.1) kill it there
+  with `kill -9`; AC-006.4 starts `bob serve` there, then sends SIGUSR2. The manual doesn't mention it.
+- **CI.** `build.yml` gains the job `Installation Cycle`. It runs on the self-hosted runner's host, without a job
+  container, because it starts the privileged rig with Docker, and runs `test/install/run_cycle.sh`. It blocks a merge
+  like the other checks, and uploads `.tmp/test-logs/install.log` when it fails.
+- **B-056.** Its fix, a lock that holds the checker's own pid counts as stale, is part of the shared lock mechanism, so
+  it lands before or with `install.lock`, and before the cycle kills and restarts processes.
+
 ## Rejected approaches
 
 Implementation approaches weighed and rejected. ADR-001, Alternatives Considered, gives the full reasoning for the ones
@@ -1478,6 +1672,14 @@ it records.
 - **Next.js, or a compile step for the pages.** Rejected: see ADR-006, Alternatives Considered.
 - **A feed stream in each browser tab, or a whole view in each delta.** Rejected: see ADR-007 and ADR-008, Alternatives
   Considered.
+- **An npm package, OS packages or a single executable as the release.** Rejected: see
+  [release_form.md](release_form.md) and S-010, Alternatives Considered.
+- **Rewriting the service registration at each upgrade, or holding the service through the owner lock alone.**
+  Rejected: see ADR-012, Alternatives Considered.
+- **Handing the owner lock to the import step by releasing it, or undoing a cut-off upgrade.** Rejected: see ADR-013,
+  Alternatives Considered.
+- **Prebuilt release tooling such as a third-party release action or a bundler.** Rejected: the GitHub CLI, `tar` and
+  a script of our own build and publish the bundles, and the release runs the files the tests run.
 
 ## Components and owning specs
 
@@ -1494,6 +1696,7 @@ that defines it.
 | Web interface | The team's browser view and configuration, built only on service operations | S-006 for jobs, conversations, roles, workspaces, status and the export download; later specs add their own pages |
 | Command line | The `bob` commands, built only on service operations | S-005 |
 | Skills and instructions | The common prompt, the roles' instruction files and the shipped skills in the internal folder, the skill catalog and its search paths, each agent's enabled set, and the `skill` tool | S-008 |
+| Installation and service setup | The release bundles and workflow, the install script, the service registration, upgrade, rollback and uninstall | S-010 |
 | Team knowledge | Reaching, reading and updating the wiki and other knowledge sources | No spec yet |
 
 Development infrastructure components (S-000, Components, Development infrastructure) are not part of the runtime and
@@ -1512,8 +1715,9 @@ are not described here.
   pi-durable. The service layer and every other component depend on the host's interface, so an upgrade of the pi
   packages touches a few files.
 - **Skills and instructions.** `src/skills/skill_resolution.ts` and `src/prompt/role_prompt.ts` import nothing with
-  I/O. Only `src/host/skill_set.ts` and `src/host/seating.ts` write the enabled set, and only the skills component's
-  file store writes an instruction or skill file (ADR-009 decision 5).
+  I/O. Only `src/host/skill_set.ts` and `src/host/seating.ts` write the enabled set, and in the daemon only the skills
+  component's file store writes an instruction or skill file (ADR-009 decision 5). Outside it, only an installation
+  command's restore of a pre-upgrade copy writes them, while no daemon runs (ADR-009 decision 2, ADR-013).
 - **Accounts and mail.** `src/accounts/` imports no mail library and no pi package, and only it reads or writes the
   secrets store (ADR-010). `src/mail/mail_model.ts` imports nothing with I/O, so the rules of S-009 REQ-001, REQ-012,
   REQ-013 and REQ-016 are tested without a server. Only the adapters `src/mail/imap_client.ts`, `smtp_client.ts` and
@@ -1527,7 +1731,13 @@ are not described here.
 - **The command table imports no daemon module besides the path layout.** A `bob` command reaches the daemon only
   through the client library, except `serve` and `import`, which load the daemon's code by a dynamic import inside
   `run` (S-005 REQ-016, ADR-005). The path layout, `src/daemon/state_layout.ts`, is the one daemon file every command
-  loads (`connection.ts` uses it for the runtime directory); it imports only Node modules.
+  loads (`connection.ts` uses it for the runtime directory); it imports only Node modules. The installation commands
+  load `src/install/` the same way, and from the daemon only `ownership.ts` and `startup_report.ts`, which import only
+  Node modules (ADR-005 decision 2).
+- **Installation.** `src/install/install_model.ts` imports nothing with I/O, so version order, platform checks, the
+  refusals, the classification of a startup report and the resume rule are tested without a machine. Only
+  `systemd_service.ts` and `launchd_service.ts` run the supervisors' commands, through an injected command runner.
+  Nothing in `src/install/` imports the host, a pi package or the service layer.
 - **Web pages stay in the browser's own world.** Modules in `web/ui/` import only each other, `preact`, `preact/hooks`
   and the two browser-safe client modules, by relative path in a worker (ADR-006). They use no secure-context API
   (ADR-007 decision 8). Decision logic such as the board's columns, the catch-up of entries and the worker's feed loop

@@ -3,7 +3,8 @@
 This page compares three ways to release The Intern and recommends one for the product owner to accept or change at
 review. It settles the "What form does a release take" question of Installation and service setup in
 [S-000](../ai-team/specs/S-000-system-overview.md), and gives the facts the boot-time-service and upgrade questions
-need. It does not change [tech_stack.md](tech_stack.md); recording the choice there is a follow-up after the decision.
+need. The product owner accepted form B for S-010 on 2026-11-22; [tech_stack.md](tech_stack.md) records the choice
+and [architecture.md](architecture.md) the design.
 
 The supported platforms are Linux on x64 and macOS on Apple silicon (S-000, Project exclusions). The service runs as the
 installing person's account (S-000, Installation and service setup; [ADR-002](../ai-team/decisions/ADR-002-equal-team-members-bounded-by-the-service-account.md),
