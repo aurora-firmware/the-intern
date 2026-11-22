@@ -3,13 +3,26 @@ import { link, open, readFile, rename, unlink } from "node:fs/promises";
 import { uptime } from "node:os";
 import { join } from "node:path";
 
-const LOCK_FILE_NAME = "owner.lock";
+const OWNER_LOCK_FILE_NAME = "owner.lock";
+const INSTALL_LOCK_FILE_NAME = "install.lock";
 const LOCK_FILE_MODE = 0o600;
 const BOOT_TIME_TOLERANCE_MS = 60_000;
 
-type LockContent = { pid: number; bootTime: number; token: string };
+type LockContent = { pid: number; bootTime: number; token: string; command?: string };
 
 export type OwnershipHandle = { release(): Promise<void> };
+
+export class InstallLockRefusedError extends Error {
+    commandName: string;
+    ownerPid: number;
+
+    constructor(commandName: string, ownerPid: number) {
+        super(`${commandName} is running (pid ${ownerPid})`);
+        this.name = "InstallLockRefusedError";
+        this.commandName = commandName;
+        this.ownerPid = ownerPid;
+    }
+}
 
 export class OwnershipRefusedError extends Error {
     stateDir: string;
@@ -31,9 +44,9 @@ function parseLock(raw: string): LockContent | undefined {
     try {
         const parsed: unknown = JSON.parse(raw);
         if (typeof parsed !== "object" || parsed === null) return undefined;
-        const { pid, bootTime, token } = parsed as Record<string, unknown>;
+        const { pid, bootTime, token, command } = parsed as Record<string, unknown>;
         if (typeof pid !== "number" || typeof bootTime !== "number" || typeof token !== "string") return undefined;
-        return { pid, bootTime, token };
+        return { pid, bootTime, token, command: typeof command === "string" ? command : undefined };
     } catch {
         return undefined;
     }
@@ -51,6 +64,8 @@ function isProcessAlive(pid: number): boolean {
 function isLive(lock: LockContent | undefined): lock is LockContent {
     if (lock === undefined) return false;
     if (Math.abs(lock.bootTime - currentBootTime()) > BOOT_TIME_TOLERANCE_MS) return false;
+    // The checker is itself running, so a lock naming its pid was left by a dead holder whose pid was reused.
+    if (lock.pid === process.pid) return false;
     return isProcessAlive(lock.pid);
 }
 
@@ -130,23 +145,63 @@ function createHandle(lockPath: string, token: string): OwnershipHandle {
     };
 }
 
+type Acquisition = { holder: LockContent } | { handle: OwnershipHandle };
+
+/**
+ * Takes the lock at lockPath with the given content. Returns the handle, or the live holder's content when a live
+ * process of the current boot holds it; takes over a stale lock.
+ */
+async function acquireLock(lockPath: string, content: LockContent): Promise<Acquisition> {
+    if (await tryCreateLock(lockPath, content)) return { handle: createHandle(lockPath, content.token) };
+
+    const staleRaw = await readRaw(lockPath);
+    const existing = staleRaw === undefined ? undefined : parseLock(staleRaw);
+    if (isLive(existing)) return { holder: existing };
+
+    if (staleRaw !== undefined) {
+        const takenOverBy = await clearStaleLock(lockPath, staleRaw);
+        if (takenOverBy !== undefined) return { holder: await currentHolder(lockPath, takenOverBy) };
+    }
+    if (await tryCreateLock(lockPath, content)) return { handle: createHandle(lockPath, content.token) };
+    return { holder: await currentHolder(lockPath, 0) };
+}
+
+async function currentHolder(lockPath: string, fallbackPid: number): Promise<LockContent> {
+    const raw = await readRaw(lockPath);
+    const parsed = raw === undefined ? undefined : parseLock(raw);
+    return parsed ?? { pid: fallbackPid, bootTime: 0, token: "" };
+}
+
 /**
  * Takes the one-owner-per-database lock in the state directory. Refuses with OwnershipRefusedError while a live
  * daemon of the current boot holds it; takes over a stale lock.
  */
 export async function acquireOwnership(stateDir: string): Promise<OwnershipHandle> {
-    const lockPath = join(stateDir, LOCK_FILE_NAME);
     const content: LockContent = { pid: process.pid, bootTime: currentBootTime(), token: randomUUID() };
-    if (await tryCreateLock(lockPath, content)) return createHandle(lockPath, content.token);
+    const result = await acquireLock(join(stateDir, OWNER_LOCK_FILE_NAME), content);
+    if ("handle" in result) return result.handle;
+    throw new OwnershipRefusedError(stateDir, result.holder.pid);
+}
 
-    const staleRaw = await readRaw(lockPath);
-    const existing = staleRaw === undefined ? undefined : parseLock(staleRaw);
-    if (isLive(existing)) throw new OwnershipRefusedError(stateDir, existing.pid);
+/**
+ * Takes the one-installation-command-at-a-time lock in the program folder. Refuses with InstallLockRefusedError,
+ * naming the command the holder wrote, while a live process holds it; takes over a stale lock.
+ */
+export async function acquireInstallLock(programDir: string, commandName: string): Promise<OwnershipHandle> {
+    const content: LockContent = {
+        pid: process.pid,
+        bootTime: currentBootTime(),
+        token: randomUUID(),
+        command: commandName,
+    };
+    const result = await acquireLock(join(programDir, INSTALL_LOCK_FILE_NAME), content);
+    if ("handle" in result) return result.handle;
+    throw new InstallLockRefusedError(result.holder.command ?? "an installation command", result.holder.pid);
+}
 
-    if (staleRaw !== undefined) {
-        const takenOverBy = await clearStaleLock(lockPath, staleRaw);
-        if (takenOverBy !== undefined) throw new OwnershipRefusedError(stateDir, takenOverBy);
-    }
-    if (await tryCreateLock(lockPath, content)) return createHandle(lockPath, content.token);
-    throw new OwnershipRefusedError(stateDir, await currentOwnerPid(lockPath, 0));
+/** Returns the owner lock's pid and token when a live daemon holds it, or undefined when it is absent or stale. */
+export async function readOwnerLock(stateDir: string): Promise<{ pid: number; token: string } | undefined> {
+    const raw = await readRaw(join(stateDir, OWNER_LOCK_FILE_NAME));
+    const lock = raw === undefined ? undefined : parseLock(raw);
+    return isLive(lock) ? { pid: lock.pid, token: lock.token } : undefined;
 }
