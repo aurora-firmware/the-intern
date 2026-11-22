@@ -1,13 +1,20 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { StartupReport } from "../../src/daemon/startup_report.ts";
 import {
     checkPlatform,
+    classifyStartup,
     compareVersions,
     confirmation,
     decideRollback,
     decideUpgrade,
+    FRESH_START_STEPS,
+    nextStep,
     parseVersion,
+    ROLLBACK_STEPS,
     type RollbackFacts,
+    SWITCH_BACK_STEPS,
+    UPGRADE_STEPS,
     type UpgradeFacts,
     type Version,
 } from "../../src/install/install_model.ts";
@@ -185,5 +192,115 @@ describe("the confirmation", () => {
 
     it("counts no terminal and no --yes as declined", () => {
         assert.equal(confirmation({ yes: false, isStdinTerminal: false }), "declined");
+    });
+});
+
+describe("step orders", () => {
+    it("lists the upgrade steps in order", () => {
+        assert.deepEqual(UPGRADE_STEPS, ["held", "stopped", "owned", "copied", "switched", "released", "ready"]);
+    });
+
+    it("lists the rollback steps in order", () => {
+        assert.deepEqual(ROLLBACK_STEPS, [
+            "held",
+            "stopped",
+            "owned",
+            "set-aside",
+            "switched",
+            "imported",
+            "restored",
+            "released",
+            "ready",
+        ]);
+    });
+
+    it("lists the switch-back steps in order", () => {
+        assert.deepEqual(SWITCH_BACK_STEPS, [
+            "held",
+            "stopped",
+            "owned",
+            "set-aside",
+            "switched",
+            "imported",
+            "restored",
+            "released",
+            "ready",
+            "removed",
+        ]);
+    });
+
+    it("lists the fresh-start steps in order", () => {
+        assert.deepEqual(FRESH_START_STEPS, ["held", "stopped", "owned", "set-aside", "kept", "released", "ready"]);
+    });
+});
+
+describe("the resume rule", () => {
+    it("returns null when the last step of the list is done", () => {
+        assert.equal(nextStep(UPGRADE_STEPS, "ready"), null);
+    });
+
+    it("returns the first step when nothing is done", () => {
+        assert.equal(nextStep(UPGRADE_STEPS, null), "held");
+    });
+
+    it("returns the step after the last one done", () => {
+        assert.equal(nextStep(UPGRADE_STEPS, "copied"), "switched");
+    });
+
+    it("throws for a step the list does not hold", () => {
+        assert.throws(() => nextStep(UPGRADE_STEPS, "imported"), /imported/);
+    });
+});
+
+function report(overrides: Partial<StartupReport>): StartupReport {
+    return {
+        format: 1,
+        version: "0.2.0",
+        pid: 10,
+        serviceLabel: null,
+        furthestStep: 0,
+        failedStep: null,
+        failedStepName: null,
+        reason: null,
+        unreadableDatabase: false,
+        ready: false,
+        ...overrides,
+    };
+}
+
+describe("startup report classification", () => {
+    it("classifies a ready report as ready", () => {
+        assert.deepEqual(classifyStartup(report({ ready: true, furthestStep: 9 })), { kind: "ready" });
+    });
+
+    it("classifies an unreadable refusal with the report's reason", () => {
+        const result = classifyStartup(
+            report({ unreadableDatabase: true, furthestStep: 4, failedStep: 4, reason: "newer database" }),
+        );
+        assert.deepEqual(result, { kind: "unreadable", reason: "newer database" });
+    });
+
+    it("says the database was opened when a failure got to step 4 or later", () => {
+        const result = classifyStartup(report({ furthestStep: 4, failedStep: 5, reason: "port taken" }));
+        assert.deepEqual(result, { kind: "failed", reason: "port taken", databaseOpened: true });
+    });
+
+    it("says the database was not opened when a failure stopped before step 4", () => {
+        const result = classifyStartup(report({ furthestStep: 3, failedStep: 3, reason: "bad config" }));
+        assert.deepEqual(result, { kind: "failed", reason: "bad config", databaseOpened: false });
+    });
+
+    it("classifies a missing report as failed, with the database not opened", () => {
+        assert.deepEqual(classifyStartup(undefined), {
+            kind: "failed",
+            reason: "the new version wrote no startup report",
+            databaseOpened: false,
+        });
+    });
+
+    it("gives a reason to a failure whose report holds none", () => {
+        const result = classifyStartup(report({ furthestStep: 2 }));
+        assert.equal(result.kind, "failed");
+        assert.ok(result.kind === "failed" && result.reason.length > 0);
     });
 });
