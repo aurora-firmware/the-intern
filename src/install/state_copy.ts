@@ -3,10 +3,12 @@
  * aside by an upgrade or a rollback. The commands call these while holding the owner lock; this module takes no lock.
  * It imports only Node modules and the instance directories (ADR-005 decision 2).
  */
+import { spawn } from "node:child_process";
 import { chmod, cp, mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 import type { InstanceDirs } from "../daemon/state_layout.ts";
+import type { ProgramLayout } from "./program_layout.ts";
 
 const OWNER_ONLY_FILE_MODE = 0o600;
 const OWNER_ONLY_DIR_MODE = 0o700;
@@ -15,7 +17,11 @@ const COPY_INFO_FILE = "copy.json";
 const DATABASE_PART = "database.sqlite";
 const CONFIG_PART = "config.toml";
 const INTERNAL_PART = "internal";
-const INTERNAL_ENTRIES = ["instructions", "skills", "shipped-files.json"];
+export const INTERNAL_PARTS = ["instructions", "skills", "shipped-files.json"];
+const STAGING_PREFIX = ".restore-";
+const ASIDE_PREFIX = ".aside-";
+const CONFIG_STAGING_FILE = ".config.toml.restore";
+const OWNER_LOCK_TOKEN_VARIABLE = "BOB_OWNER_LOCK_TOKEN";
 const PARTIAL_PREFIX = ".partial-";
 const DATABASE_SIBLING_SUFFIXES = ["-wal", "-shm"];
 // One step copies every page, so the copy is one consistent snapshot.
@@ -102,7 +108,7 @@ async function copyDatabase(databaseFile: string, target: string): Promise<void>
 
 async function copyInternalFolder(dataDir: string, target: string): Promise<void> {
     await mkdir(target);
-    for (const entry of INTERNAL_ENTRIES) {
+    for (const entry of INTERNAL_PARTS) {
         const source = join(dataDir, entry);
         if (await exists(source)) await cp(source, join(target, entry), { recursive: true });
     }
@@ -223,5 +229,90 @@ export async function pruneCopies(dirs: InstanceDirs, keepName: string): Promise
         if (name >= keepName) continue;
         if ((await readCopyInfo(dirs, name)).kept) continue;
         await rm(join(upgradesDir(dirs.stateDir), name), { recursive: true, force: true });
+    }
+}
+
+/**
+ * Puts the copy's config file back: written beside the current one and renamed over it. When the copy holds none, the
+ * current file is moved into the upgrades folder `asideName` (made when it doesn't exist). Safe to repeat.
+ */
+export async function restoreConfig(dirs: InstanceDirs, copyName: string, asideName: string): Promise<void> {
+    const copied = join(upgradesDir(dirs.stateDir), copyName, CONFIG_PART);
+    if (await exists(copied)) {
+        const beside = join(dirname(dirs.configFile), CONFIG_STAGING_FILE);
+        await cp(copied, beside);
+        await rename(beside, dirs.configFile);
+        return;
+    }
+    if (!(await exists(dirs.configFile))) return;
+    const aside = join(await ensureUpgradesDir(dirs.stateDir), asideName);
+    await mkdir(aside, { recursive: true, mode: OWNER_ONLY_DIR_MODE });
+    // The configuration directory may lie on another file system than the state directory, so the file is copied.
+    await cp(dirs.configFile, join(aside, CONFIG_PART));
+    await rm(dirs.configFile);
+}
+
+async function restoreFilePart(source: string, target: string, staging: string): Promise<void> {
+    if (await exists(source)) {
+        await cp(source, staging);
+        await rename(staging, target);
+        return;
+    }
+    await rm(target, { force: true });
+}
+
+async function restoreFolderPart(source: string, target: string, staging: string, aside: string): Promise<void> {
+    // Once the current folder is aside, the staging folder is complete and is renamed in; before that it may be partial.
+    if (!(await exists(aside))) {
+        await rm(staging, { recursive: true, force: true });
+        if (await exists(source)) await cp(source, staging, { recursive: true });
+        if (await exists(target)) await rename(target, aside);
+    }
+    if (await exists(staging)) await rename(staging, target);
+    await rm(aside, { recursive: true, force: true });
+}
+
+/**
+ * Puts one part of the copy's internal folder back (`INTERNAL_PARTS`). A folder is copied into a staging folder in the
+ * data directory, the current one renamed aside, the copy renamed in and the aside folder removed; the record file is
+ * written beside and renamed over. A part the copy doesn't hold is removed. Safe to repeat after a cut-off.
+ */
+export async function restoreInternal(dirs: InstanceDirs, copyName: string, part: string): Promise<void> {
+    if (!INTERNAL_PARTS.includes(part)) throw new StateCopyError(`${part} is not a part of the internal folder.`);
+    const source = join(upgradesDir(dirs.stateDir), copyName, INTERNAL_PART, part);
+    const target = join(dirs.dataDir, part);
+    const staging = join(dirs.dataDir, `${STAGING_PREFIX}${part}`);
+    if (part === "shipped-files.json") return restoreFilePart(source, target, staging);
+    return restoreFolderPart(source, target, staging, join(dirs.dataDir, `${ASIDE_PREFIX}${part}`));
+}
+
+/**
+ * Runs the version's `bob import` on the copy's database as a child under the owner lock the caller holds, handed over
+ * with `BOB_OWNER_LOCK_TOKEN`. Fails with the child's standard error when it exits non-zero.
+ */
+export async function importCopy(
+    layout: ProgramLayout,
+    version: string,
+    dirs: InstanceDirs,
+    copyName: string,
+    ownerLockToken: string,
+): Promise<void> {
+    const bob = join(layout.versionDir(version), "bin", "bob");
+    const database = join(upgradesDir(dirs.stateDir), copyName, DATABASE_PART);
+    const child = spawn(bob, ["import", "--state-dir", dirs.stateDir, database], {
+        env: { ...process.env, [OWNER_LOCK_TOKEN_VARIABLE]: ownerLockToken },
+        stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+        stderr += chunk;
+    });
+    const code = await new Promise<number | null>((resolve, reject) => {
+        child.on("error", reject);
+        child.on("close", resolve);
+    });
+    if (code !== 0) {
+        throw new StateCopyError(`${bob} import failed (exit ${code}): ${stderr.trim()}`);
     }
 }

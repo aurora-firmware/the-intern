@@ -7,8 +7,8 @@ import { type InstanceDirs, resolveInstanceDirs } from "../../src/daemon/state_l
 import { openHostDatabase } from "../../src/host/harness_host.ts";
 import { programLayout } from "../../src/install/program_layout.ts";
 import {
-    importCopy,
     INTERNAL_PARTS,
+    importCopy,
     restoreConfig,
     restoreInternal,
     takeCopy,
@@ -273,7 +273,9 @@ describe("importCopy", () => {
         const copy = await takeCopy(source.dirs, "0.0.9", "0.1.0", COPIED_AT);
         const { target, token } = await heldTarget();
         const layout = await versionWithBob(target.env.root);
-        await cp(join(upgradesDir(source.dirs.stateDir), copy), join(upgradesDir(target.dirs.stateDir), copy));
+        await cp(join(upgradesDir(source.dirs.stateDir), copy), join(upgradesDir(target.dirs.stateDir), copy), {
+            recursive: true,
+        });
 
         await importCopy(layout, "0.0.9", target.dirs, copy, token);
 
@@ -293,11 +295,12 @@ describe("importCopy", () => {
         const copy = await takeCopy(source.dirs, "0.0.9", "0.1.0", COPIED_AT);
         const { target } = await heldTarget();
         const layout = await versionWithBob(target.env.root);
-        await cp(join(upgradesDir(source.dirs.stateDir), copy), join(upgradesDir(target.dirs.stateDir), copy));
+        await cp(join(upgradesDir(source.dirs.stateDir), copy), join(upgradesDir(target.dirs.stateDir), copy), {
+            recursive: true,
+        });
 
-        await assert.rejects(
-            importCopy(layout, "0.0.9", target.dirs, copy, "not-the-token"),
-            (error: Error) => /a running daemon/.test(error.message),
+        await assert.rejects(importCopy(layout, "0.0.9", target.dirs, copy, "not-the-token"), (error: Error) =>
+            /a running daemon/.test(error.message),
         );
     });
 });
