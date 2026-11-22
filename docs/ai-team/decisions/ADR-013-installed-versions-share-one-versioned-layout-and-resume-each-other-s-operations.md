@@ -38,7 +38,9 @@ folder layout, each file carrying a format number, and each step of an operation
 3. **One installation command at a time.** `install.lock` uses the owner lock's mechanism (`src/daemon/ownership.ts`:
    pid, boot time and token, written whole by a link, taken over when stale) and adds the command's name, which the
    refusal names (S-010 REQ-011). The mechanism counts a lock that holds the checker's own pid as stale, for both
-   locks (bug B-056).
+   locks, unless the checking process holds that lock itself through a handle it has not released, which it knows by
+   the lock's token (bug B-056). A restarted process under a dead holder's pid holds no handle, so it takes the lock
+   over; a process that holds the lock is refused by it as by any live holder.
 4. **The operation journal.** `bob upgrade` and `bob rollback` write `operation.json` (the operation, the versions, the
    copy's and set-aside folders' names, the targets `current` and `previous` had before, and the last step done)
    after the confirmation and before their first change, rewrite it atomically after each step, and remove it last.
