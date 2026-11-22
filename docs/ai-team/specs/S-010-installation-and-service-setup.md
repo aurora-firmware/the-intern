@@ -106,7 +106,6 @@ What this specification explicitly does NOT cover:
 - **An npm package that needs Node 24 installed beforehand.** Rejected: the team member must provide Node 24, the
   service breaks when that Node moves or changes version, and the Node and SQLite versions vary per machine.
   `docs/development/release_form.md` (form A) has the comparison.
-
 - **OS packages (a `.deb` and a Homebrew formula).** Rejected: two packaging systems to build and maintain, each with
   its own idea of services and upgrades.
 - **Everything in the install script** (download, service registration, upgrade and removal as script flags).
@@ -688,10 +687,11 @@ evidence.
 
 The user manual SHALL have an "Installing and upgrading" page that covers the install script, `bob service install`, the
 pi login prerequisite, `bob service status` and `remove`, `bob upgrade` and its two failure paths, `bob rollback` with
-what it loses and may repeat and that it leaves the secrets store as it is, `bob uninstall`, the upgrades folder, which
-instance directories and pi login the service uses, and that macOS hasn't yet been verified on a real Mac.
-`docs/manual/commands.md` SHALL lose its "Until installation puts `bob` on your `PATH`" note and list the new commands.
-The developer docs SHALL say how to cut a release and how to run the installation cycle test against local bundles.
+what it loses and may repeat, that it leaves the secrets store as it is and that a mail account it brings back without
+its secrets needs signing in again, `bob uninstall`, the upgrades folder, which instance directories and pi login the
+service uses, and that macOS hasn't yet been verified on a real Mac. `docs/manual/commands.md` SHALL lose its "Until
+installation puts `bob` on your `PATH`" note and list the new commands. The developer docs SHALL say how to cut a
+release and how to run the installation cycle test against local bundles.
 
 #### AC-016.1 — The manual and the developer docs
 
