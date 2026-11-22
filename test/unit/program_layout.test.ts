@@ -58,7 +58,9 @@ describe("programLayout", () => {
 describe("checkLayout", () => {
     it("accepts a home path apart from the instance directories", () => {
         const layout = programLayout("/home/x");
-        assert.doesNotThrow(() => checkLayout(layout, ["/home/x/.config/the-intern", "/home/x/.local/state/the-intern"]));
+        assert.doesNotThrow(() =>
+            checkLayout(layout, ["/home/x/.config/the-intern", "/home/x/.local/state/the-intern"]),
+        );
     });
 
     it("refuses a home path with a node_modules segment, naming it", () => {
@@ -88,7 +90,8 @@ describe("checkLayout", () => {
         const layout = programLayout("/home/x");
         assert.throws(
             () => checkLayout(layout, [`${layout.root}/versions/data`]),
-            (error: unknown) => error instanceof ProgramLayoutError && error.message.includes(`${layout.root}/versions/data`),
+            (error: unknown) =>
+                error instanceof ProgramLayoutError && error.message.includes(`${layout.root}/versions/data`),
         );
     });
 
