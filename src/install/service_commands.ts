@@ -236,9 +236,29 @@ type StatusView = {
     piAgentDir: string | null;
 };
 
+/** Reports a file or supervisor problem as a warning and answers `fallback`: `status` shows what it can in every state. */
+async function orWarn<T>(io: CommandIo, read: () => Promise<T>, fallback: T): Promise<T> {
+    try {
+        return await read();
+    } catch (error) {
+        if (
+            error instanceof ServiceRecordError ||
+            error instanceof ServiceRefusedError ||
+            error instanceof OperationJournalError
+        ) {
+            writeError(io, `Warning: ${error.message}`);
+            return fallback;
+        }
+        throw error;
+    }
+}
+
 async function statusView(context: ServiceCommandContext): Promise<StatusView> {
-    const record = await readServiceRecord(context.layout);
-    const state = record === null ? undefined : await context.managerFor(record.platform).state(record);
+    const record = await orWarn(context.io, () => readServiceRecord(context.layout), null);
+    const state =
+        record === null
+            ? undefined
+            : await orWarn(context.io, () => context.managerFor(record.platform).state(record), undefined);
     if (record === null || state === undefined || !state.registered) {
         return {
             registered: false,
@@ -278,7 +298,7 @@ async function statusText(context: ServiceCommandContext, view: StatusView): Pro
         `Previous version: ${(await readLink(layout, "previous")) ?? "none"}`,
         `Held: ${yesNo(existsSync(layout.holdFile))}`,
     ];
-    const journal = await readJournal(layout);
+    const journal = await orWarn(context.io, () => readJournal(layout), null);
     if (journal !== null) {
         const after = journal.lastStep === null ? "before its first step" : `after ${journal.lastStep}`;
         lines.push(`Cut off: ${journal.operation} from ${journal.from} to ${journal.to} was cut off ${after}`);
