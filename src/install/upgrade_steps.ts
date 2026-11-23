@@ -3,7 +3,6 @@
  * an upgrade, a switch-back or a fresh start after `journal.lastStep`, recording each in the journal. It imports only
  * the installation modules and the daemon's lock and report files (ADR-005 decision 2).
  */
-
 import { createInterface } from "node:readline";
 import type { CommandIo } from "../cli/command_line.ts";
 import { writeError } from "../cli/output.ts";
@@ -36,8 +35,6 @@ const OPERATION_STEPS: Record<StepOperation, readonly string[]> = {
     "switch-back": SWITCH_BACK_STEPS,
     "fresh-start": FRESH_START_STEPS,
 };
-
-/** Asks a yes-or-no question; `defaultYes` is what an empty answer means. */
 
 const STEP_NOTICES: Record<string, string> = {
     held: "Holding the service so it stays stopped.",
@@ -72,7 +69,7 @@ export function askYesNo(io: CommandIo, question: string, defaultYes = false): P
     });
 }
 
-export function directoriesOf(context: ServiceCommandContext, record: ServiceRecord): InstanceDirs {
+function directoriesOf(context: ServiceCommandContext, record: ServiceRecord): InstanceDirs {
     const { configDir, stateDir, dataDir, runtimeDir } = record;
     return resolveInstanceDirs({
         flags: { configDir, stateDir, dataDir, runtimeDir },

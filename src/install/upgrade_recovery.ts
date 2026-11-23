@@ -1,8 +1,7 @@
 /**
  * What `bob upgrade` does when the new version isn't ready (S-010 REQ-007, REQ-008): the switch-back, REQ-008's
- * question and fresh start, and the resumers of those operations. It imports only the installation modules.
+ * question and fresh start, and the resumers of those operations. It imports no daemon module (ADR-005 decision 2).
  */
-
 import { join } from "node:path";
 import { writeError } from "../cli/output.ts";
 import { type OperationJournal, type StepIo, writeJournal } from "./operation_journal.ts";
@@ -56,7 +55,7 @@ export async function runUpgradeSteps(run: Running): Promise<void> {
     if (notReady !== null) await handleNotReady(run, notReady);
 }
 
-export type ResumeOptions = { now?: () => Date; stepIo?: StepIo; ask?: Ask };
+type ResumeOptions = { now?: () => Date; stepIo?: StepIo; ask?: Ask };
 
 async function resume(
     context: ServiceCommandContext,
