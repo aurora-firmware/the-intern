@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -206,7 +206,10 @@ describe("register", () => {
         const { manager, record, stateDir } = await setup(() => ({ code: 1, stderr: "sudo: a password is required" }));
         await assert.rejects(
             manager.register(record, NO_IO),
-            (error: unknown) => error instanceof ServiceRefusedError && /admin rights/.test(error.reason),
+            (error: unknown) =>
+                error instanceof ServiceRefusedError &&
+                /admin rights/.test(error.reason) &&
+                /nothing was registered/.test(error.reason),
         );
         assert.equal(await exists(join(stateDir, "service.log")), false);
     });
@@ -238,6 +241,36 @@ describe("register", () => {
     });
 });
 
+describe("the replace script when the install step fails", () => {
+    it("puts the previous plist back and boots it in again", async () => {
+        const { record, plistPath, home } = await setup();
+        await writePlist(plistPath, USER);
+        const before = await readFile(plistPath, "utf8");
+        const bin = join(home, "bin");
+        const log = join(home, "launchctl.log");
+        await mkdir(bin);
+        await writeFile(join(bin, "launchctl"), `#!/bin/sh\necho "$@" >> ${log}\n`, { mode: 0o755 });
+        await writeFile(join(bin, "install"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+        const fake = fakeRunner();
+        const layout = programLayout(home);
+        const registering = launchdService(fake.runner, layout, {
+            userName: USER,
+            plistPath,
+            isTerminal: () => false,
+        });
+        await registering.register(record, NO_IO);
+        const script = (fake.sudoCalls()[0]?.args[3] ?? "").replaceAll("/usr/bin/install", join(bin, "install"));
+        const run = spawnSync("/bin/sh", ["-c", script, "sh", join(home, "new.plist"), plistPath], {
+            env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        });
+        assert.notEqual(run.status, 0);
+        assert.equal(await readFile(plistPath, "utf8"), before);
+        assert.equal(await exists(`${plistPath}.prev`), false);
+        const calls = (await readFile(log, "utf8")).trim().split("\n");
+        assert.deepEqual(calls, [`bootout system/${LABEL}`, `bootstrap system ${plistPath}`]);
+    });
+});
+
 describe("remove", () => {
     it("boots the job out and removes the file in one sudo call", async () => {
         const { fake, manager, record, plistPath } = await setup();
@@ -254,7 +287,10 @@ describe("remove", () => {
         const { manager, record } = await setup(() => ({ code: 1 }));
         await assert.rejects(
             manager.remove(record, NO_IO),
-            (error: unknown) => error instanceof ServiceRefusedError && /admin rights/.test(error.reason),
+            (error: unknown) =>
+                error instanceof ServiceRefusedError &&
+                /admin rights/.test(error.reason) &&
+                /still registered/.test(error.reason),
         );
     });
 });
