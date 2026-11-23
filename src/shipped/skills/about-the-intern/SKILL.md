@@ -1,7 +1,7 @@
 ---
 
 name: about-the-intern
-description: "Explain how The Intern works and how a team member uses and configures it, from the user manual. Use it to answer questions about jobs, roles, workspaces, schedules, skills and instructions, the front desk, email accounts, the `bob` commands, the web interface and running the service."
+description: "Explain how The Intern works and how a team member uses and configures it, from the user manual. Use it to answer questions about jobs, roles, workspaces, schedules, skills and instructions, the front desk, email accounts, the `bob` commands, the web interface, running the service, and installing and upgrading it."
 ---
 
 # About The Intern
@@ -32,6 +32,7 @@ in the first.
 - `manual/web_interface.md`: the web interface: the board, the job page and the other pages, and the actions they offer.
 - `manual/running_the_intern.md`: running the service: starting it, where it keeps its files, backups and restores, the
   configuration file, models and the pi login, reaching it over the network and who can use it.
+- `manual/installing.md`: installing, setting up the service, upgrading, rolling back and removing.
 
 Pick the page by the question. A question about doing something at the command line usually needs `manual/commands.md`
 as well as the page on the topic.
