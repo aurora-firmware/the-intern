@@ -3,17 +3,37 @@ name: Release
 on:
   push:
     tags:
-      - '*'
+      - 'v*'
 
 permissions:
   contents: read
 
-# Placeholder: there is nothing to package yet. Replace with the build,
-# packaging and GitHub Release steps once the TypeScript package exists.
-# Runs in the devcontainer image as root, like the CI jobs (see build.yml).
+# A tag vX.Y.Z on a commit of main publishes a GitHub Release with five assets.
+# Any failure before `publish` publishes nothing. Only `publish` can write.
+# Jobs run in the official node:24.22.0-bookworm image as root, like build.yml.
 jobs:
-  release:
-    name: Release
+  verify:
+    name: Verify the tag
+    runs-on: self-hosted
+    container:
+      image: node:24.22.0-bookworm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check the tag against the package version and main
+        run: node release/check_release.ts "$GITHUB_REF_NAME"
+
+  checks:
+    name: Checks
+    needs: verify
+    uses: ./.github/workflows/build.yml
+
+  bundles:
+    name: Bundles
+    needs: verify
     runs-on: self-hosted
     container:
       image: node:24.22.0-bookworm
@@ -21,5 +41,61 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Build and publish release (placeholder)
-        run: echo "No release pipeline defined yet"
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the bundles and the install script
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          node release/build_bundle.ts linux-x64 --version "$version" --out release-assets
+          node release/build_bundle.ts darwin-arm64 --version "$version" --out release-assets
+          sed "s/^VERSION=\"\"\$/VERSION=\"$version\"/" release/install.sh > release-assets/install.sh
+          grep -qx "VERSION=\"$version\"" release-assets/install.sh
+          ls -l release-assets
+
+      - name: Upload the release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets/
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: [verify, checks, bundles]
+    runs-on: self-hosted
+    container:
+      image: node:24.22.0-bookworm
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install the GitHub CLI
+        run: apt-get update -qq && apt-get install -y -qq gh
+
+      - name: Download the release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Create the release
+        run: |
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+          flags=""
+          case "$version" in
+            *-*) flags="--prerelease" ;;
+          esac
+          gh release create "$tag" \
+            "release-assets/the-intern-$version-linux-x64.tar.gz" \
+            "release-assets/the-intern-$version-linux-x64.tar.gz.sha256" \
+            "release-assets/the-intern-$version-darwin-arm64.tar.gz" \
+            "release-assets/the-intern-$version-darwin-arm64.tar.gz.sha256" \
+            "release-assets/install.sh" \
+            --verify-tag --title "$tag" --notes-file release/release_notes.md $flags
