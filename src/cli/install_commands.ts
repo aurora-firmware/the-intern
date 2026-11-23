@@ -6,7 +6,7 @@ import type { CommandInput, CommandSpec } from "./command_line.ts";
 
 type Context = Awaited<ReturnType<typeof contextOf>>;
 
-/** The resumers of cut-off operations. The rollback command adds its own; none exists yet. */
+/** The resumers of cut-off operations. */
 function resumersFor(contextOfRun: () => Context) {
     return {
         upgrade: async (journal: Parameters<Context["resumers"]["upgrade"]>[0]) => {
@@ -21,7 +21,10 @@ function resumersFor(contextOfRun: () => Context) {
             const { resumeFreshStart } = await import("../install/upgrade.ts");
             await resumeFreshStart(contextOfRun(), journal);
         },
-        rollback: async () => {},
+        rollback: async (journal: Parameters<Context["resumers"]["upgrade"]>[0]) => {
+            const { resumeRollback } = await import("../install/rollback.ts");
+            await resumeRollback(contextOfRun(), journal);
+        },
     };
 }
 
@@ -90,4 +93,17 @@ const upgrade: CommandSpec = {
     },
 };
 
-export const INSTALL_COMMANDS: readonly CommandSpec[] = [install, remove, status, upgrade];
+const rollback: CommandSpec = {
+    verb: "rollback",
+    summary: "Stop the service and return it to the previous version with the database as the upgrade found it.",
+    positionals: [],
+    options: { yes: { type: "boolean", description: "Don't ask before stopping the service." } },
+    isData: false,
+    callsService: false,
+    async run(input) {
+        const { runRollback } = await import("../install/rollback.ts");
+        return runRollback({ context: await contextOf(input), yes: input.options.yes === true });
+    },
+};
+
+export const INSTALL_COMMANDS: readonly CommandSpec[] = [install, remove, status, upgrade, rollback];
