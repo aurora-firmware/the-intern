@@ -12,6 +12,7 @@ export default defineConfig({
         sidebar: [
             { text: "The Intern user manual", link: "/" },
             { text: "Running The Intern", link: "/running_the_intern" },
+            { text: "Installing and upgrading", link: "/installing" },
             { text: "Roles, workspaces and agents sharing a job", link: "/roles_and_agents" },
             { text: "Skills and instructions", link: "/skills_and_instructions" },
             { text: "Schedules", link: "/schedules" },
