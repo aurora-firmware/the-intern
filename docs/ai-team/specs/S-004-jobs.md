@@ -1,7 +1,7 @@
 ---
 id: S-004
 title: Jobs
-version: '0.18'
+version: '0.19'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-02'
 author: planner
@@ -277,6 +277,9 @@ jobs.create → role and overrides checked                                      
   → job written (To do, number allocated) → lead conversation started                      REQ-001, REQ-002, REQ-007
   (start still refused after the write → Done, cancelled, the daemon as author)            REQ-007
   (crash after the lead is created, before its first input → repair rule 1)                REQ-018
+  ↓
+Lead's seat has no model → the lead waits for a model; still To do, no block, no reminder   REQ-023
+  → a default model appears → the lead runs                                                S-001 REQ-027
   ↓
 Waits for a worker thread if all are busy; still To do                                      REQ-005
   ↓
@@ -1090,6 +1093,42 @@ is not a job conversation (S-001 REQ-025).
 
 **Verification:** test — a service test.
 
+### REQ-023 — A job whose lead waits for a model
+
+A job whose lead conversation is waiting for a model (S-001 REQ-027) SHALL be neither blocked nor failed for it, and
+no action SHALL be taken for want of a model (product owner, 2026-11-24, CR-002). Its status shows only what its
+actions have done:
+
+- `jobs.create` creates the job as usual, whatever the job source, and SHALL NOT refuse or cancel it because its lead's
+  seat has no model (S-001 REQ-012). The job stays To do, because start is written only when the lead's first run takes
+  a worker thread (REQ-005).
+- A job that was already In progress stays In progress while its lead waits.
+- Input waiting for a model counts as input queued for the reminder rule (REQ-008), so the rule neither reminds the
+  lead nor blocks the job while the input waits, at a turn's end or at startup.
+- Once a model is available the lead runs, and the actions follow REQ-005 to REQ-008 as for any job.
+
+#### AC-023.1 — A new job waits To do
+
+- **Given:** pi agent settings that name no default model, and `bob` with no configured model
+- **When:** a team member creates a job with no role named, then reads it with `jobs.get` and its history with
+  `jobs.history.list`
+- **Then:** the job is `C-n` and To do with no Blocked reason and no resolution, its history holds no action, and its
+  lead conversation holds the first input and the no-model notice; once the isolated pi agent folder names the fake
+  model as the default, without a restart, the job goes In progress and its lead runs on the first input
+
+**Verification:** test — a service test on the fake model, changing the isolated pi agent folder while the daemon
+runs.
+
+#### AC-023.2 — No reminder while input waits
+
+- **Given:** an In progress job with a definition of done, led by `bob` with no configured model, whose lead holds a
+  team member's input waiting for a model because the isolated pi agent folder names no default model
+- **When:** the daemon is stopped and started again with the folder unchanged
+- **Then:** at startup the reminder rule sends no reminder and blocks nothing; the job stays In progress, its history
+  gains no entry, and the input still waits
+
+**Verification:** test — a service test on the fake model, restarting the daemon with a changed pi agent folder.
+
 ## Quality Requirements
 
 ### REQ-018 — Ordered changes and startup repair
@@ -1256,6 +1295,9 @@ setting changes the statuses, the actions or the letters.
 7. A job created through the front desk from the command line is `C-n` and one from the web interface is `W-n`, each
    with the front desk in its origin details, and no reminder, action or repair ever changes the front desk (REQ-021,
    REQ-022). Measured by `npm test`.
+8. With no default model in the pi agent folder, a job a team member creates is To do with its lead waiting, gets no
+   reminder and no block, and goes In progress once a default model appears, without a restart (REQ-023). Measured by
+   `npm test`.
 
 ## Implementation Order
 
@@ -1267,6 +1309,7 @@ setting changes the statuses, the actions or the letters.
 | 4 | Observed origin details through both listeners and `statedBy` | Phase 1, S-003 amendment |
 | 5 | Export and import, the reference timings, the live check, and the docs (developer architecture, user manual, spec map) | Phases 1–4 |
 | 6 | The job tools in the front desk, `list_jobs`, and keeping the front desk out of the job rules | Phase 5, S-001 phase 6 |
+| 7 | A job whose lead waits for a model: no refusal, no action and no reminder for want of a model (CR-002) | Phase 6, S-001 phase 8 |
 
 ## Open Questions
 
@@ -1299,3 +1342,4 @@ None.
 | 2026-11-13 | v0.17. REQ-016: the export also leaves out the internal folder of instruction files and shipped skills and the `[skills]` section of the configuration file, as it leaves out the rest of the configuration file. No identifier added or retired. | S-008 architecture consistency review, finding C3: S-008 adds the internal folder under the data directory. | S-008's tasks |
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.17 confirmed: the export copies the database only, leaving out the internal folder and [skills] | none |
 | 2026-11-18 | v0.18. Email (S-009). Interfaces, the job fields Contract: new `requestMark` and `email` (the account, sender, subject, saved message and attachments, and job thread), returned by `jobs.get`; the history entry Contract gains `mail` entries (`received`, `sent`, `held_back`, `may_not_have_gone_out`, `not_sent` for "result reply not sent: no mail text") and their authors. Job operations: `jobs.list` gains `mailAccount`, `jobs.complete` an optional `mailText`. Job tools: new mark request, offered to the lead of a job that came by email whatever its role's tool set; block job gains `mailText`, required whenever the question will be mailed; complete job gains `mailText`, required for a job with the request mark; none of them in the front desk. REQ-003: the email origin names the account. REQ-011: `mail` history entries. REQ-013: mark request and the mail text refusals, new AC-013.3 and AC-013.4. REQ-014: the email details and the mail account filter. REQ-016: the export stays one file and carries the saved mail; mail accounts, notice settings and the secrets store stay out. REQ-017: import restores the saved mail. REQ-018: owed mail recorded with the block or complete and sent after a restart if sending never began, never sent twice, and the intake record. Definitions (History, new Request mark and Mail text), Users, Exclusions and Assumptions follow. No identifier changed or retired. Revised 2026-11-19 on the same branch: "mail secrets store" becomes "secrets store" (product owner decision). Revised 2026-11-19 on the same branch: the history kinds add `refused` and `account_removed`, and REQ-011 lists them (S-009 v0.3). | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18. | S-009's tasks |
+| 2026-11-24 | v0.19. Work without a model (CR-002). New REQ-023 with AC-023.1 and AC-023.2: a job whose lead waits for a model is neither blocked nor failed and gets no action for want of a model; `jobs.create` neither refuses nor cancels it, a new job stays To do until its lead's first run, an In progress job stays In progress, and input waiting for a model counts as input queued for the reminder rule, at a turn's end and at startup. Workflow, Success Criterion 8 and Implementation Order (phase 7) follow. No identifier changed or retired. | CR-002, approved by the product owner on 2026-11-24 ("a job whose conversation is idle for want of a model is neither blocked nor failed"). | CR-002's tasks |
