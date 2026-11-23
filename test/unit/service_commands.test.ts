@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -285,6 +285,40 @@ describe("bob service status", () => {
         assert.equal(status, 0);
         assert.match(io.out(), /Registered: no/);
         assert.match(io.err(), /operation\.json/);
+    });
+
+    it("exits 0 and still prints the text form when the current link names something other than a version folder", async () => {
+        const { context, io } = setup();
+        await symlink("elsewhere", layout.current);
+
+        const status = await runServiceStatus(context, { json: false });
+
+        assert.equal(status, 0);
+        assert.match(io.out(), /Current version: unreadable/);
+        assert.match(io.out(), /Held: no/);
+        assert.match(io.err(), /the link names elsewhere/);
+    });
+
+    it("exits 0 and still prints the text form when the previous link names something other than a version folder", async () => {
+        const { context, io } = setup();
+        await symlink(join("versions", "not-a-version"), layout.previous);
+
+        const status = await runServiceStatus(context, { json: false });
+
+        assert.equal(status, 0);
+        assert.match(io.out(), /Previous version: unreadable/);
+        assert.match(io.err(), /not-a-version/);
+    });
+
+    it("exits 0 and still prints the text form when current is a plain file, not a link", async () => {
+        const { context, io } = setup();
+        await writeFile(layout.current, "");
+
+        const status = await runServiceStatus(context, { json: false });
+
+        assert.equal(status, 0);
+        assert.match(io.out(), /Current version: unreadable/);
+        assert.match(io.err(), /current/);
     });
 
     it("takes no lock and changes nothing, even while another command holds the lock", async () => {
