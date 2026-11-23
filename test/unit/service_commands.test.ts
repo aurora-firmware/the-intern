@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -248,6 +248,43 @@ describe("bob service status", () => {
         assert.match(io.out(), /Held: yes/);
         assert.match(io.out(), /upgrade from 1\.1\.0 to 1\.2\.0 was cut off after copied/);
         assert.match(io.out(), /Running: yes \(version 1\.2\.0\)/);
+    });
+
+    it("exits 0 with the unregistered object and the reason on standard error when service.json is unreadable", async () => {
+        const { context, io } = setup();
+        await writeFile(layout.serviceRecord, "not json");
+
+        const status = await runServiceStatus(context, { json: true });
+
+        assert.equal(status, 0);
+        assert.equal(JSON.parse(io.out()).registered, false);
+        assert.match(io.err(), /service\.json/);
+    });
+
+    it("exits 0 and prints the object when the supervisor refuses the state query", async () => {
+        const manager = fakeManager();
+        manager.state = async () => {
+            throw new ServiceRefusedError("systemctl --user can't reach the user manager");
+        };
+        const { context, io } = setup({ managerFor: () => manager });
+        await writeServiceRecord(layout, recordOf());
+
+        const status = await runServiceStatus(context, { json: true });
+
+        assert.equal(status, 0);
+        assert.equal(JSON.parse(io.out()).registered, false);
+        assert.match(io.err(), /user manager/);
+    });
+
+    it("exits 0 and still prints the text form when operation.json is unreadable", async () => {
+        const { context, io } = setup();
+        await writeFile(layout.journal, "not json");
+
+        const status = await runServiceStatus(context, { json: false });
+
+        assert.equal(status, 0);
+        assert.match(io.out(), /Registered: no/);
+        assert.match(io.err(), /operation\.json/);
     });
 
     it("takes no lock and changes nothing, even while another command holds the lock", async () => {
