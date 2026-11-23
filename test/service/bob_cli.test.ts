@@ -28,6 +28,27 @@ function daemonModulesAmong(urls: string[]): string[] {
     return urls.filter((url) => DAEMON_CODE.some((part) => url.includes(`${SRC}/${part}`)));
 }
 
+function installModulesAmong(urls: string[]): string[] {
+    return urls.filter((url) => url.includes(`${SRC}/install/`));
+}
+
+/** The distinct modules under `src/daemon/` among the URLs, as file names, sorted (each importer resolves one again). */
+function daemonFilesAmong(urls: string[]): string[] {
+    const names = urls
+        .filter((url) => url.includes(`${SRC}/daemon/`))
+        .map((url) => url.slice(url.lastIndexOf("/") + 1));
+    return [...new Set(names)].sort();
+}
+
+const INSTALL_COMMAND_LINES = [
+    { args: ["service", "install"], usage: "Usage: bob service install" },
+    { args: ["service", "remove"], usage: "Usage: bob service remove" },
+    { args: ["service", "status"], usage: "Usage: bob service status" },
+    { args: ["upgrade"], usage: "Usage: bob upgrade [version] [options]" },
+    { args: ["rollback"], usage: "Usage: bob rollback" },
+    { args: ["uninstall"], usage: "Usage: bob uninstall" },
+];
+
 describe("bob command line", () => {
     it("prints the top-level usage on standard output and exits 0 for --help, listing the schedules, skills and mail groups and no reserved group", async () => {
         const result = await runBob(["--help"]);
@@ -41,6 +62,46 @@ describe("bob command line", () => {
         assert.ok(!result.stdout.includes("knowledge"), result.stdout);
         assert.equal(result.stderr, "");
     });
+
+    it("lists upgrade, rollback, uninstall and the service group in bob --help", async () => {
+        const result = await runBob(["--help"]);
+
+        assert.equal(result.status, 0);
+        for (const name of ["upgrade", "rollback", "uninstall", "service <command>"]) {
+            assert.ok(result.stdout.includes(name), `${name} missing from ${result.stdout}`);
+        }
+    });
+
+    it("lists install, remove and status in bob service --help", async () => {
+        const result = await runBob(["service", "--help"]);
+
+        assert.equal(result.status, 0);
+        assert.ok(result.stdout.startsWith("Usage: bob service <command>"), result.stdout);
+        for (const verb of ["install", "remove", "status"]) {
+            assert.ok(result.stdout.includes(`  ${verb} `), `${verb} missing from ${result.stdout}`);
+        }
+        assert.equal(result.stderr, "");
+    });
+
+    for (const { args, usage } of INSTALL_COMMAND_LINES) {
+        it(`prints the options of bob ${args.join(" ")} --help and exits 0`, async () => {
+            const result = await runBob([...args, "--help"]);
+
+            assert.equal(result.status, 0);
+            assert.ok(result.stdout.startsWith(usage), result.stdout);
+            assert.ok(result.stdout.includes("--help"), result.stdout);
+            assert.equal(result.stderr, "");
+        });
+
+        it(`prints the usage of bob ${args.join(" ")} on standard error and exits 2 for an unknown option`, async () => {
+            const result = await runBob([...args, "--no-such-option"]);
+
+            assert.equal(result.status, 2);
+            assert.equal(result.stdout, "");
+            assert.ok(result.stderr.includes("--no-such-option"), result.stderr);
+            assert.ok(result.stderr.includes("Usage: bob"), result.stderr);
+        });
+    }
 
     it("prints the top-level usage on standard error and exits 2 for an unknown command", async () => {
         const result = await runBob(["jbos", "list"]);
@@ -79,6 +140,35 @@ describe("bob command line", () => {
             "the command table was not loaded",
         );
         assert.deepEqual(daemonModulesAmong(urls), []);
+    });
+
+    it("loads nothing from src/install when the command table is loaded and help is printed", () => {
+        const urls = resolvedModules(
+            join(SRC, "cli", "bob.ts"),
+            'await module.main(["--help"], { stdout: { write() {} }, stderr: { write() {} } });',
+        );
+
+        assert.deepEqual(installModulesAmong(urls), []);
+    });
+
+    it("loads only ownership, startup_report and state_layout from the daemon when service status --json runs on an empty home", async () => {
+        const home = await createHermeticEnv();
+        try {
+            const io = JSON.stringify({ env: home.env, homeDir: home.root, cwd: home.root });
+            const urls = resolvedModules(
+                join(SRC, "cli", "bob.ts"),
+                `await module.main(["service", "status", "--json"], { ...${io}, stdout: { write() { return true; } }, stderr: { write() { return true; } }, stdin: process.stdin, isStdoutTerminal: false, isStdinTerminal: false });`,
+            );
+
+            assert.ok(
+                urls.some((url) => url.endsWith("/install/service_commands.ts")),
+                "the status command did not run",
+            );
+            assert.deepEqual(daemonFilesAmong(urls), ["ownership.ts", "startup_report.ts", "state_layout.ts"]);
+            assert.deepEqual(daemonModulesAmong(urls), []);
+        } finally {
+            await home.dispose();
+        }
     });
 
     it("loads the daemon modules when serve's body is imported", () => {
