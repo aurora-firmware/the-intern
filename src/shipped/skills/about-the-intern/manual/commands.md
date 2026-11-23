@@ -4,8 +4,9 @@
 prints with `--json` and the exit codes. `bob --help`, `bob <group> --help` and `bob <group> <command> --help` print the
 same lists at each level.
 
-Until installation puts `bob` on your `PATH`, run it from a checkout of the project as `node src/cli/bob.ts`. Every
-example here writes `bob` for short; write `node src/cli/bob.ts` in its place.
+The install script puts `bob` on your `PATH`; see [Installing and upgrading](installing.md). From a checkout of the
+project, run it as `node src/cli/bob.ts`. Every example here writes `bob` for short; write `node src/cli/bob.ts` in its
+place.
 
 ```
 bob jobs list --status blocked
@@ -18,8 +19,9 @@ configuration file, cache or history of its own.
 ## Command shape
 
 A command is a group and a verb, such as `bob jobs list`, or a top-level command, such as `bob chat`. The top-level
-commands are `serve`, `status`, `usage`, `export`, `import`, `follow` and `chat`. The groups are `jobs`,
-`conversations`, `roles`, `workspaces`, `models`, `schedules`, `skills`, `instructions` and `mail`.
+commands are `serve`, `status`, `usage`, `export`, `import`, `follow`, `chat`, `upgrade`, `rollback` and `uninstall`.
+The groups are `jobs`, `conversations`, `roles`, `workspaces`, `models`, `schedules`, `skills`, `instructions`, `mail`
+and `service`.
 
 In the usage lines below, `<name>` is a required argument. Options come after the arguments and take a value unless the
 table says they are switches. Give an option once, except `--tool` and `--skill`, which you repeat for several values.
@@ -35,7 +37,9 @@ It has no command yet: `bob knowledge list` prints that the group isn't availabl
 | `--json`                | Print the service's answer as JSON instead of text. Every command except `serve` and `import` takes it. |
 | `--runtime-dir <value>` | The directory of the daemon's socket. Every command except `serve` and `import` takes it. |
 
-`serve` and `import` take their own directory flags, listed with them below.
+`serve` and `import` take their own directory flags, listed with them below. The installation commands in
+[Install, upgrade and remove](#install-upgrade-and-remove) take neither `--json` nor `--runtime-dir`, except that
+`bob service status` takes `--json`.
 
 ### The runtime directory
 
@@ -655,3 +659,50 @@ its path and the marks `shipped`, `edited` and `missing`. With `--json` it print
 `restore` copies the installed version of the common prompt (`bob instructions restore common`) or of a shipped role's
 instructions (`bob instructions restore reviewer`) back, and prints that file's line as `list` does. With `--json` it
 prints that file. A name that is neither `common` nor a shipped role exits 1.
+
+## Install, upgrade and remove
+
+These commands set up and maintain the installation. They call no operation of the service, except that
+`bob service status` reads the running version from the daemon. They act on the instance directories and the pi login
+folder that the service registration holds, not on those of your shell. Notices, questions and errors go to standard
+error, and each command takes `--help`. A usage error exits 2. See [Installing and upgrading](installing.md) for what
+each command does step by step.
+
+| Command                                 | What it does                                                              | Exit codes |
+| --------------------------------------- | ------------------------------------------------------------------------- | ---------- |
+| `bob service install`                   | Register the service, start it at boot and wait until it is ready.        | 0 when ready. 1 when it isn't registered or isn't ready; the message names the reason and the command that shows the service's log. |
+| `bob service remove`                    | Stop the service and remove its registration. The program and the data stay. | 0. 1 on failure. |
+| `bob service status [--json]`           | Show whether the service is registered, starts at boot and runs, the version it runs and the directories it uses. | 0 in every state. |
+| `bob upgrade [<version>] [--yes]`       | Upgrade to the latest release, or to `<version>`.                         | 0 when it upgraded, when you chose a fresh database, or when you already run that version. 1 when it failed and switched back, refused or you declined. |
+| `bob rollback [--yes]`                  | Return to the previous version and its pre-upgrade copy.                  | 0. 1 when it refused, you declined or it failed. |
+| `bob uninstall [--yes] [--remove-data]` | Remove the service, the program and the `bob` link. The data stays by default. | 0. 1 on failure. |
+
+`bob service install` and `bob service remove` take only `--help`.
+
+`bob service status --json` prints one JSON object:
+
+| Field                                            | Value                                                              |
+| ------------------------------------------------ | ------------------------------------------------------------------ |
+| `registered`                                     | `true` or `false`.                                                 |
+| `startsAtBoot`                                   | `true` or `false`; `false` when the service isn't registered.      |
+| `running`                                        | `true` when the registered service's daemon answers, else `false`. |
+| `version`                                        | The version the running daemon reports, or `null` when it isn't running. |
+| `configDir`, `stateDir`, `dataDir`, `runtimeDir` | The instance directories the registration holds, or `null` when the service isn't registered. |
+| `piAgentDir`                                     | The pi login folder the registration holds, or `null` when the service isn't registered. |
+
+`bob upgrade` and `bob rollback` take `--yes`, which skips the question before they stop the service. Without a terminal
+and without `--yes`, `bob rollback` refuses. `bob upgrade` takes the version as an optional argument and never runs by
+itself.
+
+`bob uninstall` asks whether to keep the instance's data, and keeps it by default. It takes these options.
+
+| Option          | Meaning                                                                        |
+| --------------- | ------------------------------------------------------------------------------ |
+| `--yes`         | Don't ask; keep the data unless you give `--remove-data`. A switch.           |
+| `--remove-data` | Remove the instance's directories without asking. A switch.                    |
+
+```
+bob service status --json
+bob upgrade 0.2.0 --yes
+bob uninstall --remove-data
+```

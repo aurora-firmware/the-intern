@@ -381,6 +381,11 @@ for one. The same mail text isn't mailed twice, so an auto-reply that resumes a 
 out at most once: if the service stops while one is going out, it doesn't send it again, and the history says it
 may not have gone out.
 
+The same mail text isn't mailed twice and each email goes out at most once within one database's history. A rollback, or
+an import of an older copy, brings back a database from before some of that history. It can take in again mail that
+arrived since the copy, and send again mail the copy still records as owed. See [Installing and
+upgrading](installing.md#roll-back).
+
 ## Use the Mail page
 
 The Mail page is at `/ui/#/mail`, in the sidebar. It lists each account with its address, kind, status, last error and
