@@ -7,8 +7,8 @@ import { programLayout } from "../../src/install/program_layout.ts";
 import {
     type CommandResult,
     type CommandRunner,
-    ServiceRefusedError,
     type ServiceRecord,
+    ServiceRefusedError,
 } from "../../src/install/service_manager.ts";
 import { renderUnit, systemdService } from "../../src/install/systemd_service.ts";
 
@@ -139,7 +139,10 @@ describe("register", () => {
     });
 
     it("asks sudo on a terminal when the account is refused", async () => {
-        const { fake, manager } = await setup((line) => (line === "loginctl enable-linger" ? { code: 1 } : undefined), true);
+        const { fake, manager } = await setup(
+            (line) => (line === "loginctl enable-linger" ? { code: 1 } : undefined),
+            true,
+        );
         const record = newRecord();
         await manager.register(record, { writeLine: () => {} });
         const sudo = fake.calls.find((call) => call.command === "sudo");
@@ -196,7 +199,10 @@ describe("register", () => {
         assert.equal(record.lingerTurnedOn, false);
         const lines = fake.lines();
         assert.ok(lines.includes("loginctl disable-linger"));
-        assert.ok(lines.lastIndexOf("systemctl --user daemon-reload") > lines.indexOf("systemctl --user enable the-intern.service"));
+        assert.ok(
+            lines.lastIndexOf("systemctl --user daemon-reload") >
+                lines.indexOf("systemctl --user enable the-intern.service"),
+        );
     });
 
     it("disables the unit and removes it when start is refused", async () => {
@@ -280,7 +286,9 @@ describe("remove, stop, start, state and logCommand", () => {
     });
 
     it("reports not registered without a unit file", async () => {
-        const { fake, manager } = await setup((line) => (line.includes("is-enabled") ? { stdout: "enabled\n" } : undefined));
+        const { fake, manager } = await setup((line) =>
+            line.includes("is-enabled") ? { stdout: "enabled\n" } : undefined,
+        );
         assert.deepEqual(await manager.state(newRecord()), { registered: false, startsAtBoot: false });
         assert.deepEqual(fake.lines(), []);
     });
