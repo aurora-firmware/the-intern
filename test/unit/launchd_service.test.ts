@@ -107,7 +107,9 @@ describe("renderPlist", () => {
     const plist = renderPlist(newRecord(), layout, USER);
 
     it("keeps the service alive only while the hold file is absent", () => {
-        const keepAlive = /<key>KeepAlive<\/key>\s*<dict>([\s\S]*?)<\/dict>\s*(?:<key>|<\/dict>\s*<\/plist>)/.exec(plist);
+        const keepAlive = /<key>KeepAlive<\/key>\s*<dict>([\s\S]*?)<\/dict>\s*(?:<key>|<\/dict>\s*<\/plist>)/.exec(
+            plist,
+        );
         assert.ok(keepAlive, "no KeepAlive dict");
         const body = keepAlive[1] ?? "";
         assert.equal((body.match(/<key>/g) ?? []).length, 2);
@@ -174,7 +176,7 @@ describe("register", () => {
         const { layout, fake, record, plistPath } = await setup();
         const capturing = launchdService(
             async (command, args, options) => {
-                const source = args[args.length - 2] ?? "";
+                const source = args[5] ?? "";
                 installed = await readFile(source, "utf8");
                 return fake.runner(command, args, options);
             },
@@ -183,7 +185,7 @@ describe("register", () => {
         );
         await capturing.register(record, NO_IO);
         assert.equal(installed, renderPlist(record, layout, USER));
-        assert.equal(fake.sudoCalls()[0]?.args.at(-1), plistPath);
+        assert.equal(fake.sudoCalls()[0]?.args[6], plistPath);
     });
 
     it("creates service.log owner-only", async () => {
@@ -232,6 +234,7 @@ describe("register", () => {
         await writePlist(plistPath, USER);
         await manager.register(record, NO_IO);
         assert.equal(fake.sudoCalls().length, 1);
+        assert.match(fake.sudoCalls()[0]?.args[3] ?? "", /^launchctl bootout system\/.*; \/usr\/bin\/install/);
     });
 });
 
@@ -244,7 +247,7 @@ describe("remove", () => {
         assert.deepEqual(args.slice(0, 3), ["-n", "/bin/sh", "-c"]);
         assert.match(args[3] ?? "", new RegExp(`launchctl bootout system/${LABEL}`));
         assert.match(args[3] ?? "", /rm -f/);
-        assert.equal(args.at(-1), plistPath);
+        assert.equal(args[6], plistPath);
     });
 
     it("throws naming admin rights when sudo is refused", async () => {
@@ -318,7 +321,7 @@ describe("state and logCommand", () => {
     });
 
     it("names the tail command on service.log", async () => {
-        const { manager, record } = await setup();
-        assert.equal(manager.logCommand(record), "tail -n 100 /h/state/service.log");
+        const { manager } = await setup();
+        assert.equal(manager.logCommand(newRecord()), "tail -n 100 /h/state/service.log");
     });
 });
