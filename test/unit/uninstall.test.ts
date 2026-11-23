@@ -283,6 +283,35 @@ describe("bob uninstall", () => {
         assert.equal(await exists(layout.serviceRecord), true);
     });
 
+    it("finishes on a rerun after lingering was refused, though the service is already removed", async () => {
+        const record = recordOf({ lingerTurnedOn: true });
+        await writeServiceRecord(layout, record);
+        const { context, calls } = setup();
+        let isRegistered = true;
+        const manager: ServiceManager = {
+            ...fakeManager(calls),
+            stop: async () => {
+                if (!isRegistered) throw new Error("systemctl --user stop was refused: unit not loaded");
+                calls.push("stop");
+            },
+            remove: async () => {
+                isRegistered = false;
+                calls.push("remove");
+            },
+            state: async () => ({ registered: isRegistered, startsAtBoot: isRegistered }),
+        };
+        const withManager = { ...context, managerFor: () => manager };
+        const refusing: CommandRunner = async () => ({ code: 1, stdout: "", stderr: "" });
+        const working: CommandRunner = async () => ({ code: 0, stdout: "", stderr: "" });
+
+        const first = await runUninstall({ context: withManager, yes: true, removeData: false, runner: refusing });
+        const second = await runUninstall({ context: withManager, yes: true, removeData: false, runner: working });
+
+        assert.equal(first, 1);
+        assert.equal(second, 0);
+        assert.equal(await exists(layout.root), false);
+    });
+
     it("doesn't turn lingering off when the record says it was on before", async () => {
         const record = recordOf({ lingerTurnedOn: false });
         await writeServiceRecord(layout, record);
