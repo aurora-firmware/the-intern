@@ -12,7 +12,8 @@ for scope.
 | [tech_stack.md](tech_stack.md) | The recorded answers to the "Decisions needed" of the development infrastructure components in S-000: language, tools, checks, tests, continuous integration, release, manual. | You need to know which tool or setting is in use, or whether a question is still open. |
 | [coding_guidelines.md](coding_guidelines.md) | The project-specific rules for writing code. | You write or review code. |
 | [writing_style.md](writing_style.md) | How to write documents, tasks, reviews and commit messages: words, sentences, layout and the manual's tone. | You write or review any text. |
-| [release_form.md](release_form.md) | The comparison of the ways to release The Intern, with a recommendation for the product owner. | You work on installation, the boot-time service or upgrades. |
+| [release_form.md](release_form.md) | The comparison of the ways to release The Intern and the reasons for the form the product owner chose. | You want to know why a release is a bundle per platform. |
+| [releasing.md](releasing.md) | How to cut a release, build a bundle locally and run the installation cycle against local bundles. | You cut a release, or you work on installation, upgrades or the installation cycle. |
 | [local_runs.md](local_runs.md) | How to run your own instance, apart from a team's, and how to inspect it. | You want to run the service by hand against a real model. |
 | [brand/](brand/) | The Aurora Firmware brand manual and the logo variants, for the style review of the web interface (S-006 AC-016.1). The web interface serves only `web/ui/assets/brand/`. | You review a page against the brand. |
 
