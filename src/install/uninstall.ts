@@ -54,8 +54,11 @@ async function turnLingerOff(input: UninstallInput): Promise<void> {
 async function removeService(input: UninstallInput, record: ServiceRecord): Promise<void> {
     const { context } = input;
     const manager = context.managerFor(record.platform);
-    await manager.stop(record);
-    await manager.remove(record, { writeLine: (text) => writeError(context.io, text) });
+    // A rerun after a refused lingering change finds the service already removed: stopping it again would fail.
+    if ((await manager.state(record)).registered) {
+        await manager.stop(record);
+        await manager.remove(record, { writeLine: (text) => writeError(context.io, text) });
+    }
     if (record.platform === "linux-x64" && record.lingerTurnedOn) {
         writeError(context.io, "Turning off lingering (admin rights may be asked).");
         await turnLingerOff(input);
