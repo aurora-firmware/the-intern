@@ -243,29 +243,36 @@ type StatusView = {
     piAgentDir: string | null;
 };
 
-/** Reports a file or supervisor problem as a warning and answers `fallback`: `status` shows what it can in every state. */
-async function orWarn<T>(io: CommandIo, read: () => Promise<T>, fallback: T): Promise<T> {
+/**
+ * Answers `fallback` with a warning naming what was being read when `read` fails in any way: `status` shows what it can
+ * and exits 0 in every state (S-010 REQ-005), so no error from one of its reads may end it.
+ */
+async function orWarn<T>(io: CommandIo, reading: string, read: () => Promise<T>, fallback: T): Promise<T> {
     try {
         return await read();
     } catch (error) {
-        if (
-            error instanceof ServiceRecordError ||
-            error instanceof ServiceRefusedError ||
-            error instanceof OperationJournalError
-        ) {
-            writeError(io, `Warning: ${error.message}`);
-            return fallback;
-        }
-        throw error;
+        const reason = error instanceof Error ? error.message : String(error);
+        writeError(io, `Warning: can't read ${reading}: ${reason}`);
+        return fallback;
     }
 }
 
 async function statusView(context: ServiceCommandContext): Promise<StatusView> {
-    const record = await orWarn(context.io, () => readServiceRecord(context.layout), null);
+    const record = await orWarn(
+        context.io,
+        context.layout.serviceRecord,
+        () => readServiceRecord(context.layout),
+        null,
+    );
     const state =
         record === null
             ? undefined
-            : await orWarn(context.io, () => context.managerFor(record.platform).state(record), undefined);
+            : await orWarn(
+                  context.io,
+                  "the service's state from its supervisor",
+                  () => context.managerFor(record.platform).state(record),
+                  undefined,
+              );
     if (record === null || state === undefined || !state.registered) {
         return {
             registered: false,
@@ -295,17 +302,10 @@ async function statusView(context: ServiceCommandContext): Promise<StatusView> {
 
 const yesNo = (value: boolean): string => (value ? "yes" : "no");
 
-/** The version a link names, "none" without the link, or "unreadable" with a warning when it isn't a version link. */
-async function linkText(context: ServiceCommandContext, which: LinkName): Promise<string> {
-    try {
-        return (await readLink(context.layout, which)) ?? "none";
-    } catch (error) {
-        const isNotALink = (error as NodeJS.ErrnoException).code === "EINVAL";
-        if (!(error instanceof ProgramLayoutError) && !isNotALink) throw error;
-        const reason = isNotALink ? `${context.layout[which]} is not a link` : (error as Error).message;
-        writeError(context.io, `Warning: ${reason}`);
-        return "unreadable";
-    }
+/** The version a link names, "none" without the link, or "unreadable" when it can't be read as a version link. */
+function linkText(context: ServiceCommandContext, which: LinkName): Promise<string> {
+    const { layout } = context;
+    return orWarn(context.io, layout[which], async () => (await readLink(layout, which)) ?? "none", "unreadable");
 }
 
 async function statusText(context: ServiceCommandContext, view: StatusView): Promise<string[]> {
@@ -318,7 +318,7 @@ async function statusText(context: ServiceCommandContext, view: StatusView): Pro
         `Previous version: ${await linkText(context, "previous")}`,
         `Held: ${yesNo(existsSync(layout.holdFile))}`,
     ];
-    const journal = await orWarn(context.io, () => readJournal(layout), null);
+    const journal = await orWarn(context.io, layout.journal, () => readJournal(layout), null);
     if (journal !== null) {
         const after = journal.lastStep === null ? "before its first step" : `after ${journal.lastStep}`;
         lines.push(`Cut off: ${journal.operation} from ${journal.from} to ${journal.to} was cut off ${after}`);
@@ -334,12 +334,10 @@ async function statusText(context: ServiceCommandContext, view: StatusView): Pro
     return lines;
 }
 
-/** Takes no lock and changes nothing; exits 0 in every state of the service. */
-export function runServiceStatus(context: ServiceCommandContext, options: { json: boolean }): Promise<number> {
-    return reportingRefusals(context.io, async () => {
-        const view = await statusView(context);
-        if (options.json) writeJson(context.io, view);
-        else for (const line of await statusText(context, view)) writeLine(context.io, line);
-        return 0;
-    });
+/** Takes no lock and changes nothing; exits 0 in every state of the service, each failed read a warning. */
+export async function runServiceStatus(context: ServiceCommandContext, options: { json: boolean }): Promise<number> {
+    const view = await statusView(context);
+    if (options.json) writeJson(context.io, view);
+    else for (const line of await statusText(context, view)) writeLine(context.io, line);
+    return 0;
 }
