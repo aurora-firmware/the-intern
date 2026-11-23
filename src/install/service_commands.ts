@@ -5,6 +5,7 @@
  * installation modules, never a pi package (ADR-005 decision 2).
  */
 import { existsSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { CommandIo } from "../cli/command_line.ts";
 import { writeError, writeJson, writeLine } from "../cli/output.ts";
@@ -46,6 +47,7 @@ const SERVICE_LABELS: Record<Platform, string> = {
 
 /** How long `status` waits for the daemon's answer before it reports the service as not running. */
 const STATUS_ANSWER_MS = 5_000;
+const OWNER_ONLY_DIR_MODE = 0o700;
 
 export type ServiceCommandContext = {
     io: CommandIo;
@@ -95,6 +97,7 @@ export async function withInstallLock<T>(
     resumers: Resumers,
     work: () => Promise<T>,
 ): Promise<T> {
+    await mkdir(layout.root, { recursive: true, mode: OWNER_ONLY_DIR_MODE });
     const handle = await acquireInstallLock(layout.root, commandName);
     try {
         await finishCutOffOperation(layout, resumers);
@@ -213,9 +216,14 @@ async function removeSteps(context: ServiceCommandContext): Promise<number> {
 }
 
 export function runServiceRemove(context: ServiceCommandContext): Promise<number> {
-    return reportingRefusals(context.io, () =>
-        withInstallLock(context.layout, "service remove", context.resumers, () => removeSteps(context)),
-    );
+    return reportingRefusals(context.io, async () => {
+        if (!existsSync(context.layout.root)) {
+            // Nothing was ever installed; REQ-005 leaves the program folder as it was, so it isn't created for the lock.
+            writeError(context.io, "No service is registered.");
+            return 0;
+        }
+        return withInstallLock(context.layout, "service remove", context.resumers, () => removeSteps(context));
+    });
 }
 
 /** The daemon's version, or null when it doesn't answer within `ms`: a silent daemon can't hold `status` up. */

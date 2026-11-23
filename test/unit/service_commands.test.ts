@@ -646,6 +646,18 @@ describe("bob service remove", () => {
         assert.equal(await exists(layout.holdFile), false);
     });
 
+    it("exits 0 saying no service is registered, and leaves no program folder, when it doesn't exist", async () => {
+        const { context, manager, io } = setup();
+        await rm(layout.root, { recursive: true });
+
+        const status = await runServiceRemove(context);
+
+        assert.equal(status, 0);
+        assert.match(io.err(), /No service is registered/);
+        assert.deepEqual(manager.calls, []);
+        assert.equal(await exists(layout.root), false);
+    });
+
     it("exits 1 naming the reason and keeps the record when the service can't be stopped", async () => {
         const manager = fakeManager();
         manager.stop = async () => {
@@ -686,6 +698,17 @@ describe("withInstallLock", () => {
             /boom/,
         );
 
+        assert.equal(await exists(layout.installLock), false);
+    });
+});
+
+describe("withInstallLock without a program folder", () => {
+    it("creates the folder so the lock can be taken, and runs the work", async () => {
+        await rm(layout.root, { recursive: true });
+
+        const ran = await withInstallLock(layout, "service install", NO_RESUMERS, async () => true);
+
+        assert.equal(ran, true);
         assert.equal(await exists(layout.installLock), false);
     });
 });
