@@ -7,7 +7,7 @@ import { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import type { CommandIo } from "../../src/cli/command_line.ts";
 import { readOwnerLock } from "../../src/daemon/ownership.ts";
-import type { StartupReport } from "../../src/daemon/startup_report.ts";
+import { type StartupReport, writeStartupReport } from "../../src/daemon/startup_report.ts";
 import { type InstanceDirs, resolveInstanceDirs } from "../../src/daemon/state_layout.ts";
 import type { PlatformFacts } from "../../src/install/install_model.ts";
 import { type OperationJournal, readJournal, type StepIo, writeJournal } from "../../src/install/operation_journal.ts";
@@ -164,7 +164,11 @@ function setup(options: { newVersion: Outcome | "throws"; isStdinTerminal?: bool
         async start() {
             starts += 1;
             events.push(`start ${await readLink(layout, "current")}`);
-            if (starts === 1) {
+            if (starts === 1 && (await readLink(layout, "current")) === "1.1.0") {
+                if (options.newVersion === "throws") await writeFile(join(dirs.stateDir, "startup.json"), "{broken");
+                else if (options.newVersion.report !== undefined) {
+                    await writeStartupReport(dirs.stateDir, options.newVersion.report);
+                }
                 await writeFile(dirs.configFile, "setting = 2\n");
                 await writeFile(join(dirs.dataDir, "instructions", "a.md"), "new instructions");
                 const database = new DatabaseSync(dirs.databaseFile);
@@ -296,7 +300,7 @@ describe("bob upgrade when the new version fails after opening the database", ()
         const aside = (await folders()).filter((name) => name.endsWith("-1.1.0-failed-upgrade"));
         assert.equal(aside.length, 1);
         assert.ok(
-            markerTables(join(upgradesDir(dirs.stateDir), aside[0], "database.sqlite")).includes("after_upgrade"),
+            markerTables(join(upgradesDir(dirs.stateDir), aside[0], "the-intern.sqlite")).includes("after_upgrade"),
         );
         const tables = markerTables(dirs.databaseFile);
         assert.ok(tables.includes("before_upgrade"));

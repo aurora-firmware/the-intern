@@ -413,7 +413,7 @@ describe("resuming a cut-off upgrade", () => {
 
     it("refuses with the reason when the resumed upgrade is not ready", async () => {
         const { context } = setup({ ready: { ready: false, report: undefined } });
-        const journal = cutOffJournal("released");
+        const journal = { ...cutOffJournal("released"), copyName: "the-copy" };
         await writeJournal(layout, journal);
 
         await assert.rejects(resumeUpgrade(context, journal), /ready/);

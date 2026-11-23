@@ -13,8 +13,14 @@ function resumersFor(contextOfRun: () => Context) {
             const { resumeUpgrade } = await import("../install/upgrade.ts");
             await resumeUpgrade(contextOfRun(), journal);
         },
-        "switch-back": async () => {},
-        "fresh-start": async () => {},
+        "switch-back": async (journal: Parameters<Context["resumers"]["upgrade"]>[0]) => {
+            const { resumeSwitchBack } = await import("../install/upgrade.ts");
+            await resumeSwitchBack(contextOfRun(), journal);
+        },
+        "fresh-start": async (journal: Parameters<Context["resumers"]["upgrade"]>[0]) => {
+            const { resumeFreshStart } = await import("../install/upgrade.ts");
+            await resumeFreshStart(contextOfRun(), journal);
+        },
         rollback: async () => {},
     };
 }
