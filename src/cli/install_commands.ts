@@ -4,17 +4,28 @@
  */
 import type { CommandInput, CommandSpec } from "./command_line.ts";
 
-/** The resumers of cut-off operations. The upgrade and rollback commands add theirs; none exists yet. */
-const RESUMERS = {
-    upgrade: async () => {},
-    "switch-back": async () => {},
-    "fresh-start": async () => {},
-    rollback: async () => {},
-};
+type Context = Awaited<ReturnType<typeof contextOf>>;
+
+/** The resumers of cut-off operations. The rollback command adds its own; none exists yet. */
+function resumersFor(contextOfRun: () => Context) {
+    return {
+        upgrade: async (journal: Parameters<Context["resumers"]["upgrade"]>[0]) => {
+            const { resumeUpgrade } = await import("../install/upgrade.ts");
+            await resumeUpgrade(contextOfRun(), journal);
+        },
+        "switch-back": async () => {},
+        "fresh-start": async () => {},
+        rollback: async () => {},
+    };
+}
 
 async function contextOf(input: CommandInput) {
     const { serviceCommandContext } = await import("../install/service_commands.ts");
-    return serviceCommandContext(input.io, RESUMERS);
+    const context = serviceCommandContext(
+        input.io,
+        resumersFor(() => context),
+    );
+    return context;
 }
 
 const install: CommandSpec = {
@@ -59,4 +70,18 @@ const status: CommandSpec = {
     },
 };
 
-export const INSTALL_COMMANDS: readonly CommandSpec[] = [install, remove, status];
+const upgrade: CommandSpec = {
+    verb: "upgrade",
+    summary: "Stop the service, move it to a newer version (the latest unless one is given) and start it again.",
+    positionals: [{ name: "version", required: false }],
+    options: { yes: { type: "boolean", description: "Don't ask before stopping the service." } },
+    isData: false,
+    callsService: false,
+    async run(input) {
+        const { runUpgrade } = await import("../install/upgrade.ts");
+        const version = input.positionals[0];
+        return runUpgrade({ context: await contextOf(input), version, yes: input.options.yes === true });
+    },
+};
+
+export const INSTALL_COMMANDS: readonly CommandSpec[] = [install, remove, status, upgrade];
