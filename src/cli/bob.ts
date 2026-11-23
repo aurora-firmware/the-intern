@@ -1,7 +1,7 @@
 /**
  * The `bob` command line (S-005 REQ-001). `main` parses the arguments against the command table, prints help, usage
- * errors and reserved-group notices, and otherwise runs the command. Run it as `node src/cli/bob.ts <command>` until
- * the release form provides a `bob` launcher.
+ * errors and reserved-group notices, and otherwise runs the command. The bundle's `bin/bob` launcher runs it; a
+ * development checkout runs it as `node src/cli/bob.ts <command>`.
  */
 import { homedir } from "node:os";
 import { type CommandIo, EXIT_CODES, parseCommandLine } from "./command_line.ts";
