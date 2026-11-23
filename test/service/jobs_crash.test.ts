@@ -1,0 +1,500 @@
+/**
+ * The repair rules of S-004 REQ-018 and the turn-end check across a real `kill -9`: the child daemon kills itself at a
+ * write point of the Jobs component (`jobCrashAt`), a second child starts on the same instance, and the first calls
+ * after `ready` see the state the repair left, since startup repairs jobs before the daemon is ready.
+ */
+import assert from "node:assert/strict";
+import { afterEach, describe, it } from "node:test";
+import { REMINDER_TEXT } from "../../src/jobs/turn_end_rule.ts";
+import type { DaemonProcess } from "../support/daemon_process.ts";
+import type { HermeticEnv } from "../support/hermetic_env.ts";
+import {
+    assertBlockedAsStopped,
+    assertNoRun,
+    conversationsOf,
+    createJob,
+    createStartedJob,
+    DAEMON_AUTHOR,
+    disposeCrashTest,
+    type Entry,
+    entriesOf,
+    hermetic,
+    historyOf,
+    type JobView,
+    jobOf,
+    type Listing,
+    listingOf,
+    start,
+    steersWith,
+    TEST_TIMEOUT_MS,
+    untilInProgress,
+    untilKilled,
+    untilStatus,
+    untilTrue,
+    userInputsWith,
+} from "../support/jobs_crash_support.ts";
+
+const REASON = "which build is failing?";
+const ANSWER = "the answer that reached the lead";
+const RULE_4 = { rule: 4, did: "Closed and aborted the conversations of the Done job" };
+
+afterEach(disposeCrashTest);
+
+/** The rules of the job's `repair` history entries, each of which the daemon must have authored. */
+async function repairsOf(daemon: DaemonProcess, job: string): Promise<number[]> {
+    const repairs = (await historyOf(daemon, job)).filter((entry) => entry.field === "repair");
+    for (const repair of repairs) assert.deepEqual(repair.author, DAEMON_AUTHOR, "the daemon authors each repair");
+    return repairs.map((repair) => (repair.new as { rule: number }).rule);
+}
+
+/** Every repair entry of the job, of any rule: the rule and what it did. */
+async function repairEntriesOf(daemon: DaemonProcess, job: string): Promise<unknown[]> {
+    return (await historyOf(daemon, job)).filter((entry) => entry.field === "repair").map((entry) => entry.new);
+}
+
+/** Every conversation of the job is closed and runs nothing, and none awaits a report or holds a message. */
+async function assertClosedAndStopped(daemon: DaemonProcess, job: string, count: number): Promise<Listing[]> {
+    const conversations = await conversationsOf(daemon, job);
+    assert.equal(conversations.length, count);
+    for (const conversation of conversations) {
+        assert.equal(conversation.status, "closed", conversation.id);
+        await assertNoRun(daemon, conversation.id);
+    }
+    await assertNothingWaiting(daemon, job);
+    return conversations;
+}
+
+/** Rule 4 leaves no conversation of the job awaiting a report or holding a message. */
+async function assertNothingWaiting(daemon: DaemonProcess, job: string): Promise<void> {
+    const waiting = (await daemon.invoke("test.waiting", { job })) as {
+        id: string;
+        awaiting: string[];
+        held: number;
+    }[];
+    assert.ok(waiting.length > 0, "the job has conversations");
+    for (const conversation of waiting) assert.deepEqual(conversation, { id: conversation.id, awaiting: [], held: 0 });
+}
+
+/** The fake model echoes each input it takes, so one echo is one input the lead took. */
+const echoesOf = async (daemon: DaemonProcess, conversationId: string, text: string) =>
+    (await entriesOf(daemon, conversationId)).filter(
+        (entry) => entry.kind === "pi.assistant" && JSON.stringify(entry.data).includes(`echo: ${text}`),
+    ).length;
+async function untilLeadAnswered(daemon: DaemonProcess, leadId: string): Promise<void> {
+    await untilTrue(
+        async () => (await entriesOf(daemon, leadId)).some((entry) => entry.kind === "pi.assistant"),
+        "the lead's answer",
+    );
+    await untilStatus(daemon, leadId, "idle");
+}
+
+/** Sends the answer to the lead the way a team member's reply does; the request id keeps it from being a resume. */
+const answerLead = (daemon: DaemonProcess, conversationId: string) =>
+    daemon
+        .invoke("conversations.submit", {
+            conversationId,
+            content: ANSWER,
+            requestId: "answer-1",
+            busyMode: "followUp",
+        })
+        .catch(() => undefined);
+
+describe("kill -9 after the job write and before its lead starts", () => {
+    it("starts one lead that takes the first input once, and a repeated create returns the job", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const env = await hermetic();
+        const first = start(env, "echo", "job-created");
+        await first.ready;
+        await assert.rejects(createJob(first, "crash at creation", "key-1"));
+        await untilKilled(first);
+
+        const second = start(env, "echo");
+        await second.ready;
+
+        const [job] = ((await second.invoke("jobs.list", {})) as { jobs: JobView[] }).jobs;
+        assert.ok(job);
+        // Rule 1 seats the lead at startup; the job starts on the lead's admission grant, which may come after ready.
+        await untilInProgress(second, job.id);
+        const leads = (await conversationsOf(second, job.id)).filter((conversation) => conversation.isLead);
+        assert.equal(leads.length, 1);
+        assert.deepEqual(await repairsOf(second, job.id), [1]);
+        const leadId = (leads[0] as Listing).id;
+        await untilLeadAnswered(second, leadId);
+        assert.equal(await userInputsWith(second, leadId, "crash at creation"), 1);
+
+        const repeated = await createJob(second, "crash at creation", "key-1");
+
+        assert.equal(repeated.id, job.id);
+        assert.equal(repeated.leadConversation, leadId);
+        assert.equal((await conversationsOf(second, job.id)).length, 1);
+        assert.equal(await userInputsWith(second, leadId, "crash at creation"), 1);
+        assert.deepEqual(await repairsOf(second, job.id), [1]);
+    });
+});
+
+describe("kill -9 after the lead conversation is created and before its first input", () => {
+    it("submits the first input once to the same lead at the next start, and a third start repairs nothing", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const env = await hermetic();
+        const first = start(env, "echo", "lead-created");
+        await first.ready;
+        await assert.rejects(createJob(first, "crash after the lead", "key-2"));
+        await untilKilled(first);
+
+        const second = start(env, "echo");
+        await second.ready;
+
+        const [job] = ((await second.invoke("jobs.list", {})) as { jobs: JobView[] }).jobs;
+        assert.ok(job);
+        const leads = (await conversationsOf(second, job.id)).filter((conversation) => conversation.isLead);
+        assert.equal(leads.length, 1);
+        assert.deepEqual(await repairsOf(second, job.id), [1]);
+        const leadId = (leads[0] as Listing).id;
+        await untilLeadAnswered(second, leadId);
+        assert.equal((await jobOf(second, job.id)).status, "in_progress");
+        assert.equal(await userInputsWith(second, leadId, "crash after the lead"), 1);
+        const historyLength = (await historyOf(second, job.id)).length;
+        second.kill9();
+        await second.exited;
+
+        const third = start(env, "echo");
+        await third.ready;
+
+        assert.deepEqual(await repairsOf(third, job.id), [1]);
+        assert.equal((await historyOf(third, job.id)).length, historyLength);
+        assert.equal((await conversationsOf(third, job.id)).length, 1);
+        assert.equal(await userInputsWith(third, leadId, "crash after the lead"), 1);
+    });
+});
+
+describe("kill -9 after the block write and before the park", () => {
+    it("parks the lead for an answer at the next start", { timeout: TEST_TIMEOUT_MS }, async () => {
+        const env = await hermetic();
+        const first = start(env, "echo", "job-blocked");
+        await first.ready;
+        const job = await createStartedJob(first, "block me");
+        const leadId = job.leadConversation as string;
+        await untilLeadAnswered(first, leadId);
+        const blocking = first.invoke("test.blockJob", { job: job.id, reason: REASON }).catch(() => undefined);
+        await untilKilled(first);
+        await blocking;
+
+        const second = start(env, "echo");
+        await second.ready;
+
+        const stored = await jobOf(second, job.id);
+        assert.equal(stored.status, "blocked");
+        assert.equal(stored.blockedReason, REASON);
+        assert.equal((await listingOf(second, leadId)).status, "parked");
+        assert.deepEqual(await repairsOf(second, job.id), [2]);
+    });
+});
+
+describe("kill -9 after input reached the lead of a Blocked job and before the resume", () => {
+    it("resumes the job and lets the lead take input that was queued for its running run", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const env = await hermetic();
+        const first = start(env, "gated", "lead-input");
+        await first.ready;
+        const job = await createStartedJob(first, "block me while I run");
+        const leadId = job.leadConversation as string;
+        await untilStatus(first, leadId, "running");
+        await first.invoke("test.blockJob", { job: job.id, reason: REASON });
+        const answering = answerLead(first, leadId);
+        await untilKilled(first);
+        await answering;
+
+        const second = start(env, "echo");
+        await second.ready;
+
+        const stored = await jobOf(second, job.id);
+        assert.equal(stored.status, "in_progress");
+        assert.equal(stored.blockedReason, undefined);
+        assert.notEqual((await listingOf(second, leadId)).status, "parked");
+        assert.deepEqual(await repairsOf(second, job.id), [3]);
+        await untilTrue(async () => (await echoesOf(second, leadId, ANSWER)) === 1, "the lead to take the answer");
+    });
+
+    it("resumes the job and unparks an idle lead that took the answer before the kill", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const env = await hermetic();
+        const first = start(env, "echo", "lead-input");
+        await first.ready;
+        const job = await createStartedJob(first, "block me while idle");
+        const leadId = job.leadConversation as string;
+        await untilLeadAnswered(first, leadId);
+        await first.invoke("test.blockJob", { job: job.id, reason: REASON });
+        assert.equal((await listingOf(first, leadId)).status, "parked");
+        const answering = answerLead(first, leadId);
+        await untilKilled(first);
+        await answering;
+
+        const second = start(env, "echo");
+        await second.ready;
+
+        const stored = await jobOf(second, job.id);
+        assert.equal(stored.status, "in_progress");
+        assert.equal(stored.blockedReason, undefined);
+        assert.notEqual((await listingOf(second, leadId)).status, "parked");
+        assert.deepEqual(await repairsOf(second, job.id), [3]);
+        // The unparked lead answers the input in a run of the second daemon, once its prompt is read.
+        await untilTrue(async () => (await echoesOf(second, leadId, ANSWER)) > 0, "the lead to answer");
+        await untilStatus(second, leadId, "idle");
+        assert.equal(await echoesOf(second, leadId, ANSWER), 1, "the lead took the answer once");
+    });
+});
+
+describe("kill -9 after a complete or cancel write and before the aborts", () => {
+    it("leaves no parked lead after a cancel", { timeout: TEST_TIMEOUT_MS }, async () => {
+        const env = await hermetic();
+        const first = start(env, "echo", "job-cancelled");
+        await first.ready;
+        const job = await createStartedJob(first, "cancel me while blocked");
+        const leadId = job.leadConversation as string;
+        await untilLeadAnswered(first, leadId);
+        await first.invoke("test.blockJob", { job: job.id, reason: REASON });
+        assert.equal((await listingOf(first, leadId)).status, "parked");
+        const cancelling = first
+            .invoke("jobs.cancel", { job: job.id, justification: "no longer needed" })
+            .catch(() => undefined);
+        await untilKilled(first);
+        await cancelling;
+
+        const second = start(env, "echo");
+        await second.ready;
+
+        assert.equal((await jobOf(second, job.id)).status, "done");
+        assert.equal((await listingOf(second, leadId)).status, "closed");
+        await assertNoRun(second, leadId);
+        await assertNothingWaiting(second, job.id);
+        assert.deepEqual(await repairsOf(second, job.id), [4]);
+    });
+
+    it("closes an idle lead that waits for nothing after a complete", { timeout: TEST_TIMEOUT_MS }, async () => {
+        const env = await hermetic();
+        const first = start(env, "echo", "job-completed");
+        await first.ready;
+        const job = await createStartedJob(first, "complete me while idle");
+        const leadId = job.leadConversation as string;
+        await untilLeadAnswered(first, leadId);
+        await first.invoke("jobs.update", { job: job.id, definitionOfDone: "the work is stopped" });
+        const completing = first.invoke("jobs.complete", { job: job.id, justification: "done" }).catch(() => undefined);
+        await untilKilled(first);
+        await completing;
+
+        const second = start(env, "echo");
+        await second.ready;
+
+        assert.equal((await jobOf(second, job.id)).status, "done");
+        await assertClosedAndStopped(second, job.id, 1);
+        assert.deepEqual(await repairEntriesOf(second, job.id), [RULE_4]);
+    });
+
+    it("leaves no conversation running or parked after a complete", { timeout: TEST_TIMEOUT_MS }, async () => {
+        const env = await hermetic();
+        const first = start(env, "invoke-parked", "job-completed");
+        await first.ready;
+        const job = await createStartedJob(first, "complete me with work in flight");
+        await untilTrue(async () => (await conversationsOf(first, job.id)).length === 3, "both invoked conversations");
+        await first.invoke("jobs.update", { job: job.id, definitionOfDone: "the work is stopped" });
+        const completing = first
+            .invoke("jobs.complete", { job: job.id, justification: "done early" })
+            .catch(() => undefined);
+        await untilKilled(first);
+        await completing;
+
+        const second = start(env, "invoke-parked");
+        await second.ready;
+
+        assert.equal((await jobOf(second, job.id)).status, "done");
+        const conversations = await conversationsOf(second, job.id);
+        assert.equal(conversations.length, 3);
+        for (const conversation of conversations) {
+            assert.equal(conversation.status, "closed", conversation.id);
+            await assertNoRun(second, conversation.id);
+        }
+        await assertNothingWaiting(second, job.id);
+        assert.deepEqual(await repairsOf(second, job.id), [4]);
+    });
+});
+
+describe("kill -9 between a job's closed-mark commits and the aborts", () => {
+    /** Kills a daemon after the closed marks of a job whose lead awaits two running invoked agents are committed. */
+    async function killedAfterClosedMarks(env: HermeticEnv): Promise<JobView> {
+        const first = start(env, "invoke-parked", "conversations-closed");
+        await first.ready;
+        const job = await createStartedJob(first, "cancel me with work in flight");
+        await untilTrue(async () => (await conversationsOf(first, job.id)).length === 3, "both invoked conversations");
+        const cancelling = first
+            .invoke("jobs.cancel", { job: job.id, justification: "no longer needed" })
+            .catch(() => undefined);
+        await untilKilled(first);
+        await cancelling;
+        return job;
+    }
+
+    it("aborts every closed conversation of the job by rule 4 before the daemon is ready", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const env = await hermetic();
+        const job = await killedAfterClosedMarks(env);
+
+        const second = start(env, "invoke-parked");
+        await second.ready;
+
+        assert.equal((await jobOf(second, job.id)).status, "done");
+        await assertClosedAndStopped(second, job.id, 3);
+        assert.deepEqual(await repairEntriesOf(second, job.id), [RULE_4]);
+    });
+
+    it("keeps each conversation closed, with no model turn or compaction, across a later kill -9", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const env = await hermetic();
+        const job = await killedAfterClosedMarks(env);
+        const second = start(env, "invoke-parked");
+        await second.ready;
+        const conversations = await assertClosedAndStopped(second, job.id, 3);
+        const entriesBefore = new Map<string, Entry[]>();
+        for (const { id } of conversations) entriesBefore.set(id, await entriesOf(second, id));
+        second.kill9();
+        await second.exited;
+
+        const third = start(env, "invoke-parked");
+        await third.ready;
+
+        await assertClosedAndStopped(third, job.id, 3);
+        for (const { id } of conversations) assert.deepEqual(await entriesOf(third, id), entriesBefore.get(id), id);
+        assert.deepEqual(await repairEntriesOf(third, job.id), [RULE_4]);
+        const deskId = ((await third.invoke("desk.get", {})) as { conversationId: string }).conversationId;
+        assert.notEqual((await listingOf(third, deskId)).status, "closed");
+    });
+});
+
+describe("kill -9 in a lead's complete tool, after the closed mark", () => {
+    it("settles the run's input unanswered as aborted at the next start, with no further model request", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const env = await hermetic();
+        const first = start(env, "invoke-and-complete", "conversations-closed");
+        await first.ready;
+        const job = await createJob(first, "complete from the lead's tool");
+        const leadId = job.leadConversation as string;
+        await untilKilled(first);
+
+        const second = start(env, "invoke-and-complete");
+        await second.ready;
+
+        assert.equal((await jobOf(second, job.id)).status, "done");
+        const conversations = await assertClosedAndStopped(second, job.id, 2);
+        const invokedId = (conversations.find((conversation) => !conversation.isLead) as Listing).id;
+        const report = (await entriesOf(second, invokedId)).findLast((entry) => entry.kind === "pi.assistant") as
+            | (Entry & { id: string })
+            | undefined;
+        assert.ok(report, "the invoked agent has reported");
+        const settlement = await second.invoke("test.submissionState", {
+            conversationId: leadId,
+            requestId: `report:${invokedId}:${report.id}`,
+        });
+        assert.deepEqual(settlement, { state: "unanswered", reason: "aborted" });
+        // The lead's three model turns are update_job, invoke and complete_job; the aborted tool result ends its entries.
+        const leadEntries = await entriesOf(second, leadId);
+        assert.equal(leadEntries.filter((entry) => entry.kind === "pi.assistant").length, 3);
+        assert.equal(leadEntries.at(-1)?.kind, "pi.tool-result");
+        assert.deepEqual(await repairEntriesOf(second, job.id), [RULE_4]);
+    });
+});
+
+describe("kill -9 as a lead's turn ends with its job In progress", () => {
+    it("blocks the job at the next start when it has no definition of done", { timeout: TEST_TIMEOUT_MS }, async () => {
+        const env = await hermetic();
+        const first = start(env, "echo", "turn-ended", true);
+        await first.ready;
+        const job = await createJob(first, "end the turn");
+        await untilKilled(first);
+
+        const second = start(env, "echo", undefined, true);
+        await second.ready;
+
+        const stored = await jobOf(second, job.id);
+        assert.equal(stored.status, "blocked");
+        assert.ok(stored.blockedReason);
+        assert.equal((await listingOf(second, job.leadConversation as string)).status, "parked");
+        const blocks = (await historyOf(second, job.id)).filter((entry) => entry.new === "blocked");
+        assert.deepEqual(
+            blocks.map((entry) => entry.author),
+            [DAEMON_AUTHOR],
+        );
+    });
+
+    it("reminds the lead once at the next start when the job has a definition of done", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const env = await hermetic();
+        const first = start(env, "gated", "turn-ended", true);
+        await first.ready;
+        const job = await createJob(first, "end the turn with a definition of done");
+        const leadId = job.leadConversation as string;
+        await untilStatus(first, leadId, "running");
+        await first.invoke("jobs.update", { job: job.id, definitionOfDone: "the report is filed" });
+        first.releaseRuns();
+        await untilKilled(first);
+
+        // The second daemon's lead is held in the reminder's run: answered at once, it would stop again and be blocked.
+        const second = start(env, "gated", undefined, true);
+        await second.ready;
+
+        assert.equal((await jobOf(second, job.id)).status, "in_progress");
+        await untilTrue(async () => (await steersWith(second, leadId, REMINDER_TEXT)) === 1, "the reminder");
+        assert.deepEqual(await repairsOf(second, job.id), []);
+    });
+});
+
+describe("kill -9 after a team member's abort stopped a lead, before the turn-end rule ran", () => {
+    it("blocks the job as stopped at the next start, with a definition of done and no reminder", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const env = await hermetic();
+        const first = start(env, "gated", "turn-ended", true);
+        await first.ready;
+        const job = await createStartedJob(first, "stop the running lead");
+        const leadId = job.leadConversation as string;
+        await untilStatus(first, leadId, "running");
+        await first.invoke("jobs.update", { job: job.id, definitionOfDone: "the report is filed" });
+        await first.invoke("conversations.abort", { conversationId: leadId }).catch(() => undefined);
+        await untilKilled(first);
+
+        const second = start(env, "gated", undefined, true);
+        await second.ready;
+
+        await assertBlockedAsStopped(second, job);
+    });
+
+    it("blocks the job as stopped at the next start when the aborted lead was parked for invoked agents", {
+        timeout: TEST_TIMEOUT_MS,
+    }, async () => {
+        const env = await hermetic();
+        // The lead's own first turn end would reach the `turn-ended` point before any abort could, so this daemon
+        // applies no rule and the test kills it once the abort and its cascade have ended.
+        const first = start(env, "invoke-parked");
+        await first.ready;
+        const job = await createStartedJob(first, "stop the parked lead");
+        const leadId = job.leadConversation as string;
+        await untilTrue(async () => (await conversationsOf(first, job.id)).length === 3, "both invoked conversations");
+        await first.invoke("jobs.update", { job: job.id, definitionOfDone: "the report is filed" });
+        await first.invoke("conversations.abort", { conversationId: leadId });
+        for (const { id } of await conversationsOf(first, job.id)) await assertNoRun(first, id);
+        assert.equal((await jobOf(first, job.id)).status, "in_progress");
+        first.kill9();
+        await untilKilled(first);
+
+        const second = start(env, "invoke-parked", undefined, true);
+        await second.ready;
+
+        await assertBlockedAsStopped(second, job);
+    });
+});

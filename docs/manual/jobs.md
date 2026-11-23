@@ -1,0 +1,390 @@
+# Giving, following and answering jobs
+
+A job is the unit of work you give The Intern: a request, what must be delivered, and the record of how it went. This
+page explains what a job is, how it moves from To do to Done, and how you create, follow, edit, answer and end one.
+Until the command line and the web interface release their own commands and pages for jobs, you work with jobs through
+the job operations, which you call over the local socket.
+
+## What a job is
+
+You hand over a job as text. The Intern keeps that text exactly as you wrote it, together with where it came from, and
+starts a lead agent on it. The lead is an agent of the role `bob` unless you name another role. See
+[Roles, workspaces and agents sharing a job](roles_and_agents.md).
+
+A job holds these fields:
+
+| Field              | What it holds                                                                                |
+| ------------------ | -------------------------------------------------------------------------------------------- |
+| `number`           | The short number you name the job by, such as `C-14`.                                        |
+| `request`          | The text you gave and where it came from. You can't change it.                               |
+| `title`            | A short name. It can be empty until the lead writes one.                                     |
+| `description`      | The goal, the needs, the plan and the analysis.                                              |
+| `definitionOfDone` | What decides that the job is done. It can be empty until the lead writes one.                |
+| `status`           | `to_do`, `in_progress`, `blocked` or `done`.                                                 |
+| `blockedReason`    | What the job lacks, while it is Blocked.                                                     |
+| `resolution`       | How a Done job ended: `completed` or `cancelled`, with a justification.                      |
+| `related`          | The short numbers of the jobs Related to this one.                                           |
+| `statedBy`         | A name the creator gave itself. It is kept apart from the request and is not checked.        |
+| `requestMark`      | For a job that came by email only: whether its email asks The Intern for something.           |
+| `email`            | For a job that came by email only: the account, the sender, the subject, the saved message and attachments, and the job's thread. |
+| `createdAt`, `updatedAt`, `doneAt` | When the job was created, last changed and became Done.                      |
+
+You can edit `title`, `description` and `definitionOfDone`. Every other field changes only through the actions below.
+A job read with `jobs.get` also shows its `leadConversation`, the conversation the lead works in.
+
+### Short numbers
+
+A short number is a letter, a hyphen and a counter: `C-14`. The letter tells you where the job came from, and each
+letter counts on its own, starting at 1. A number is never reused, even when the job is cancelled.
+
+| Letter | Where the job came from                                   |
+| ------ | --------------------------------------------------------- |
+| `C`    | A request through the local socket (the command line).    |
+| `W`    | A request through the network listener (the web interface). |
+| `E`    | A request by email. See [Jobs that come by email](#jobs-that-come-by-email). |
+| `S`    | A schedule.                                               |
+| `A`    | A follow-up job, created by an agent while it worked on another job. |
+
+Wherever an operation asks for a job, give its short number in any letter case, so `c-14` and `C-14` name the same job.
+
+## Statuses and actions
+
+A job has one of four statuses and moves between them only through five actions.
+
+| Status      | Meaning                                                                                  |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| To do       | The job exists and its lead waits for a free worker thread.                              |
+| In progress | The lead is working on it.                                                               |
+| Blocked     | The lead lacks something and waits for an answer. No agent works on the job.             |
+| Done        | The job ended, completed or cancelled. This status is final.                             |
+
+| Action   | Moves the job                          | Who does it                                                                   |
+| -------- | -------------------------------------- | ----------------------------------------------------------------------------- |
+| start    | To do to In progress                   | The Intern, when the lead's first run gets a worker thread.                   |
+| block    | In progress to Blocked                 | The lead agent only. It needs a Blocked reason.                               |
+| resume   | Blocked to In progress                 | The Intern, on any message to the lead; or you, with `jobs.resume`.           |
+| complete | In progress to Done, `completed`       | The lead agent, or you with `jobs.complete`. It needs a definition of done and a justification. |
+| cancel   | To do, In progress or Blocked to Done, `cancelled` | You, with `jobs.cancel`. It needs a justification. |
+
+An action from a status that doesn't allow it is refused as `conflict`. An action with a missing reason or
+justification, or a complete with no definition of done, is refused as `invalid_input` and names the field.
+
+A job never goes back to To do. Done is final: you can't edit a Done job, add to its worklog, resume, complete or cancel
+it. The one change still allowed is relating it to another job. More work on a finished job becomes a new job, which
+may be Related to the old one.
+
+Completing or cancelling a job closes every conversation of the job and aborts its work, so nothing stays parked or
+waiting for a report. A lead that completes the job itself ends its run at that call. A closed conversation stays closed
+for good. It keeps its transcript as the record of the work and lists with status `closed`. You can read it, but input
+to it, withdrawing its input, and aborting, resetting, reseating or compacting it are refused as `conflict` and change
+nothing. So no answer reaches the lead of a Done job.
+
+The `complete_job` tool of the lead returns a result that isn't an error and names the job as Done. If the lead's
+closed mark doesn't land after the job is written Done, the tool's result says the call was aborted, and
+`bob jobs follow` can show `tool complete_job failed` for that Done job. The job stays Done and the lead's run ends.
+When the commit that sets the mark fails without a storage error, the job's conversations list with a status other
+than `closed` until the next start, and refuse input as `conflict`. The daemon then aborts the job's conversations
+it can, and the compactions running in those whose mark landed, so no queued input runs a model turn. At the next
+start, repair rule 4 closes the rest and ends their compactions. The same line can appear after a storage error or a
+daemon crash during the call, once rule 4 has aborted the run. A team member's `jobs.complete` or `jobs.cancel` that
+fails the same way, or whose abort of a conversation fails, tries to abort every conversation of the job, logs each
+failure and still fails with `internal`. A conversation whose own abort fails keeps running until the next start.
+
+## The definition of done
+
+The definition of done is the one field that controls completion. It is a clear deliverable, action or end state that
+tells anyone, the lead included, whether the job is done. Goal, needs, plan and analysis go in the description.
+
+The lead's first duty is to make sure the job has a definition of done. It writes one if there is none. If it can't,
+it blocks the job and says why. Before it completes the job, it checks the result against the definition of done and
+states the evidence in the justification. You can write or change the definition of done yourself at any time while the
+job isn't Done.
+
+## A Blocked job
+
+The lead blocks a job when it lacks information, a decision or access the service account doesn't have. The Blocked
+reason says what is missing. A Blocked job holds no worker thread, and its lead is parked. Only the lead blocks a job,
+so Blocked never means a pause that you asked for. The lead can't block while an agent it invoked still runs.
+
+To answer, send the lead a message. Any message that reaches the lead of a Blocked job resumes the job: it becomes In
+progress, the Blocked reason is cleared, and the lead continues with your message as its input. The old reason stays in
+the job's history. You can send the message with `jobs.resume`, as shown below, or with any other operation that sends
+input to the lead conversation. A repeat of a message the lead already has, sent with the same `requestId`, reaches
+the lead no second time, so it doesn't resume the job. Use a new `requestId` for a new answer.
+
+The Intern blocks a job on the lead's behalf in two cases, with the daemon as author in the history:
+
+- A lead's turn ends with the job In progress and nothing left to wait for, and the job has no definition of done. The
+  reason is "no definition of done".
+- A lead's turn ends the same way twice: the lead first gets one reminder to continue, block or complete, and when it
+  stops again the reason is "the lead stopped without completing or blocking".
+
+A stop you make is the exception to that reminder. When you stop the lead of an In progress job (with
+`bob conversations stop <id>`, or through the front desk's stop tool) while it runs, has input queued or waits for
+agents it invoked, the lead gets no reminder. Once the stop and the aborts that follow it have ended, The Intern blocks
+the job with the reason "stopped by a team member", with the daemon as author in the history. This holds whatever the
+job's definition of done holds, and it survives a restart of the service. Answer it as any Blocked job: any message
+that reaches the lead resumes the job. Stopping an idle lead changes nothing. Stopping the lead of a Blocked job keeps
+the job's reason.
+
+When all worker threads are in use, the lead of a new job waits for one and the job stays To do. If you stop that lead,
+the job stays To do with an idle lead and no reminder. The Job page offers no Stop on the lead of a To do job, but it
+offers Cancel; a message to the lead starts it once a worker thread is free, and the job goes In progress.
+
+## The resolution
+
+A Done job has a resolution. Its kind is `completed` or `cancelled`, and its justification says why: for a completed job
+the evidence that the definition of done is met, and for a cancelled job the reason it ended, for example "duplicate of
+C-7". If The Intern can't start the lead of a new job after it wrote the job, it cancels the job with a justification
+that names the refusal.
+
+## Jobs that come by email
+
+Every new email in the inbox of an owned mail account becomes a job. Its short number has the letter `E`. The
+[Email](email.md) page explains the accounts. This section explains what such a job is and how it moves.
+
+### A triage job
+
+The Intern saves the email and each attachment as files, then creates the job. Its request holds the sender, the
+subject, the date, the text and where the saved message and attachments are, and its lead has the account's triage
+role, the shipped `triage` role unless you chose another. A job that comes by email starts as a triage job: the lead
+writes the definition of done "a decision is taken about this email" first, reads the email and takes one decision.
+It discards the email, records what matters and completes the job, hands a request to the role that should do the
+work, or blocks the job to ask for what is missing. A request stays one job with one thread. See
+[Triage](email.md#triage) and [the `triage` role](roles_and_agents.md#the-triage-role).
+
+Nobody creates a job with the way in `email` by hand. A job that a team member or an agent creates never has the
+letter `E`, whatever its text says.
+
+### The request mark
+
+The request mark says that the email asks The Intern for something. Only the lead of a job that came by email sets or
+clears it, with its `mark_request` job tool, and only until the job is Done. Any other agent, and any job that didn't
+come by email, is refused. A discarded email and an email that only informs get no mark. `jobs.get` and the Job page
+show the mark, and `bob jobs show` prints it under `Email:`. The mark decides whether the sender gets a result reply.
+
+### Questions and replies by email
+
+When the lead of a job blocks it, it writes the Blocked reason for the team and, when the question can be mailed, a
+mail text for the person who answers. The block is refused without the mail text in that case. The Intern mails the
+mail text and never the Blocked reason:
+
+- To the job's sender, as a reply in the job's thread, when the job came by email, its account can send and the
+  allowlist allows the sender.
+- Otherwise to the notice address, in a thread of its own for the job, when one is set. A job from the command line
+  or a schedule has no sender to ask, so its question goes there.
+
+When no notice address is set and the sender can't be asked, nothing is mailed. The Blocked reason waits on the Job page
+and in `bob` either way. A mail text that equals the last one mailed for the job isn't mailed again, and a block The
+Intern makes itself, such as "no definition of done", is never mailed.
+
+A reply to the question resumes the job. An email in an owned inbox that answers an email of the job, by its
+`In-Reply-To` or `References` header, reaches the lead as input from its sender, like any answer to a
+[Blocked job](#a-blocked-job). A later reply while the job is In progress reaches the lead the same way. A reply to a
+Done job becomes a new triage job related to it. An email that names no mail of a job becomes a new triage job that
+relates to nothing.
+
+### The result reply
+
+When the lead completes a job that has the request mark, it gives a mail text, and The Intern mails it to the job's
+sender as a reply in the job's thread, from the account the job came through, when that account can send and the
+allowlist allows the sender. The completion justification is never mailed.
+
+A job without the mark sends nothing when it completes, and a cancelled job sends nothing. When you complete a job with
+the mark yourself, give a mail text with `bob jobs complete <job> <justification> --mail-text <text>`, with the
+`mailText` of `jobs.complete`, or in the Mail text box of the Job page. Without it no reply goes out, and the history
+says "result reply not sent: no mail text". See [Complete or cancel a job](#complete-or-cancel-a-job) and
+[What The Intern sends](email.md#what-the-intern-sends).
+
+## The worklog and the history
+
+Each job has two records. You read both with `jobs.get`, or page them with `jobs.worklog.list` and
+`jobs.history.list`.
+
+- **The worklog** holds the notes that agents and team members write: what was tried, what was done, what is left. It
+  lets another agent take over without reading the conversation. It only grows: a correction is a new entry. An entry
+  has a time, an author and its text.
+- **The history** is written by The Intern. It records every change to the title, the description, the definition of
+  done, the status, the Blocked reason, the resolution and the Related links, with the old value, the new value, the
+  author and the time. An author is an agent (with its conversation and role), a team member (with the way in), or the
+  daemon.
+
+  A job that came by email also has one history entry with the field `mail` for each email it receives, sends, holds
+  back or fails to send. Its old value is null, and its new value holds the kind, the sender, the recipients and the
+  subject of the email. The daemon is the author, except for an email an agent sent through the mail tools, whose
+  author is that agent. The kinds are:
+
+  - `received`: an email that reached the job.
+  - `sent`: an email sent from the job, by The Intern or by an agent.
+  - `held_back`: an email the allowlist held back. The entry names the recipients that weren't allowed.
+  - `may_not_have_gone_out`: an email whose sending began when the service stopped. It is not sent again.
+  - `refused`: an email the mail server permanently refused, with the server's message.
+  - `account_removed`: an email owed but never sent because its account was removed.
+  - `not_sent`: a result reply not sent because it was completed with the request mark and no mail text.
+
+  When The Intern starts, it checks each job against its conversations and repairs what a crash left out of step. Each
+  repair is one history entry with the field `repair`, the daemon as author, an old value of null, and a new value
+  `{ "rule": <1 to 4>, "did": <text> }`. The four rules are: 1, a job that isn't Done and has no lead conversation gets
+  it started, and a To do job whose lead conversation never received its first input, because the daemon stopped
+  between creating the conversation and submitting the input, gets that input submitted (either is cancelled if the
+  start is refused); 2, a Blocked job whose lead isn't parked gets it parked;
+  3, a Blocked job whose lead holds or took input since the block is set In progress and the lead continues with that
+  input; 4, a Done job with a conversation that isn't closed, or that is closed but still runs, has a running
+  compaction or has queued input, gets it closed and aborted.
+
+## Related jobs and follow-up jobs
+
+Related is a link between two different jobs of any status, in both directions. It is the only link between jobs;
+there are no sub-jobs or dependencies. Relate and unrelate through `jobs.relate` and `jobs.unrelate`. Relating two jobs
+that are already related changes nothing.
+
+An agent that finds more work while it works on a job creates a follow-up job with its job tools. The new job has the
+letter `A` and records the job and conversation it came from. It is Related to the job it came from only when the agent
+sets the create job tool's optional `related` flag.
+
+## Work with jobs over the local socket
+
+Every call is a `POST` of a JSON body to `/operations/<name>`, made with the `application/json` content type. The local
+socket is `bob.sock` in the runtime directory (see [Running The Intern](running_the_intern.md)). The examples use
+`curl` and set the socket once:
+
+```
+SOCKET="$XDG_RUNTIME_DIR/the-intern/bob.sock"
+```
+
+Use the path of your runtime directory if it isn't the default. A call that works answers `{"result": …}`. A call that
+is refused answers `{"error": {"code": …, "message": …}}`, where the code is one of these:
+
+| Code            | Meaning                                                                          |
+| --------------- | -------------------------------------------------------------------------------- |
+| `invalid_input` | A required input is missing or wrong, a guard failed or a field can't be edited. |
+| `not_found`     | No job has that number.                                                          |
+| `conflict`      | The action isn't allowed from the job's status, the job is Done, or the conversation is closed. |
+| `busy`          | The database is in use. Export again in a moment.                                |
+| `unavailable`   | The service is stopping.                                                         |
+| `internal`      | The service failed. After a failed database write the service stops (see [Running The Intern](running_the_intern.md#start-the-service)). |
+
+### Create a job
+
+`jobs.create` takes `text`, the request, and these optional inputs: `title`, `statedBy`, `idempotencyKey`, `role`,
+`model`, `thinkingLevel` and `workspace`. A role, model, thinking level or workspace that can't be used refuses the call
+with `invalid_input` and leaves no job and no number.
+
+```
+curl --unix-socket "$SOCKET" -X POST -H 'Content-Type: application/json' \
+  -d '{"text": "Rotate the staging TLS certificate", "title": "Rotate staging certificate"}' \
+  http://localhost/operations/jobs.create
+```
+
+The answer is `{"result":{"number":"C-1",…}}`: the new job, with its lead conversation started. The job is To do until
+the lead gets a worker thread, then In progress. Give an `idempotencyKey` of your choice when you may repeat the call,
+for example after a timeout: the repeat returns the same job and uses no number. You can't give an `origin`: The
+Intern records it from the way in you used.
+
+### Follow jobs
+
+List jobs, newest first. `jobs.list` takes the optional `status` (`to_do`, `in_progress`, `blocked` or `done`),
+`letter` (`C`, `W`, `E`, `S` or `A`), `relatedTo` (a job), `schedule` (a schedule entry's name, for the jobs it ran),
+`mailAccount` (a mail account's name, for the jobs that came through it; `bob jobs list --mail <name>` does the same),
+`limit` (1 to 500, 50 when you give none) and `cursor`.
+It answers a page of jobs without worklog and history, and a `cursor` for the next page when there is one:
+
+```
+curl --unix-socket "$SOCKET" -X POST -H 'Content-Type: application/json' \
+  -d '{"status": "blocked", "letter": "E"}' http://localhost/operations/jobs.list
+```
+
+Read one job with its worklog and history, oldest entry first:
+
+```
+curl --unix-socket "$SOCKET" -X POST -H 'Content-Type: application/json' \
+  -d '{"job": "C-1"}' http://localhost/operations/jobs.get
+```
+
+To follow changes as they happen, open the feed. It starts with a `snapshot` event that lists the jobs that aren't Done
+with their number, title and status, then sends a `delta` event for each change: `job_created`, `job_changed`,
+`job_worklog_added`, `job_status_changed` (with the Blocked reason when the job blocks) and `job_done` (with the
+resolution):
+
+```
+curl -N --unix-socket "$SOCKET" 'http://localhost/feed?scope=instance'
+```
+
+### Edit a job
+
+`jobs.update` takes `job` and any of `title`, `description` and `definitionOfDone`. Naming any other field is refused
+as `invalid_input` and changes nothing. Anyone, a team member or an agent of the job, can edit; when two edits change
+the same field, the later one stands and both are in the history.
+
+```
+curl --unix-socket "$SOCKET" -X POST -H 'Content-Type: application/json' \
+  -d '{"job": "C-1", "definitionOfDone": "The staging site serves the new certificate and the old one is revoked."}' \
+  http://localhost/operations/jobs.update
+```
+
+Add a note to the worklog with `jobs.worklog.add`, which takes `job` and `text`. Relate two jobs with `jobs.relate`,
+which takes `job` and `other`; `jobs.unrelate` takes the same input.
+
+### Answer a Blocked job
+
+Read the job and its `blockedReason`, then call `jobs.resume` with `job` and the answer as `text`:
+
+```
+curl --unix-socket "$SOCKET" -X POST -H 'Content-Type: application/json' \
+  -d '{"job": "C-1", "text": "The nightly build on ci-2, failing since Monday."}' \
+  http://localhost/operations/jobs.resume
+```
+
+The job becomes In progress and the lead continues with your text. Without `text`, the lead gets a note that a team
+member resumed the job. `jobs.resume` on a job that isn't Blocked is refused as `conflict`.
+
+### Complete or cancel a job
+
+Both take `job` and a `justification`. The lead completes a job through its own tool, so you complete one only when you
+have checked the result yourself; the job must have a definition of done. `jobs.complete` takes one more optional
+input, `mailText`: the result reply for a job that came by email and has the request mark (see
+[The result reply](#the-result-reply)). Without it that job sends no reply.
+
+```
+curl --unix-socket "$SOCKET" -X POST -H 'Content-Type: application/json' \
+  -d '{"job": "C-1", "justification": "Checked: the staging site serves the new certificate."}' \
+  http://localhost/operations/jobs.complete
+
+curl --unix-socket "$SOCKET" -X POST -H 'Content-Type: application/json' \
+  -d '{"job": "C-2", "justification": "Duplicate of C-1."}' \
+  http://localhost/operations/jobs.cancel
+```
+
+You can cancel a job in any status except Done. You can complete only a job that is In progress. A team member has no
+operation to block a job.
+
+### Export and import
+
+`jobs.export` copies the whole database to a new file while The Intern keeps working. It holds the jobs, their
+worklogs and histories, and the conversations and queued work, but not `config.toml`, so back that file up on its own:
+
+```
+curl --unix-socket "$SOCKET" -X POST -H 'Content-Type: application/json' \
+  -d '{"path": "/home/you/backups/the-intern.sqlite"}' http://localhost/operations/jobs.export
+```
+
+The answer is the path and the size written. The path must be absolute and name a file that doesn't exist yet in a
+folder that does. [Running The Intern](running_the_intern.md#copy-the-database-as-a-backup) describes the copy.
+
+The import step places an exported file as the database of an instance that has none. It runs while the service is
+stopped, as [`bob import <file>`](commands.md#bob-import-file). See
+[Running The Intern](running_the_intern.md#restore-a-copy-as-the-database) for what it checks and refuses.
+
+## What jobs don't do
+
+- **No priorities, due dates, estimates or time tracking.** Jobs start in the order they arrive.
+- **No assignees, watchers, votes, labels or attachments.** Every team member is equal, and the lead conversation is
+  the only owner a job has.
+- **No reopening.** A Done job stays Done, and its conversations stay closed. More work is a new job.
+- **No sub-jobs and no dependencies between jobs.** Related is the only link. To split work, the lead invokes
+  other agents.
+- **No blocking by a team member.** Only the lead blocks a job.
+- **No permissions per field or per person.** Anyone who reaches The Intern can change any editable field.
+- **No syncing with outside ticket trackers.**
+- **No deleting of jobs and no clean-up of old ones.** Every job is kept.
+- **No conversion between incompatible versions.** An import restores a copy into a version that can read it.

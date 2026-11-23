@@ -1,0 +1,54 @@
+{
+    "name": "the-intern",
+    "private": true,
+    "version": "0.16.0-rc.1",
+    "type": "module",
+    "engines": {
+        "node": ">=24"
+    },
+    "dependencies": {
+        "@earendil-works/chord": "1.4.0",
+        "@earendil-works/pi-ai": "1.4.0",
+        "@earendil-works/pi-coding-agent": "1.4.0",
+        "@earendil-works/pi-durable": "1.4.0",
+        "amaro": "1.1.11",
+        "imapflow": "2.12.1",
+        "nodemailer": "10.6.0",
+        "postal-mime": "4.2.1",
+        "preact": "11.1.1",
+        "smol-toml": "1.9.1"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "2.6.4",
+        "@types/node": "24.19.2",
+        "axe-core": "4.14.0",
+        "imapkit": "5.3.2",
+        "playwright-core": "1.65.0",
+        "smtp-server": "3.21.6",
+        "typescript": "7.0.2",
+        "vitepress": "1.6.4"
+    },
+    "scripts": {
+        "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json && tsc --noEmit -p web/tsconfig.worker.json",
+        "format": "biome format --write",
+        "format:check": "biome format",
+        "lint": "biome check",
+        "test": "npm run test:unit && npm run test:service && npm run test:web",
+        "test:unit": "node -e \"fs.mkdirSync('.tmp/test-logs',{recursive:true})\" && node --test --test-reporter=dot --test-reporter-destination=stdout --test-reporter=spec --test-reporter-destination=.tmp/test-logs/unit.log \"test/unit/**/*.test.ts\"",
+        "test:service": "node -e \"fs.mkdirSync('.tmp/test-logs',{recursive:true})\" && node --test --test-concurrency=10 --test-reporter=dot --test-reporter-destination=stdout --test-reporter=spec --test-reporter-destination=.tmp/test-logs/service.log \"test/service/**/*.test.ts\"",
+        "test:web": "node -e \"fs.mkdirSync('.tmp/test-logs',{recursive:true})\" && node --test --test-concurrency=2 --test-reporter=dot --test-reporter-destination=stdout --test-reporter=spec --test-reporter-destination=.tmp/test-logs/web.log \"test/web/**/*.test.ts\"",
+        "test:verbose": "node --test \"test/unit/**/*.test.ts\" && node --test --test-concurrency=10 \"test/service/**/*.test.ts\" && node --test --test-concurrency=2 \"test/web/**/*.test.ts\"",
+        "test:install": "node --test \"test/install/*.test.ts\"",
+        "test:web:setup": "playwright-core install --with-deps chrome firefox",
+        "test:web:setup:edge": "playwright-core install --with-deps msedge",
+        "test:live": "node test/live/live_daemon.ts",
+        "test:live:agents": "node test/live/live_agents.ts",
+        "test:live:jobs": "node test/live/live_jobs.ts",
+        "test:live:schedules": "node test/live/live_schedules.ts",
+        "test:live:desk": "node test/live/live_desk.ts",
+        "test:live:skills": "node test/live/live_skills.ts",
+        "test:live:mail": "node test/live/live_mail.ts",
+        "docs:build": "vitepress build docs/manual",
+        "check": "npm run typecheck && npm run lint && npm run test"
+    }
+}

@@ -1,0 +1,474 @@
+import assert from "node:assert/strict";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, it } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
+import { DEFAULT_SHIPPED_ROOT } from "../../src/skills/internal_folder.ts";
+import type { HermeticEnv } from "../support/hermetic_env.ts";
+import { type SkillsRig, startSkillsRig } from "../support/skills_rig.ts";
+
+const OWNER_ONLY_MODE = 0o700;
+
+/** The `config.toml` text that lists the named owner-only folders under the hermetic root as search paths, lowest first. */
+function searchPathsToml(...names: string[]): (dirs: HermeticEnv) => string {
+    return (dirs) => {
+        const paths = names.map((name) => join(dirs.root, name));
+        for (const path of paths) {
+            mkdirSync(path, { recursive: true });
+            chmodSync(path, OWNER_ONLY_MODE);
+        }
+        return `[skills]\npaths = [${paths.map((path) => `"${path}"`).join(", ")}]\n`;
+    };
+}
+
+type Listing = {
+    skills: { name: string; path: string; source: { kind: string; path?: string }; shadowed: { path: string }[] }[];
+    missing: string[];
+    leftOut: unknown[];
+    seat?: { role: string; workspace: string };
+};
+
+const rigs: SkillsRig[] = [];
+const shippedRoots: string[] = [];
+
+afterEach(async () => {
+    for (const root of shippedRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+    for (const rig of rigs.splice(0)) await rig.stop();
+});
+
+async function start(options: Parameters<typeof startSkillsRig>[0] = {}): Promise<SkillsRig> {
+    const rig = await startSkillsRig(options);
+    rigs.push(rig);
+    return rig;
+}
+
+const refusal = (code: string) => (error: unknown) =>
+    error instanceof Error && (error as { code?: string }).code === code;
+
+describe("skills.list", () => {
+    it("uses the later search path's copy and shadows the earlier path's two", async () => {
+        const rig = await start({ configToml: searchPathsToml("a", "b") });
+        const first = join(rig.dirs.root, "a");
+        const second = join(rig.dirs.root, "b");
+        const nested = await rig.writeSkill(join(first, "x"), "lint", "Lint in x.");
+        const other = await rig.writeSkill(join(first, "y"), "lint", "Lint in y.");
+        const winner = await rig.writeSkill(second, "lint", "Lint in b.");
+
+        const listing = (await rig.invoke("skills.list", { role: "gp" })) as Listing;
+
+        const lint = listing.skills.filter((skill) => skill.name === "lint");
+        assert.equal(lint.length, 1);
+        assert.equal(lint[0]?.path, winner);
+        assert.deepEqual(lint[0]?.shadowed.map(({ path }) => path).sort(), [nested, other].sort());
+    });
+
+    it("refuses a call that names both a role and a conversation", async () => {
+        const rig = await start();
+        const job = (await rig.invoke("jobs.create", { text: "Look around.", role: "gp" })) as {
+            leadConversation: string;
+        };
+
+        await assert.rejects(
+            rig.invoke("skills.list", { role: "gp", conversation: job.leadConversation }),
+            refusal("invalid_input"),
+        );
+    });
+
+    it("refuses a call that names neither", async () => {
+        const rig = await start();
+
+        await assert.rejects(rig.invoke("skills.list", {}), refusal("invalid_input"));
+    });
+
+    it("refuses an unknown role and an unknown conversation as not found", async () => {
+        const rig = await start();
+
+        await assert.rejects(rig.invoke("skills.list", { role: "nobody" }), refusal("not_found"));
+        await assert.rejects(rig.invoke("skills.list", { conversation: "0" }), refusal("not_found"));
+    });
+
+    it("lists a seated agent's catalog from its seat workspace, with its seat", async () => {
+        const rig = await start();
+        const job = (await rig.invoke("jobs.create", { text: "Look around.", role: "gp" })) as {
+            leadConversation: string;
+        };
+
+        const listing = (await rig.invoke("skills.list", { conversation: job.leadConversation })) as Listing;
+
+        assert.equal(listing.seat?.role, "gp");
+        assert.equal(listing.seat?.workspace, join(rig.dirs.dataDir, "workspaces", "gp"));
+        assert.ok(listing.skills.some((skill) => skill.name === "carry-out-a-part"));
+    });
+});
+
+const configText = (rig: SkillsRig): string => readFileSync(join(rig.dirs.configDir, "config.toml"), "utf8");
+
+async function seatGp(rig: SkillsRig): Promise<string> {
+    const job = (await rig.invoke("jobs.create", { text: "Look around.", role: "gp" })) as { leadConversation: string };
+    return job.leadConversation;
+}
+
+async function firstPrompt(rig: SkillsRig, conversation: string): Promise<string> {
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+        const [prompt] = await rig.systemPrompts(conversation);
+        if (prompt !== undefined) return prompt;
+        if (Date.now() > deadline) throw new Error("the conversation made no model request in time");
+        await sleep(10);
+    }
+}
+
+const enabledOf = async (rig: SkillsRig, input: object): Promise<string[]> =>
+    ((await rig.invoke("skills.list", input)) as { skills: { name: string; enabled: boolean }[] }).skills
+        .filter((skill) => skill.enabled)
+        .map((skill) => skill.name);
+
+describe("skills.enable and skills.disable for a role", () => {
+    it("lists an enabled skill for the role in config.toml and in the prompt of an agent seated afterwards", async () => {
+        const rig = await start({ configToml: searchPathsToml("a") });
+        await rig.writeSkill(join(rig.dirs.root, "a"), "code-review", "Review code.");
+
+        const result = (await rig.invoke("skills.enable", { name: "code-review", role: "gp" })) as {
+            enabledSkills: string[];
+        };
+
+        assert.deepEqual(result.enabledSkills, ["carry-out-a-part", "bob-command-line", "code-review"]);
+        assert.match(configText(rig), /\[roles\.gp\]\s+skills = \[[^\]]*"code-review"/);
+        const prompt = await firstPrompt(rig, await seatGp(rig));
+        assert.match(prompt, /code-review/);
+    });
+
+    it("refuses a name the role catalog doesn't hold as not found and leaves config.toml unchanged", async () => {
+        const rig = await start();
+        const before = configText(rig);
+
+        await assert.rejects(rig.invoke("skills.enable", { name: "no-such-skill", role: "gp" }), refusal("not_found"));
+
+        assert.equal(configText(rig), before);
+    });
+
+    it("refuses an unknown role as not found, for enable and for disable", async () => {
+        const rig = await start();
+
+        await assert.rejects(
+            rig.invoke("skills.enable", { name: "carry-out-a-part", role: "nobody" }),
+            refusal("not_found"),
+        );
+        await assert.rejects(
+            rig.invoke("skills.disable", { name: "carry-out-a-part", role: "nobody" }),
+            refusal("not_found"),
+        );
+    });
+
+    it("writes a shipped role's full list of defaults with the change", async () => {
+        const rig = await start();
+
+        const result = (await rig.invoke("skills.disable", { name: "bob-command-line", role: "gp" })) as {
+            enabledSkills: string[];
+        };
+
+        assert.deepEqual(result.enabledSkills, ["carry-out-a-part"]);
+        assert.match(configText(rig), /\[roles\.gp\]\s+skills = \[ "carry-out-a-part" \]/);
+    });
+
+    it("succeeds and changes nothing when the disabled name isn't in the list", async () => {
+        const rig = await start();
+        const before = configText(rig);
+
+        const result = (await rig.invoke("skills.disable", { name: "about-the-intern", role: "gp" })) as {
+            enabledSkills: string[];
+        };
+
+        assert.deepEqual(result.enabledSkills, ["carry-out-a-part", "bob-command-line"]);
+        assert.equal(configText(rig), before);
+    });
+
+    it("lists a name once when it is enabled twice and writes nothing the second time", async () => {
+        const rig = await start({ configToml: searchPathsToml("a") });
+        await rig.writeSkill(join(rig.dirs.root, "a"), "code-review", "Review code.");
+        await rig.invoke("skills.enable", { name: "code-review", role: "gp" });
+        const before = configText(rig);
+
+        const result = (await rig.invoke("skills.enable", { name: "code-review", role: "gp" })) as {
+            enabledSkills: string[];
+        };
+
+        assert.deepEqual(result.enabledSkills, ["carry-out-a-part", "bob-command-line", "code-review"]);
+        assert.equal(configText(rig), before);
+    });
+
+    it("refuses with conflict when config.toml changed on disk", async () => {
+        const rig = await start({ configToml: searchPathsToml("a") });
+        await rig.writeSkill(join(rig.dirs.root, "a"), "code-review", "Review code.");
+        writeFileSync(join(rig.dirs.configDir, "config.toml"), `${configText(rig)}\n# edited by hand\n`);
+
+        await assert.rejects(rig.invoke("skills.enable", { name: "code-review", role: "gp" }), refusal("conflict"));
+    });
+
+    it("leaves the enabled set of an agent already seated unchanged", async () => {
+        const rig = await start({ configToml: searchPathsToml("a") });
+        await rig.writeSkill(join(rig.dirs.root, "a"), "code-review", "Review code.");
+        const conversation = await seatGp(rig);
+        const before = await enabledOf(rig, { conversation });
+
+        await rig.invoke("skills.enable", { name: "code-review", role: "gp" });
+        await rig.invoke("skills.disable", { name: "carry-out-a-part", role: "gp" });
+
+        assert.deepEqual(await enabledOf(rig, { conversation }), before);
+        const forRole = await enabledOf(rig, { role: "gp" });
+        assert.ok(forRole.includes("code-review"));
+        assert.ok(!forRole.includes("carry-out-a-part"));
+    });
+});
+
+type PathEntry = { path: string; ok: boolean; reason?: string };
+
+const pathsOf = (entries: unknown): string[] => (entries as PathEntry[]).map(({ path }) => path);
+
+describe("skills.paths", () => {
+    it("lists the search paths lowest first, each with whether it passes the check", async () => {
+        const rig = await start({ configToml: searchPathsToml("a", "b") });
+        const second = join(rig.dirs.root, "b");
+        chmodSync(second, 0o755);
+
+        const entries = (await rig.invoke("skills.paths.list")) as PathEntry[];
+
+        assert.deepEqual(pathsOf(entries), [join(rig.dirs.root, "a"), second]);
+        assert.equal(entries[0]?.ok, true);
+        assert.equal(entries[1]?.ok, false);
+        assert.match(entries[1]?.reason ?? "", /only to the service account/);
+    });
+
+    it("refuses a relative path, a missing folder and a folder other accounts can read, leaving config.toml unchanged", async () => {
+        const rig = await start();
+        const readable = join(rig.dirs.root, "readable");
+        mkdirSync(readable);
+        chmodSync(readable, 0o755);
+        const before = configText(rig);
+
+        for (const path of ["relative/skills", join(rig.dirs.root, "missing"), readable]) {
+            await assert.rejects(rig.invoke("skills.paths.add", { path }), refusal("invalid_input"));
+        }
+
+        assert.equal(configText(rig), before);
+    });
+
+    it("lists an added path last and reads its skills in the next catalog read", async () => {
+        const rig = await start({ configToml: searchPathsToml("a") });
+        const added = await rig.ownerOnlyFolder(join(rig.dirs.root, "b"));
+        await rig.writeSkill(added, "code-review", "Review code.");
+
+        const entries = (await rig.invoke("skills.paths.add", { path: added })) as PathEntry[];
+
+        assert.deepEqual(pathsOf(entries), [join(rig.dirs.root, "a"), added]);
+        assert.deepEqual(pathsOf(await rig.invoke("skills.paths.list")), [join(rig.dirs.root, "a"), added]);
+        const listing = (await rig.invoke("skills.list", { role: "gp" })) as Listing;
+        assert.ok(listing.skills.some((skill) => skill.name === "code-review"));
+    });
+
+    it("succeeds and changes nothing when the path is already listed", async () => {
+        const rig = await start({ configToml: searchPathsToml("a", "b") });
+        const before = configText(rig);
+
+        const entries = await rig.invoke("skills.paths.add", { path: join(rig.dirs.root, "a") });
+
+        assert.deepEqual(pathsOf(entries), [join(rig.dirs.root, "a"), join(rig.dirs.root, "b")]);
+        assert.equal(configText(rig), before);
+    });
+
+    it("removes a listed path", async () => {
+        const rig = await start({ configToml: searchPathsToml("a", "b") });
+
+        const entries = await rig.invoke("skills.paths.remove", { path: join(rig.dirs.root, "a") });
+
+        assert.deepEqual(pathsOf(entries), [join(rig.dirs.root, "b")]);
+        assert.doesNotMatch(configText(rig), /\/a"/);
+    });
+
+    it("refuses to remove a path that isn't listed as not found", async () => {
+        const rig = await start({ configToml: searchPathsToml("a") });
+        const before = configText(rig);
+
+        await assert.rejects(
+            rig.invoke("skills.paths.remove", { path: join(rig.dirs.root, "other") }),
+            refusal("not_found"),
+        );
+
+        assert.equal(configText(rig), before);
+    });
+
+    it("refuses add and remove with conflict when config.toml changed on disk", async () => {
+        const rig = await start({ configToml: searchPathsToml("a") });
+        const added = await rig.ownerOnlyFolder(join(rig.dirs.root, "b"));
+        writeFileSync(join(rig.dirs.configDir, "config.toml"), `${configText(rig)}\n# edited by hand\n`);
+
+        await assert.rejects(rig.invoke("skills.paths.add", { path: added }), refusal("conflict"));
+        await assert.rejects(
+            rig.invoke("skills.paths.remove", { path: join(rig.dirs.root, "a") }),
+            refusal("conflict"),
+        );
+    });
+});
+
+/** A copy of the installed shipped text that also holds the two shipped skills `bob` enables by default. */
+function shippedRootWithSkills(): string {
+    const root = mkdtempSync(join(tmpdir(), "intern-shipped-"));
+    shippedRoots.push(root);
+    cpSync(DEFAULT_SHIPPED_ROOT, root, { recursive: true });
+    for (const name of ["about-the-intern", "bob-command-line"]) {
+        mkdirSync(join(root, "skills", name), { recursive: true });
+        writeFileSync(
+            join(root, "skills", name, "SKILL.md"),
+            `---\nname: ${name}\ndescription: Shipped ${name}.\n---\n\nBody.\n`,
+        );
+    }
+    return root;
+}
+
+type InstructionFile = { kind: string; path: string; shipped: boolean; edited: boolean; missing: boolean };
+
+const instructionFilesOf = async (rig: SkillsRig, input: object): Promise<InstructionFile[]> =>
+    ((await rig.invoke("instructions.list", input)) as { files: InstructionFile[] }).files;
+
+describe("skills and instructions of an agent", () => {
+    it("lists the enabled skills with their paths, then the common prompt, the role's file and the workspace's AGENTS.md", async () => {
+        const rig = await start({ configToml: searchPathsToml("a"), shippedRoot: shippedRootWithSkills() });
+        const codeReview = await rig.writeSkill(join(rig.dirs.root, "a"), "code-review", "Review code.");
+        const workspace = join(rig.dirs.dataDir, "workspaces", "bob");
+        const job = (await rig.invoke("jobs.create", { text: "Look around.", role: "bob" })) as {
+            leadConversation: string;
+        };
+        const conversation = job.leadConversation;
+        await rig.invoke("skills.enable", { name: "code-review", conversation });
+        writeFileSync(join(workspace, "AGENTS.md"), "Work carefully.\n");
+
+        const listing = (await rig.invoke("skills.list", { conversation })) as {
+            skills: { name: string; path: string; enabled: boolean }[];
+        };
+        const files = await instructionFilesOf(rig, { conversation });
+
+        const enabled = listing.skills.filter((skill) => skill.enabled);
+        assert.deepEqual(enabled.map(({ name }) => name).sort(), [
+            "about-the-intern",
+            "bob-command-line",
+            "code-review",
+        ]);
+        assert.equal(enabled.find(({ name }) => name === "code-review")?.path, codeReview);
+        const data = rig.dirs.dataDir;
+        assert.deepEqual(
+            files.slice(0, 3).map(({ kind, path }) => ({ kind, path })),
+            [
+                { kind: "common", path: join(data, "instructions", "common.md") },
+                { kind: "role", path: join(data, "instructions", "roles", "bob.md") },
+                { kind: "workspace", path: join(workspace, "AGENTS.md") },
+            ],
+        );
+        assert.deepEqual(
+            files.slice(0, 2).map(({ shipped, edited, missing }) => ({ shipped, edited, missing })),
+            [
+                { shipped: true, edited: false, missing: false },
+                { shipped: true, edited: false, missing: false },
+            ],
+        );
+    });
+
+    it("lists a role's files from the role's default workspace", async () => {
+        const rig = await start();
+        writeFileSync(join(rig.dirs.dataDir, "workspaces", "bob", "AGENTS.md"), "Work carefully.\n");
+
+        const files = await instructionFilesOf(rig, { role: "bob" });
+
+        assert.deepEqual(
+            files.map(({ kind }) => kind),
+            ["common", "role", "workspace"],
+        );
+    });
+
+    it("lists a team role's missing file as missing and not shipped", async () => {
+        const rig = await start();
+        await rig.invoke("roles.create", { name: "scribe", instructions: "Write.", tools: ["read"], skills: [] });
+        rmSync(join(rig.dirs.dataDir, "instructions", "roles", "scribe.md"), { force: true });
+
+        const files = await instructionFilesOf(rig, { role: "scribe" });
+
+        const role = files.find(({ kind }) => kind === "role");
+        assert.equal(role?.path, join(rig.dirs.dataDir, "instructions", "roles", "scribe.md"));
+        assert.deepEqual(
+            { shipped: role?.shipped, edited: role?.edited, missing: role?.missing },
+            {
+                shipped: false,
+                edited: false,
+                missing: true,
+            },
+        );
+    });
+
+    it("refuses a call that names both a role and a conversation, or neither", async () => {
+        const rig = await start();
+
+        await assert.rejects(
+            rig.invoke("instructions.list", { role: "bob", conversation: "1" }),
+            refusal("invalid_input"),
+        );
+        await assert.rejects(rig.invoke("instructions.list", {}), refusal("invalid_input"));
+    });
+
+    it("refuses an unknown role and an unknown conversation as not found", async () => {
+        const rig = await start();
+
+        await assert.rejects(rig.invoke("instructions.list", { role: "nobody" }), refusal("not_found"));
+        await assert.rejects(rig.invoke("instructions.list", { conversation: "0" }), refusal("not_found"));
+    });
+});
+
+describe("instructions.restore", () => {
+    it("refuses a team role's name as not found and leaves its file unchanged", async () => {
+        const rig = await start();
+        await rig.invoke("roles.create", { name: "reviewer", instructions: "Review.", tools: ["read"], skills: [] });
+        const file = join(rig.dirs.dataDir, "instructions", "roles", "reviewer.md");
+        writeFileSync(file, "Edited by hand.");
+
+        await assert.rejects(rig.invoke("instructions.restore", { name: "reviewer" }), refusal("not_found"));
+
+        assert.equal(readFileSync(file, "utf8"), "Edited by hand.");
+    });
+
+    it("restores a shipped role's file and the common prompt, returning each as instructions.list shows it", async () => {
+        const rig = await start();
+        const dir = join(rig.dirs.dataDir, "instructions");
+        writeFileSync(join(dir, "roles", "gp.md"), "edited gp\n");
+        writeFileSync(join(dir, "common.md"), "edited common\n");
+
+        const role = await rig.invoke("instructions.restore", { name: "gp" });
+        const common = await rig.invoke("instructions.restore", { name: "common" });
+
+        const { files } = (await rig.invoke("instructions.list", { role: "gp" })) as { files: InstructionFile[] };
+        assert.deepEqual(
+            role,
+            files.find(({ kind }) => kind === "role"),
+        );
+        assert.deepEqual(
+            common,
+            files.find(({ kind }) => kind === "common"),
+        );
+        assert.deepEqual(
+            { shipped: (role as InstructionFile).shipped, edited: (role as InstructionFile).edited },
+            { shipped: true, edited: false },
+        );
+        assert.equal(
+            readFileSync(join(dir, "roles", "gp.md"), "utf8"),
+            readFileSync(join(DEFAULT_SHIPPED_ROOT, "instructions/roles/gp.md"), "utf8"),
+        );
+    });
+
+    it("refuses a name that is neither common nor a role as not found", async () => {
+        const rig = await start();
+
+        for (const name of ["nobody", "../common", ""]) {
+            await assert.rejects(rig.invoke("instructions.restore", { name }), (error: unknown) =>
+                ["not_found", "invalid_input"].includes((error as { code?: string }).code ?? ""),
+            );
+        }
+    });
+});

@@ -1,8 +1,6 @@
 # Remove the agent configuration
 .codex
 .claude
-# Anchored to repo root: the-intern/bob-skills/.pi/ is tracked package
-# content (pi's cwd-relative skill discovery path), not local agent config.
 /.pi
 .agents
 .ai-team.toml
@@ -11,12 +9,12 @@
 pr-*-review.md
 
 # Tooling
-mise.toml
+mise.local.toml
 .tmp/
 .env.local
 
-# mdBook rendered output
-the-intern/docs/book/
+# ai-team local work-item tracker (tasks, bugs, change-requests)
+/.ai-team/
 
-# python cache
-__pycache__
+# Dependencies
+node_modules/

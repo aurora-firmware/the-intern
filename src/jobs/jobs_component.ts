@@ -1,0 +1,177 @@
+/**
+ * The Jobs daemon component (S-004): the job operations and the test-only hook that is awaited at each point where a
+ * job write has committed and the work that follows it has not begun.
+ */
+import type { AgentsComponent } from "../agents/agents_component.ts";
+import type { DaemonComponent, ServiceContext } from "../daemon/daemon.ts";
+import type { Logger } from "../daemon/logger.ts";
+import { onInputSubmitted } from "../host/conversation_control.ts";
+import { onLeadStopMarked, onLeadStopped } from "../host/invocation.ts";
+import { setJobStatusCheck } from "../host/job_section.ts";
+import { waitForMarkedConversations } from "../host/repair_abort.ts";
+import { readConversationMeta } from "../host/seating.ts";
+import { jobActionOperations } from "../service/job_action_operations.ts";
+import { jobExportOperation } from "../service/job_export_operation.ts";
+import { createJob, createJobOperation } from "../service/job_operations.ts";
+import { jobRecordOperations } from "../service/job_record_operations.ts";
+import type { Operation } from "../service/operations.ts";
+import { resumeAfterLeadInput, startJob } from "./job_actions.ts";
+import {
+    deliverPendingHeld,
+    type PendingFirstInput,
+    type PendingHeldDelivery,
+    repairJobs,
+    submitPendingFirstInputs,
+    submitPendingReminders,
+} from "./job_repair.ts";
+import { JobNotFoundError } from "./job_store.ts";
+import { createJobToolsExtension } from "./job_tools_extension.ts";
+import { type PendingReminder, startTurnEndRule } from "./turn_end_rule.ts";
+
+export type WritePoint =
+    | "job-created"
+    | "lead-created"
+    | "job-blocked"
+    | "job-completed"
+    | "job-cancelled"
+    | "conversations-closed"
+    | "lead-input"
+    | "turn-ended"
+    | "lead-stop-marked";
+
+export type JobsComponentOptions = {
+    agents: AgentsComponent;
+    logger: Logger;
+    /** Test-only: awaited at each write point, so a test can act between a write and what follows it. */
+    afterWrite?: (point: WritePoint, jobId: string) => void | Promise<void>;
+    /** Test-only, `true` by default: `false` applies no turn-end rule, for tests about conversations, not jobs. */
+    turnEndRule?: boolean;
+};
+
+export type JobsComponent = {
+    component: DaemonComponent;
+    // biome-ignore lint/suspicious/noExplicitAny: the operations have differing input and output types
+    operations: Operation<ServiceContext, any, any>[];
+    options: JobsComponentOptions;
+};
+
+/**
+ * Writes the job's start when its lead takes a worker thread (S-004 REQ-005). The lead's job ID may be absent from the
+ * job store (tests seat leads directly), and then the grant writes nothing.
+ */
+async function startJobOfLead(ctx: ServiceContext, options: JobsComponentOptions, conversationId: string) {
+    const meta = await readConversationMeta(ctx.host, conversationId);
+    if (!meta?.isLead || meta.jobId === null) return;
+    try {
+        const job = await ctx.jobStore.getJob(meta.jobId);
+        if (job.status === "to_do") await startJob({ ctx, options }, job.id);
+    } catch (error) {
+        if (!(error instanceof JobNotFoundError)) throw error;
+    }
+}
+
+export async function createJobsComponent(options: JobsComponentOptions): Promise<JobsComponent> {
+    let stopListening: (() => void) | undefined;
+    let stopInputListening: (() => void) | undefined;
+    let stopTurnEndRule: (() => void) | undefined;
+    let stopLeadListening: (() => void) | undefined;
+    let stopMarkListening: (() => void) | undefined;
+    let stopJobStatusCheck: (() => void) | undefined;
+    let markedByRepair: string[] = [];
+    let firstInputsOwed: PendingFirstInput[] = [];
+    let heldDeliveriesOwed: PendingHeldDelivery[] = [];
+    let remindersOwed: PendingReminder[] = [];
+    let context: ServiceContext | undefined;
+    // The job tools are built before the host opens, so they reach the service context once startup has bound it.
+    const requireContext = (): ServiceContext => {
+        if (context === undefined) throw new Error("The service context exists only after startup step 4");
+        return context;
+    };
+    const jobTools = createJobToolsExtension({
+        host: () => requireContext().host,
+        jobStore: () => requireContext().jobStore,
+        createJob: (request, caller) => createJob(requireContext(), options, request, caller),
+        actions: () => ({ ctx: requireContext(), options }),
+    });
+    return {
+        component: {
+            name: "jobs",
+            extensions: [jobTools],
+            // Step 5 comes before work resumes, so runs that resume after a restart are covered.
+            async checkModels(ctx) {
+                context = ctx;
+                stopJobStatusCheck = setJobStatusCheck(ctx.host, async (jobId) => {
+                    try {
+                        return (await ctx.jobStore.getJob(jobId)).status;
+                    } catch (error) {
+                        if (error instanceof JobNotFoundError) return undefined;
+                        throw error;
+                    }
+                });
+                stopListening = ctx.admission.onGranted((conversationId) =>
+                    startJobOfLead(ctx, options, conversationId),
+                );
+                stopInputListening = onInputSubmitted(ctx.host, (input) =>
+                    resumeAfterLeadInput({ ctx, options }, input),
+                );
+                const { afterWrite } = options;
+                if (afterWrite !== undefined) {
+                    stopMarkListening = onLeadStopMarked(ctx.host, async (leadId) => {
+                        const jobId = (await readConversationMeta(ctx.host, leadId))?.jobId;
+                        if (jobId != null) await afterWrite("lead-stop-marked", jobId);
+                    });
+                }
+                if (options.turnEndRule !== false) {
+                    const rule = startTurnEndRule({ ctx, options });
+                    stopTurnEndRule = rule.stop;
+                    stopLeadListening = onLeadStopped(ctx.host, rule.leadStopped);
+                    await rule.ready;
+                }
+            },
+            // Step 7: after admission is restored and before work resumes (S-004 REQ-018).
+            async repair(ctx) {
+                ({
+                    marked: markedByRepair,
+                    pendingFirstInputs: firstInputsOwed,
+                    pendingHeldDeliveries: heldDeliveriesOwed,
+                    pendingReminders: remindersOwed,
+                } = await repairJobs({ ctx, options }));
+            },
+            // The marked work ends only once the host has resumed; listeners open after it has. So do the first
+            // inputs rule 1 owes, the held messages rule 3 owes and the reminders of the turn-end check: submitting
+            // one turns scheduling on, which the repair must leave off.
+            async afterResume(ctx) {
+                await submitPendingFirstInputs(ctx, firstInputsOwed);
+                firstInputsOwed = [];
+                await deliverPendingHeld({ ctx, options }, heldDeliveriesOwed);
+                heldDeliveriesOwed = [];
+                await submitPendingReminders(ctx, remindersOwed);
+                remindersOwed = [];
+                await waitForMarkedConversations(ctx.host, markedByRepair);
+                markedByRepair = [];
+            },
+            async stop() {
+                stopJobStatusCheck?.();
+                stopJobStatusCheck = undefined;
+                stopListening?.();
+                stopListening = undefined;
+                stopInputListening?.();
+                stopInputListening = undefined;
+                stopLeadListening?.();
+                stopMarkListening?.();
+                stopMarkListening = undefined;
+                stopLeadListening = undefined;
+                stopTurnEndRule?.();
+                stopTurnEndRule = undefined;
+                context = undefined;
+            },
+        },
+        operations: [
+            createJobOperation(options),
+            ...jobRecordOperations(options),
+            ...jobActionOperations(options),
+            jobExportOperation,
+        ],
+        options,
+    };
+}

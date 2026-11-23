@@ -1,16 +1,16 @@
-# Project Guidance for Agents
+# Project Guidance
 
-This `project/` directory is the canonical workspace for project artifacts used
-by agent workflows.
+This `docs/ai-team/` directory stores project-local planning and execution artifacts.
 
 ## Folder Purpose
 
-- `specs/` contains approved specs that define what to build.
-- `tasks/` contains task lifecycle records for implementation work.
-- `bugs/` contains bug lifecycle records for diagnosis and fixes.
-- `decisions/` contains ADRs and design amendments.
-- `reports/` contains generated status and gate reports.
-- `docs/` contains project-local docs for commands, conventions, and policies.
+- `specs/` holds feature and change specifications, whatever their status.
+- `decisions/` stores Architecture Decision Records (ADRs) and amendments.
+- `docs/reports/` stores status reports generated on demand; it is git-ignored by default. The location is fixed and `docs/` holds nothing else: the project's own documents live outside `docs/ai-team/`, by default in `docs/development/`.
 
-Agents should update these folders through the documented workflow so project
-state remains consistent across roles.
+Keep specs and ADRs under version control so automation and reviewers can read
+the same canonical project state.
+
+Work items — tasks, bugs, and change-requests — are not stored here. They live in the local
+tracker (`ai-team tracker path`), outside version control, and are read and
+changed only through `ai-team` commands.

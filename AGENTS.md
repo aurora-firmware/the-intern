@@ -1,1 +1,150 @@
-CLAUDE.md
+# AGENTS.md
+
+This file gives coding agents the commands and conventions they need to work in this repository.
+
+## Branches
+
+- The main dev branch for this version is dev-pi-durable.
+- As we develop it, feature branches should merge into dev-pi-durable.
+- Don't open PRs into main but into dev-pi-durable.
+
+## Status
+
+The Intern (`bob`) is one TypeScript/Node package that embeds pi as a library on `@earendil-works/pi-durable`.
+The package, its tooling and the product code exist: S-001 to S-009 are built, from the service and its control
+endpoint to the command line, the web interface, the schedules, the skills and instructions and the email. Specs after
+S-009 are still to come.
+
+Read these before designing anything:
+
+- `docs/ai-team/specs/S-000-system-overview.md`: what the product is, who it serves, its components and exclusions.
+  It is the source of truth for scope.
+- `docs/system_overview.html`: the shared vocabulary and the spec map.
+- `docs/research/pi-durable-knowledge.md`: pi-durable, the pi coding-agent SDK, prototype results, API footguns.
+- `docs/research/feature-review.md`: background only. It records per-feature directions from before S-000, and S-000
+  wins where they differ.
+
+`docs/AGENTS.md` maps the `docs/` folder: what each part holds, which documents bind the work, and who updates them
+and when.
+
+## Development environment
+
+See the "Development environment" and "Building from scratch" sections of `README.md`. Code conventions are in
+`docs/development/coding_guidelines.md`.
+
+## Build and Install
+
+Node 24 is required (`mise install` provides it). There is no compile step: the code runs as TypeScript on Node.
+
+```
+npm ci
+```
+
+## Test
+
+```
+npm test
+```
+
+`npm run test:unit`, `npm run test:service` and `npm run test:web` run the three test folders separately.
+`test:web` drives real browsers; `README.md`, Development environment, says how to get them.
+
+The terminal shows one dot per test and, after the run, a "Failed tests:" block with each failure's name, error and
+stack. It prints no counts. The full `spec` output goes to `.tmp/test-logs/unit.log`, `service.log` and `web.log`; each
+run overwrites its log, and the `ℹ pass` and `ℹ fail` counts are at the end of it. `npm run test:verbose` runs the
+three folders in the same order with the `spec` output on the terminal.
+
+Test waits and timeouts run at 2 to 4 times their written length, more on a busier machine; set `TEST_TIME_SCALE`
+(1 to 10) to choose the factor. Write a new wait or timeout as `scaled(ms)` from `test/support/time_scale.ts`.
+
+`test/install/run_cycle.sh [test file ...]` runs the installation cycle against bundles it builds, in a privileged
+Docker container with systemd. `npm test` leaves it out.
+[docs/development/releasing.md](docs/development/releasing.md) says how to run it and how to cut a release.
+
+Before writing or changing a test, read `test/AGENTS.md`: how to keep a test from depending on timing or on an order
+it never set up.
+
+## Run
+
+Start a development instance of the daemon with its directories under `.tmp/` (the flags take absolute paths):
+
+```
+node src/cli/bob.ts serve --config-dir "$PWD/.tmp/dev/config" --state-dir "$PWD/.tmp/dev/state" \
+  --data-dir "$PWD/.tmp/dev/data" --runtime-dir "$PWD/.tmp/dev/runtime" --verbose
+```
+
+`npm run test:live` runs the live checks over your own pi login. `docs/development/local_runs.md` has the details.
+
+## Lint and Format
+
+```
+npm run lint        # biome check
+npm run format      # biome format --write
+npm run typecheck   # tsc --noEmit
+npm run check       # typecheck, lint and tests
+```
+
+`npm run format:check` verifies formatting without writing. Build the user manual with `npm run docs:build`.
+
+## Key Conventions
+
+- Reference `docs/development/coding_guidelines.md` for detailed rules; `docs/development/README.md` indexes the
+  developer docs.
+- Write every document, task, review and commit message by `docs/development/writing_style.md`.
+
+### Vocabulary
+
+Shared terms are defined in `docs/system_overview.html` (section 4, Vocabulary). Use them in every spec, task, review
+and commit message. In short:
+
+- **Team member**, never user, operator, admin or owner.
+- **Job** is the product's unit of work. **Task** is used only in the pi-durable meaning.
+- An agent **invokes** another agent; never "subagent".
+- When a term exists in both runtimes, write "pi-durable X" or "pi agent X".
+- Never "sandbox": workspaces don't confine agents.
+
+### Fixes follow the specs
+
+A bug or issue fix must stay within the approved specs and accepted ADRs. If the fix would change or contradict
+specified behaviour, stop and escalate it as blocking (a spec amendment or change request) instead of shipping the
+code change alone.
+
+### Folder structure
+
+```
+.
+├── AGENTS.md                    # This file
+├── README.md
+├── package.json                 # Scripts and pinned dependencies
+├── package-lock.json
+├── tsconfig.json                # TypeScript configuration
+├── biome.json                   # Lint and format configuration
+├── mise.toml                    # Tool versions and the ai-team pin
+├── src/                         # Product code
+├── web/ui/                      # Web pages: TypeScript modules the daemon serves
+├── test/                        # Tests (unit/, service/, web/, support/)
+├── .github/workflows/
+│   ├── build.yml                # CI: Format, Build, User Documentation, Tests
+│   ├── pages.yml                # Publishes the user manual to GitHub Pages
+│   └── deploy.yml               # Release placeholder (tag pushes)
+└── docs/
+    ├── development/             # Developer docs and coding guidelines
+    ├── manual/                  # User manual (VitePress site)
+    ├── ai-team/                 # Specs, decisions and project-local ai-team docs
+    └── research/                # Knowledge base, feature review
+```
+
+### Runtime prerequisites
+
+- pi is consumed as npm packages (`@earendil-works/pi-durable`, `pi-ai`, `chord`, `pi-coding-agent`), pinned to exact
+  versions with a lockfile. The packages ship in lockstep; keep them on the same version.
+- Don't replace the real pi packages with substitutes or alternate agent runtimes to get around a missing or broken
+  dependency; stop and escalate. Deterministic fake models for tests are fine.
+- `README.md` is the canonical record of the pi versions in use (no backwards compatibility guaranteed). Whenever the
+  version changes, update the README's compatibility section.
+
+### ai-team version
+
+`ai-team` is installed per project by `mise run setup:ai-team`, into the git-ignored `.tmp/tools`, at the released
+version pinned as `AI_TEAM_REF` in `mise.toml`. Bump that pin to move to a new release. Report errors at
+https://github.com/aurora-firmware/the-ai-team/issues.

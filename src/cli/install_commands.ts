@@ -1,0 +1,130 @@
+/**
+ * The `bob service` group (S-010 REQ-004, REQ-005): the installation commands. They call no operation of the service,
+ * and the table imports nothing from `src/install/`: each `run` loads its steps when it runs (ADR-005 decision 2).
+ */
+import type { CommandInput, CommandSpec } from "./command_line.ts";
+
+type Context = Awaited<ReturnType<typeof contextOf>>;
+
+/** The resumers of cut-off operations. */
+function resumersFor(contextOfRun: () => Context) {
+    return {
+        upgrade: async (journal: Parameters<Context["resumers"]["upgrade"]>[0]) => {
+            const { resumeUpgrade } = await import("../install/upgrade.ts");
+            await resumeUpgrade(contextOfRun(), journal);
+        },
+        "switch-back": async (journal: Parameters<Context["resumers"]["upgrade"]>[0]) => {
+            const { resumeSwitchBack } = await import("../install/upgrade.ts");
+            await resumeSwitchBack(contextOfRun(), journal);
+        },
+        "fresh-start": async (journal: Parameters<Context["resumers"]["upgrade"]>[0]) => {
+            const { resumeFreshStart } = await import("../install/upgrade.ts");
+            await resumeFreshStart(contextOfRun(), journal);
+        },
+        rollback: async (journal: Parameters<Context["resumers"]["upgrade"]>[0]) => {
+            const { resumeRollback } = await import("../install/rollback.ts");
+            await resumeRollback(contextOfRun(), journal);
+        },
+    };
+}
+
+async function contextOf(input: CommandInput) {
+    const { serviceCommandContext } = await import("../install/service_commands.ts");
+    const context = serviceCommandContext(
+        input.io,
+        resumersFor(() => context),
+    );
+    return context;
+}
+
+const install: CommandSpec = {
+    group: "service",
+    verb: "install",
+    summary: "Register the service and start it at boot, then wait until it is ready.",
+    positionals: [],
+    options: {},
+    isData: false,
+    callsService: false,
+    async run(input) {
+        const { runServiceInstall } = await import("../install/service_commands.ts");
+        return runServiceInstall(await contextOf(input));
+    },
+};
+
+const remove: CommandSpec = {
+    group: "service",
+    verb: "remove",
+    summary: "Stop the service and remove its registration. The program and the data stay.",
+    positionals: [],
+    options: {},
+    isData: false,
+    callsService: false,
+    async run(input) {
+        const { runServiceRemove } = await import("../install/service_commands.ts");
+        return runServiceRemove(await contextOf(input));
+    },
+};
+
+const status: CommandSpec = {
+    group: "service",
+    verb: "status",
+    summary: "Show whether the service is registered, starts at boot and runs, and the directories it uses.",
+    positionals: [],
+    options: { json: { type: "boolean", description: "Print the status as one JSON object." } },
+    isData: false,
+    callsService: false,
+    async run(input) {
+        const { runServiceStatus } = await import("../install/service_commands.ts");
+        return runServiceStatus(await contextOf(input), { json: input.json });
+    },
+};
+
+const upgrade: CommandSpec = {
+    verb: "upgrade",
+    summary: "Stop the service, move it to a newer version (the latest unless one is given) and start it again.",
+    positionals: [{ name: "version", required: false }],
+    options: { yes: { type: "boolean", description: "Don't ask before stopping the service." } },
+    isData: false,
+    callsService: false,
+    async run(input) {
+        const { runUpgrade } = await import("../install/upgrade.ts");
+        const version = input.positionals[0];
+        return runUpgrade({ context: await contextOf(input), version, yes: input.options.yes === true });
+    },
+};
+
+const rollback: CommandSpec = {
+    verb: "rollback",
+    summary: "Stop the service and return it to the previous version with the database as the upgrade found it.",
+    positionals: [],
+    options: { yes: { type: "boolean", description: "Don't ask before stopping the service." } },
+    isData: false,
+    callsService: false,
+    async run(input) {
+        const { runRollback } = await import("../install/rollback.ts");
+        return runRollback({ context: await contextOf(input), yes: input.options.yes === true });
+    },
+};
+
+const uninstall: CommandSpec = {
+    verb: "uninstall",
+    summary:
+        "Remove the service, the program and the link to it; the instance's data stays unless you choose to remove it.",
+    positionals: [],
+    options: {
+        yes: { type: "boolean", description: "Don't ask whether to keep the data; keep it unless --remove-data." },
+        "remove-data": { type: "boolean", description: "Remove the instance's directories without asking." },
+    },
+    isData: false,
+    callsService: false,
+    async run(input) {
+        const { runUninstall } = await import("../install/uninstall.ts");
+        return runUninstall({
+            context: await contextOf(input),
+            yes: input.options.yes === true,
+            removeData: input.options["remove-data"] === true,
+        });
+    },
+};
+
+export const INSTALL_COMMANDS: readonly CommandSpec[] = [install, remove, status, upgrade, rollback, uninstall];

@@ -1,0 +1,39 @@
+{
+    "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+    "files": {
+        "includes": [
+            "src/**",
+            "test/**",
+            "web/**",
+            "release/**",
+            "package.json",
+            "tsconfig.json",
+            "biome.json",
+            "!src/shipped/skills/about-the-intern/manual"
+        ]
+    },
+    "formatter": {
+        "enabled": true,
+        "indentStyle": "space",
+        "indentWidth": 4,
+        "lineWidth": 120
+    },
+    "linter": {
+        "enabled": true,
+        "rules": {
+            "preset": "recommended"
+        }
+    },
+    "overrides": [
+        {
+            "includes": ["web/ui/assets/brand/**"],
+            "linter": {
+                "rules": {
+                    "a11y": {
+                        "noSvgWithoutTitle": "off"
+                    }
+                }
+            }
+        }
+    ]
+}

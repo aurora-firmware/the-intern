@@ -1,0 +1,125 @@
+/**
+ * The operations that act on a job (S-004 REQ-005 to REQ-007): resume a Blocked job, and complete or cancel one. There
+ * is no block operation for team members. A refusal of the job store is a service refusal of the same code.
+ */
+import type { ServiceContext } from "../daemon/daemon.ts";
+import { ConversationClosedError } from "../host/job_section.ts";
+import { type SteerInput, steerConversation } from "../host/steering.ts";
+import { cancelJob, completeJob, resumeJob } from "../jobs/job_actions.ts";
+import { blockResumeCount, type JobAuthor, resumeRequestId } from "../jobs/job_model.ts";
+import type { Job } from "../jobs/job_store.ts";
+import type { JobsComponentOptions } from "../jobs/jobs_component.ts";
+import { leadConversationOf } from "./job_operations.ts";
+import {
+    allEntries,
+    asRecord,
+    authorOf,
+    refuseFrontDesk,
+    refusing,
+    requireString,
+    STORE_PAGE_SIZE,
+} from "./job_record_operations.ts";
+import { defineOperation, type Operation, ServiceError } from "./operations.ts";
+
+/** What the lead receives when a team member resumes the job without text. */
+export const RESUMED_NOTE = "A team member resumed the job.";
+
+type ResumeInput = { job: string; text?: string };
+type FinishInput = { job: string; justification: string };
+type CompleteInput = FinishInput & { mailText?: string };
+
+// The steer's actor is the author, who is a team member or an agent: authorOf refuses a job source.
+function actorOfAuthor(author: JobAuthor) {
+    if (author.kind === "team_member") return { kind: "team_member", wayIn: author.wayIn } as const;
+    if (author.kind === "agent") return author;
+    throw new Error("A daemon author does not resume a job");
+}
+
+function parseResume(raw: unknown): ResumeInput {
+    const record = asRecord(raw);
+    const input: ResumeInput = { job: requireString(record, "job") };
+    if (record.text !== undefined) input.text = requireString(record, "text");
+    return input;
+}
+
+function parseFinish(raw: unknown): FinishInput {
+    const record = asRecord(raw);
+    return { job: requireString(record, "job"), justification: requireString(record, "justification") };
+}
+
+function parseComplete(raw: unknown): CompleteInput {
+    const input: CompleteInput = parseFinish(raw);
+    const record = asRecord(raw);
+    // An empty text is a string: the mail policy decides what a blank text means.
+    if (record.mailText !== undefined) {
+        if (typeof record.mailText !== "string") throw new Error("mailText must be a string");
+        input.mailText = record.mailText;
+    }
+    return input;
+}
+
+// A cancel or complete that lands after the resume read the job Blocked closes the lead, and the steer finds it so.
+async function steerRefusingClosed(ctx: ServiceContext, leadId: string, input: SteerInput): Promise<void> {
+    try {
+        await steerConversation(ctx.host, leadId, input);
+    } catch (error) {
+        if (error instanceof ConversationClosedError) throw new ServiceError("conflict", error.message);
+        throw error;
+    }
+}
+
+export function jobActionOperations(options: JobsComponentOptions) {
+    const resume = defineOperation<ServiceContext, ResumeInput, Job>({
+        name: "jobs.resume",
+        kind: "control",
+        parse: parseResume,
+        async run(ctx, input, caller) {
+            await refuseFrontDesk(ctx.host, input.job);
+            const author = await authorOf(caller, ctx.host);
+            const job = await refusing(ctx.jobStore.getJob(input.job));
+            if (job.status !== "blocked") {
+                throw new ServiceError("conflict", `Job ${job.number} is not Blocked, so it cannot resume`);
+            }
+            const leadId = await leadConversationOf(ctx.host, job.id);
+            if (leadId !== undefined) {
+                const history = await allEntries((cursor) =>
+                    ctx.jobStore.listHistory(job.id, { limit: STORE_PAGE_SIZE, ...(cursor && { cursor }) }),
+                );
+                // The text reaches the parked lead before the job is written, so a crash in between leaves a
+                // Blocked job whose lead has the answer, which the recovery of rule 3 resumes.
+                await steerRefusingClosed(ctx, leadId, {
+                    content: input.text ?? RESUMED_NOTE,
+                    mode: "followUp",
+                    actor: actorOfAuthor(author),
+                    requestId: resumeRequestId(job.id, blockResumeCount(history)),
+                });
+            }
+            return refusing(resumeJob({ ctx, options }, job.id, author));
+        },
+    });
+    const complete = defineOperation<ServiceContext, CompleteInput, Job>({
+        name: "jobs.complete",
+        kind: "control",
+        parse: parseComplete,
+        async run(ctx, input, caller) {
+            await refuseFrontDesk(ctx.host, input.job);
+            const author = await authorOf(caller, ctx.host);
+            return refusing(
+                completeJob({ ctx, options }, input.job, input.justification, author, undefined, input.mailText),
+            );
+        },
+    });
+    const cancel = defineOperation<ServiceContext, FinishInput, Job>({
+        name: "jobs.cancel",
+        kind: "control",
+        parse: parseFinish,
+        async run(ctx, input, caller) {
+            await refuseFrontDesk(ctx.host, input.job);
+            const author = await authorOf(caller, ctx.host);
+            return refusing(cancelJob({ ctx, options }, input.job, input.justification, author));
+        },
+    });
+    // biome-ignore lint/suspicious/noExplicitAny: heterogeneous operations cannot share a narrower type
+    const operations: Operation<ServiceContext, any, any>[] = [resume, complete, cancel];
+    return operations;
+}
