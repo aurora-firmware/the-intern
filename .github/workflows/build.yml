@@ -6,6 +6,8 @@ on:
     branches:
       - dev-pi-durable
       - main
+    tags:
+      - '*'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
@@ -16,7 +18,9 @@ permissions:
 
 # Each job keeps its name so required checks stay stable. Jobs run in the
 # official node:24.22.0-bookworm image as root, so files left in the shared runner
-# workspace always have the same owner.
+# workspace always have the same owner. The Installation Cycle job is the exception:
+# it starts the privileged systemd rig with Docker, so it runs on the runner's host
+# without a job container.
 jobs:
   format:
     name: Format
@@ -102,4 +106,22 @@ jobs:
         with:
           name: test-logs
           path: .tmp/test-logs/
+          include-hidden-files: true
+
+  installation-cycle:
+    name: Installation Cycle
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run the installation cycle
+        run: test/install/run_cycle.sh
+
+      - name: Upload installation log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-log
+          path: .tmp/test-logs/install.log
           include-hidden-files: true
