@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -319,6 +319,117 @@ describe("bob service status", () => {
         assert.equal(status, 0);
         assert.match(io.out(), /Current version: unreadable/);
         assert.match(io.err(), /current/);
+    });
+
+    /** Ways a file `status` reads can fail other than being absent or not a record: each gives a different errno. */
+    const FILE_FAULTS: { kind: string; make: (path: string) => Promise<void> }[] = [
+        { kind: "EISDIR (a directory)", make: (path) => mkdir(path) },
+        {
+            kind: "EACCES (no read permission)",
+            make: async (path) => {
+                await writeFile(path, "{}");
+                await chmod(path, 0o000);
+            },
+        },
+        {
+            kind: "ENOTDIR (a link through a plain file)",
+            make: async (path) => {
+                await writeFile(join(home, "plain"), "");
+                await symlink(join(home, "plain", "inside"), path);
+            },
+        },
+        { kind: "ELOOP (a link to itself)", make: (path) => symlink(path, path) },
+    ];
+
+    for (const fault of FILE_FAULTS) {
+        it(`exits 0 with the contract's object and a warning when service.json fails with ${fault.kind}`, async () => {
+            const { context, io } = setup();
+            await fault.make(layout.serviceRecord);
+
+            const status = await runServiceStatus(context, { json: true });
+
+            assert.equal(status, 0);
+            assert.equal(JSON.parse(io.out()).registered, false);
+            assert.match(io.err(), /Warning: .*service\.json/);
+        });
+
+        it(`exits 0 with the text form and a warning when service.json fails with ${fault.kind}`, async () => {
+            const { context, io } = setup();
+            await fault.make(layout.serviceRecord);
+
+            const status = await runServiceStatus(context, { json: false });
+
+            assert.equal(status, 0);
+            assert.match(io.out(), /Registered: no/);
+            assert.match(io.err(), /Warning: .*service\.json/);
+        });
+
+        it(`exits 0 with the text form and a warning when operation.json fails with ${fault.kind}`, async () => {
+            const { context, io } = setup();
+            await fault.make(layout.journal);
+
+            const status = await runServiceStatus(context, { json: false });
+
+            assert.equal(status, 0);
+            assert.match(io.out(), /Held: no/);
+            assert.match(io.err(), /Warning: .*operation\.json/);
+        });
+    }
+
+    for (const which of ["current", "previous"] as const) {
+        it(`exits 0 with the text form and a warning when ${which} is a directory`, async () => {
+            const { context, io } = setup();
+            await mkdir(layout[which]);
+
+            const status = await runServiceStatus(context, { json: false });
+
+            assert.equal(status, 0);
+            assert.match(io.out(), new RegExp(`${which === "current" ? "Current" : "Previous"} version: unreadable`));
+            assert.match(io.err(), new RegExp(`Warning: .*${which}`));
+        });
+    }
+
+    for (const [kind, failure] of [
+        ["a plain Error", new Error("systemctl crashed")],
+        ["an error with an errno code", Object.assign(new Error("spawn EACCES"), { code: "EACCES" })],
+        ["a thrown string", "the supervisor went away"],
+    ] as const) {
+        it(`exits 0 with the contract's object and a warning when the state query throws ${kind}`, async () => {
+            const manager = fakeManager();
+            manager.state = async () => {
+                throw failure;
+            };
+            const { context, io } = setup({ managerFor: () => manager });
+            await writeServiceRecord(layout, recordOf());
+
+            for (const json of [true, false]) {
+                const status = await runServiceStatus(context, { json });
+                assert.equal(status, 0);
+            }
+
+            assert.equal(JSON.parse(io.out().split("\n")[0] ?? "").registered, false);
+            assert.match(io.out(), /Registered: no/);
+            assert.match(io.err(), /Warning: .*(systemctl crashed|spawn EACCES|the supervisor went away)/);
+        });
+    }
+
+    it("exits 0 with the contract's object and warnings when the program folder can't be searched (EACCES on every read)", async () => {
+        const { context, io } = setup();
+        await writeServiceRecord(layout, recordOf());
+        await chmod(layout.root, 0o600);
+        try {
+            const jsonStatus = await runServiceStatus(context, { json: true });
+            const textStatus = await runServiceStatus(context, { json: false });
+
+            assert.equal(jsonStatus, 0);
+            assert.equal(textStatus, 0);
+            assert.equal(JSON.parse(io.out().split("\n")[0] ?? "").registered, false);
+            assert.match(io.out(), /Current version: unreadable/);
+            assert.match(io.out(), /Previous version: unreadable/);
+            assert.match(io.err(), /EACCES/);
+        } finally {
+            await chmod(layout.root, 0o700);
+        }
     });
 
     it("takes no lock and changes nothing, even while another command holds the lock", async () => {
