@@ -193,11 +193,8 @@ type UpgradeOptions = {
 
 const releaseFrom = (location: string): Record<string, string> => ({ BOB_RELEASE_URL: locationDir(location) });
 
-/**
- * Runs `bob upgrade 0.2.0 --yes` from `location` with standard input closed, so it is not a terminal. `readyMs` is the
- * time from the line that names the failure to the command's end, which is after the previous version is ready again.
- */
-async function runUpgrade(location: string, options: UpgradeOptions = {}): Promise<UpgradeRun> {
+/** The environment of an upgrade command: the clean PATH and HOME, the user manager's bus, and the download location. */
+function upgradeEnv(location: string): Record<string, string> {
     const env: Record<string, string> = {
         PATH: "/usr/local/bin:/usr/bin:/bin",
         HOME: homedir(),
@@ -207,6 +204,15 @@ async function runUpgrade(location: string, options: UpgradeOptions = {}): Promi
         const value = process.env[name];
         if (value !== undefined) env[name] = value;
     }
+    return env;
+}
+
+/**
+ * Runs `bob upgrade 0.2.0 --yes` from `location` with standard input closed, so it is not a terminal. `readyMs` is the
+ * time from the line that names the failure to the command's end, which is after the previous version is ready again.
+ */
+async function runUpgrade(location: string, options: UpgradeOptions = {}): Promise<UpgradeRun> {
+    const env = upgradeEnv(location);
     if (options.stopAfter !== undefined) env.BOB_INSTALL_TEST_STOP_AFTER = options.stopAfter;
     const child = spawn(installedBob(), ["upgrade", SECOND_VERSION, "--yes"], {
         env,
@@ -376,12 +382,45 @@ describe("bob upgrade 0.2.0 --yes when 0.2.0 migrates the database and fails at 
 
 const TERMINAL_TIMEOUT_MS = scaled(240_000);
 
-/** Runs `bob upgrade 0.2.0 --yes` on a pseudo-terminal that answers the question about switching back with `reply`. */
-function runUpgradeOnTerminal(location: string, reply: string): Promise<RunResult> {
-    return runAs(installedBob(), ["upgrade", SECOND_VERSION, "--yes"], {
-        env: releaseFrom(location),
-        answers: [{ prompt: ASK_SWITCH_BACK, reply }],
-        timeoutMs: TERMINAL_TIMEOUT_MS,
+/**
+ * Runs `bob upgrade 0.2.0 --yes` on a pseudo-terminal (`script`) and types `reply` once the question about switching back
+ * shows. The terminal's whole output is `stdout`. `readyMs` is the time from the line that names the failure to the
+ * command's end, as in `runUpgrade`.
+ */
+function runUpgradeOnTerminal(location: string, reply: string): Promise<RunResult & { readyMs: number | null }> {
+    const line = `exec '${installedBob()}' upgrade '${SECOND_VERSION}' --yes`;
+    const child = spawn("script", ["-qfec", line, "/dev/null"], {
+        env: upgradeEnv(location),
+        stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let failedAt: number | null = null;
+    let isAnswered = false;
+    child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+        if (failedAt === null && FAILURE_LINE.test(stdout)) failedAt = Date.now();
+        if (!isAnswered && stdout.includes(ASK_SWITCH_BACK)) {
+            isAnswered = true;
+            child.stdin.write(`${reply}\n`);
+        }
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString("utf8");
+    });
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            child.kill("SIGKILL");
+            reject(new Error(`bob upgrade on a terminal did not end within ${TERMINAL_TIMEOUT_MS} ms: ${stdout}`));
+        }, TERMINAL_TIMEOUT_MS);
+        child.once("error", (error) => {
+            clearTimeout(timer);
+            reject(error);
+        });
+        child.once("close", (status) => {
+            clearTimeout(timer);
+            resolve({ status, stdout, stderr, readyMs: failedAt === null ? null : Date.now() - failedAt });
+        });
     });
 }
 
@@ -413,7 +452,7 @@ function switchedBackTests(state: () => { instance: Instance; status: number | n
 
 describe("bob upgrade 0.2.0 --yes when 0.2.0 refuses the database, answered yes on a terminal", () => {
     let instance: Instance;
-    let upgraded: RunResult;
+    let upgraded: Awaited<ReturnType<typeof runUpgradeOnTerminal>>;
 
     before(async () => {
         instance = await startInstance();
@@ -429,6 +468,13 @@ describe("bob upgrade 0.2.0 --yes when 0.2.0 refuses the database, answered yes 
 
     test("it asked the question on the terminal", () => {
         assert.ok(upgraded.stdout.includes(ASK_SWITCH_BACK), upgraded.stdout);
+    });
+
+    test("the switch-back's time from the failure to ready is recorded", (t) => {
+        assert.notEqual(upgraded.readyMs, null, "the output never named the failure");
+        t.diagnostic(
+            `switch-back from the failure to ready, older-job-schema, yes on a terminal: ${upgraded.readyMs} ms`,
+        );
     });
 });
 
