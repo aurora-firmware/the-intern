@@ -20,7 +20,7 @@ import {
     type ServiceRecord,
     writeServiceRecord,
 } from "../../src/install/service_manager.ts";
-import { readCopyInfo, takeCopy, upgradesDir } from "../../src/install/state_copy.ts";
+import { copyFor, readCopyInfo, takeCopy, upgradesDir } from "../../src/install/state_copy.ts";
 import {
     resumeFreshStart,
     resumeSwitchBack,
@@ -321,7 +321,7 @@ describe("bob upgrade when the new version fails after opening the database", ()
 });
 
 describe("the links and copies after a switch-back", () => {
-    it("names the version previous named before and keeps the copy of the earlier upgrade", async () => {
+    it("names the version previous named before and keeps every copy, the earlier upgrade's among them", async () => {
         await installFakeVersion("0.9.0");
         await switchLink(layout, "previous", "0.9.0");
         const earlier = await takeCopy(dirs, "0.9.0", "1.0.0", new Date("2026-01-01T00:00:00.000Z"));
@@ -333,10 +333,8 @@ describe("the links and copies after a switch-back", () => {
         assert.equal(await readLink(layout, "current"), "1.0.0");
         const names = await folders();
         assert.ok(names.includes(earlier));
-        assert.equal(
-            names.some((name) => name.endsWith("-1.0.0-to-1.1.0")),
-            false,
-        );
+        assert.ok(names.some((name) => name.endsWith("-1.0.0-to-1.1.0")));
+        assert.equal(await copyFor(dirs, "0.9.0", "1.0.0"), earlier);
     });
 });
 
