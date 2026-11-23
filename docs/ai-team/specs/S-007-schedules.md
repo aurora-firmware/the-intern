@@ -416,7 +416,8 @@ exist that day, that time SHALL NOT fire.
 A fire SHALL create no job and record a skipped fire when any of these holds:
 
 - the entry has an open scheduled run. The reason names the scheduled run's short number. A job waiting for a worker
-  thread counts as open. A Blocked or Done scheduled run doesn't stop a fire.
+  thread counts as open, and so does a job whose lead waits for a model. A Blocked or Done scheduled run doesn't stop
+  a fire.
 - the folder of the seat's workspace no longer exists. The reason names the folder.
 - the entry's role is a team role whose instruction file is missing or empty (S-008 REQ-007). The reason names the
   file.
@@ -478,7 +479,7 @@ run and the creation of the job SHALL happen as one step, so two starts of one e
 - **Given:** pi agent settings that name no default model, an entry due at 02:00 that names no model and whose role
   names none, and a second entry due at 02:00 that names a model that resolves
 - **When:** the clock reaches 02:00; later the settings name the fake model as the default, and the first entry's next
-  due time arrives
+  due time arrives more than 30 seconds after that change
 - **Then:** at 02:00 the first entry creates no job, uses no job number, and its run history shows a skipped fire with
   the reason "no model", published as the schedule fire skipped delta; the second creates its job; after the change no
   job is created for the skipped 02:00, and the next due time creates one job
@@ -526,7 +527,8 @@ It SHALL be refused, creating nothing and recording no skipped fire, because the
 
 Run now is a team member's request, not the schedule, so it SHALL NOT be refused for want of a model. When the seat has
 no model (REQ-006), it SHALL create the scheduled run's job as above, and the job's lead waits for a model like a team
-member's job (S-001 REQ-027; S-004 REQ-023) (product owner, 2026-11-24, answering the Architect's Q1 on CR-002).
+member's job (S-001 REQ-027; S-004 REQ-023) (product owner, 2026-11-24, answering the Architect's Q1 on CR-002). The
+job is To do and counts as the entry's open scheduled run (product owner, 2026-11-24, CR-002 settled details).
 The refusals above still apply.
 
 A repeated call with the same idempotency key SHALL return the original job (S-002 REQ-013).
@@ -868,3 +870,4 @@ None. Feature Architecture settled the scheduling library question (`docs/develo
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.5 confirmed: Success Criterion 5 met by T-311's live run, AC-014.3 by T-325 and a fresh trigger grep, AC-006.5 and AC-008.4 by schedule_fires tests, and the Schedules page's Skills panel for the entry's role or bob (T-376) | none |
 | 2026-11-18 | v0.6. REQ-014: an email to an owned account is a team member's request through the `email` way in, not an event (S-009 REQ-006), and mail in a monitored account starts nothing. Users, Exclusions ("What Email does with mail") and Assumptions and Dependencies: the Email spec is S-009, no longer "not yet written". No identifier added or retired. | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18. | S-009's tasks |
 | 2026-11-24 | v0.7. Work without a model (CR-002). REQ-006 and new AC-006.6: a fire whose seat has no model (the entry names none, and neither its role nor pi agent's settings do) creates no job and is recorded as a skipped fire with the reason "no model", not made up after a pi login; an entry that names its own model fires as before. REQ-008 and new AC-008.5: run now isn't refused for want of a model; it creates the scheduled run's job, whose lead waits for a model, and the other refusals stay. REQ-013: the front desk's run tool alike. REQ-017 and AC-017.1: the manual says what a fire and a run now do with no model. Workflow and Success Criterion 2 follow. No identifier retired. | CR-002, approved by the product owner on 2026-11-24, with the answer to the Architect's Q1 of that day. | CR-002's tasks |
+| 2026-11-24 | v0.7, same version, revised on the planning branch after the Architect's consistency review (corrections C2, C4) and CR-002's settled details of the same day. REQ-006: a job whose lead waits for a model counts as open. REQ-008: a run now with no model leaves a To do job that counts as the entry's open scheduled run, credited to the settled details. AC-006.6: the next due time comes more than 30 seconds after the default model appears. No identifier added or retired. | Architect's consistency review of 2026-11-24; product owner, CR-002 settled details, 2026-11-24. | CR-002's tasks |
