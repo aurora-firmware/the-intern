@@ -39,6 +39,19 @@ function pause(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** The probe's answer, or null once `ms` pass: a daemon that accepts the call and never answers can't outlast the wait. */
+async function probeWithin(probe: StatusProbe, record: ServiceRecord, ms: number): Promise<DaemonAnswer | null> {
+    let timer: NodeJS.Timeout | undefined;
+    const expiry = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), ms);
+    });
+    try {
+        return await Promise.race([probe(record).catch(() => null), expiry]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 /**
  * Polls the daemon until its phase is `ready`, whatever the supervisor's restarts do in between. After the timeout it
  * returns the startup report the state directory holds, for the caller to classify.
@@ -50,7 +63,7 @@ export async function waitForReady(
     const { timeoutMs = READY_WAIT_MS, probe = probeDaemonStatus } = options;
     const deadline = Date.now() + timeoutMs;
     for (;;) {
-        const answer = await probe(record);
+        const answer = await probeWithin(probe, record, Math.max(deadline - Date.now(), 0));
         if (answer?.phase === "ready") return { ready: true, version: answer.version };
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;
