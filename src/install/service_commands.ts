@@ -13,7 +13,14 @@ import { resolveInstanceDirs } from "../daemon/state_layout.ts";
 import { checkPlatform, type PlatformFacts } from "./install_model.ts";
 import { launchdService } from "./launchd_service.ts";
 import { finishCutOffOperation, OperationJournalError, type Resumers, readJournal } from "./operation_journal.ts";
-import { checkLayout, type ProgramLayout, ProgramLayoutError, programLayout, readLink } from "./program_layout.ts";
+import {
+    checkLayout,
+    type LinkName,
+    type ProgramLayout,
+    ProgramLayoutError,
+    programLayout,
+    readLink,
+} from "./program_layout.ts";
 import { type ReadyWaitResult, readRunningVersion, waitForReady } from "./ready_wait.ts";
 import {
     type CommandRunner,
@@ -288,14 +295,27 @@ async function statusView(context: ServiceCommandContext): Promise<StatusView> {
 
 const yesNo = (value: boolean): string => (value ? "yes" : "no");
 
+/** The version a link names, "none" without the link, or "unreadable" with a warning when it isn't a version link. */
+async function linkText(context: ServiceCommandContext, which: LinkName): Promise<string> {
+    try {
+        return (await readLink(context.layout, which)) ?? "none";
+    } catch (error) {
+        const isNotALink = (error as NodeJS.ErrnoException).code === "EINVAL";
+        if (!(error instanceof ProgramLayoutError) && !isNotALink) throw error;
+        const reason = isNotALink ? `${context.layout[which]} is not a link` : (error as Error).message;
+        writeError(context.io, `Warning: ${reason}`);
+        return "unreadable";
+    }
+}
+
 async function statusText(context: ServiceCommandContext, view: StatusView): Promise<string[]> {
     const { layout } = context;
     const lines = [
         `Registered: ${yesNo(view.registered)}`,
         `Starts at boot: ${yesNo(view.startsAtBoot)}`,
         `Running: ${view.running ? `yes (version ${view.version})` : "no"}`,
-        `Current version: ${(await readLink(layout, "current")) ?? "none"}`,
-        `Previous version: ${(await readLink(layout, "previous")) ?? "none"}`,
+        `Current version: ${await linkText(context, "current")}`,
+        `Previous version: ${await linkText(context, "previous")}`,
         `Held: ${yesNo(existsSync(layout.holdFile))}`,
     ];
     const journal = await orWarn(context.io, () => readJournal(layout), null);
