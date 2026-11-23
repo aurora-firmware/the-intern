@@ -11,6 +11,14 @@ import { type OperationJournal, type Resumers, writeJournal } from "../../src/in
 import { type ProgramLayout, programLayout, readLink, switchLink } from "../../src/install/program_layout.ts";
 import type { ReadyWaitResult } from "../../src/install/ready_wait.ts";
 import {
+    runServiceInstall,
+    runServiceRemove,
+    runServiceStatus,
+    type ServiceCommandContext,
+    serviceManagerFor,
+    withInstallLock,
+} from "../../src/install/service_commands.ts";
+import {
     hold,
     readServiceRecord,
     type ServiceManager,
@@ -19,14 +27,6 @@ import {
     type ServiceState,
     writeServiceRecord,
 } from "../../src/install/service_manager.ts";
-import {
-    runServiceInstall,
-    runServiceRemove,
-    runServiceStatus,
-    type ServiceCommandContext,
-    serviceManagerFor,
-    withInstallLock,
-} from "../../src/install/service_commands.ts";
 import { scaled } from "../support/time_scale.ts";
 
 const LINUX: PlatformFacts = { platform: "linux", arch: "x64", hasGlibc: true, hasSystemd: true, uid: 1000 };
