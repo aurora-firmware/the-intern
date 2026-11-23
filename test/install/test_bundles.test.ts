@@ -15,18 +15,18 @@ type StartupReport = {
     ready: boolean;
 };
 
-type Instance = { root: string; configDir: string; stateDir: string; dataDir: string; runtimeDir: string; agentDir: string };
+type Instance = {
+    root: string;
+    configDir: string;
+    stateDir: string;
+    dataDir: string;
+    runtimeDir: string;
+    agentDir: string;
+};
 
 const BUNDLES = process.env.INSTALL_BUNDLES ?? "";
 const PLATFORM = "linux-x64";
-const LOCATIONS = [
-    "base",
-    "fails-before-database",
-    "older-job-schema",
-    "newer-job-schema",
-    "tampered",
-    "no-checksum",
-];
+const LOCATIONS = ["base", "fails-before-database", "older-job-schema", "newer-job-schema", "tampered", "no-checksum"];
 const OWNER_ONLY_MODE = 0o700;
 const FILE_MODE = 0o600;
 const POLL_INTERVAL_MS = 100;
@@ -46,7 +46,6 @@ const MODELS_JSON = {
 const SETTINGS_JSON = { defaultProvider: "loopback", defaultModel: "plain-model" };
 
 let work = "";
-let instance: Instance;
 
 function bundleOf(version: string): string {
     return `the-intern-${version}-${PLATFORM}.tar.gz`;
@@ -199,7 +198,10 @@ after(async () => {
 describe("the test bundles", () => {
     test("0.1.0 and 0.2.0 hold app/package.json of their own version", async () => {
         for (const version of ["0.1.0", "0.2.0"]) {
-            const packaged = shell(`tar -xzOf ${bundleOf(version)} the-intern-${version}-${PLATFORM}/app/package.json`, BUNDLES);
+            const packaged = shell(
+                `tar -xzOf ${bundleOf(version)} the-intern-${version}-${PLATFORM}/app/package.json`,
+                BUNDLES,
+            );
             assert.equal(packaged.status, 0, packaged.output);
             assert.equal((JSON.parse(packaged.output) as { version: string }).version, version);
         }
