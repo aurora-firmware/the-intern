@@ -57,6 +57,10 @@ three folders in the same order with the `spec` output on the terminal.
 Test waits and timeouts run at 2 to 4 times their written length, more on a busier machine; set `TEST_TIME_SCALE`
 (1 to 10) to choose the factor. Write a new wait or timeout as `scaled(ms)` from `test/support/time_scale.ts`.
 
+`test/install/run_cycle.sh [test file ...]` runs the installation cycle against bundles it builds, in a privileged
+Docker container with systemd. `npm test` leaves it out.
+[docs/development/releasing.md](docs/development/releasing.md) says how to run it and how to cut a release.
+
 Before writing or changing a test, read `test/AGENTS.md`: how to keep a test from depending on timing or on an order
 it never set up.
 

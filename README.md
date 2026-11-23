@@ -18,6 +18,16 @@ Its service, `bob`, is one TypeScript package that embeds pi as a library on `@e
 product scope is in [S-000, the system overview](docs/ai-team/specs/S-000-system-overview.md); the team-member
 documentation is the [user manual](docs/manual/index.md). Most of the product is not implemented yet.
 
+## Install
+
+On Linux x64 or macOS on Apple silicon, run this as your own account:
+
+```
+curl -fsSL https://github.com/aurora-firmware/the-intern/releases/latest/download/install.sh | sh
+```
+
+The manual's [Installing and upgrading](docs/manual/installing.md) page covers the service, upgrades and rollbacks.
+
 ## Start here
 
 - [pi-durable and pi SDK knowledge base](docs/research/pi-durable-knowledge.md): what pi-durable and the
