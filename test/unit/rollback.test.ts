@@ -13,11 +13,7 @@ import { type OperationJournal, type StepIo, writeJournal } from "../../src/inst
 import { type ProgramLayout, programLayout, readLink, switchLink } from "../../src/install/program_layout.ts";
 import { resumeRollback, runRollback } from "../../src/install/rollback.ts";
 import type { ServiceCommandContext } from "../../src/install/service_commands.ts";
-import {
-    type ServiceManager,
-    type ServiceRecord,
-    writeServiceRecord,
-} from "../../src/install/service_manager.ts";
+import { type ServiceManager, type ServiceRecord, writeServiceRecord } from "../../src/install/service_manager.ts";
 import { takeCopy, upgradesDir } from "../../src/install/state_copy.ts";
 
 const LINUX: PlatformFacts = { platform: "linux", arch: "x64", hasGlibc: true, hasSystemd: true, uid: 1000 };
@@ -219,9 +215,9 @@ describe("the warning of bob rollback", () => {
         assert.match(text, /jobs and conversations/);
         assert.match(text, /configuration, roles, instructions and skills/);
         assert.match(text, /mail accounts added since/);
-        assert.match(text, /work in progress at the upgrade may run again/);
-        assert.match(text, /mail received since may be taken in again/);
-        assert.match(text, /mail sent since may be sent again/);
+        assert.match(text, /work in progress at the upgrade may run again/i);
+        assert.match(text, /mail received since may be taken in again/i);
+        assert.match(text, /mail sent since may be sent again/i);
     });
 
     it("is given with --yes too, and nothing is asked", async () => {
@@ -329,8 +325,11 @@ describe("bob rollback that finds a cut-off rollback", () => {
     it("finishes it from the step after the last one done and exits 0", async () => {
         const first = setup();
         first.cutOffAfter.step = "switched";
-        await assert.rejects(runRollback(first.input("never")), /cut off/);
+        assert.equal(await runRollback(first.input("never")), 1);
+        assert.match(first.err(), /cut off/);
         const { events, err, input } = setup();
+        // The cut-off process is gone, and with it its owner lock; this test's process outlives it.
+        await rm(join(dirs.stateDir, "owner.lock"), { force: true });
 
         assert.equal(await runRollback(input("never", { yes: false })), 0);
 
