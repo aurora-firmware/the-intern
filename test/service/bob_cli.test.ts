@@ -41,12 +41,12 @@ function daemonFilesAmong(urls: string[]): string[] {
 }
 
 const INSTALL_COMMAND_LINES = [
-    { args: ["service", "install"], usage: "Usage: bob service install" },
-    { args: ["service", "remove"], usage: "Usage: bob service remove" },
-    { args: ["service", "status"], usage: "Usage: bob service status" },
-    { args: ["upgrade"], usage: "Usage: bob upgrade [version] [options]" },
-    { args: ["rollback"], usage: "Usage: bob rollback" },
-    { args: ["uninstall"], usage: "Usage: bob uninstall" },
+    { args: ["service", "install"], usage: "Usage: bob service install", options: [] },
+    { args: ["service", "remove"], usage: "Usage: bob service remove", options: [] },
+    { args: ["service", "status"], usage: "Usage: bob service status", options: ["--json"] },
+    { args: ["upgrade"], usage: "Usage: bob upgrade [version] [options]", options: ["--yes"] },
+    { args: ["rollback"], usage: "Usage: bob rollback", options: ["--yes"] },
+    { args: ["uninstall"], usage: "Usage: bob uninstall", options: ["--yes", "--remove-data"] },
 ];
 
 describe("bob command line", () => {
@@ -83,13 +83,15 @@ describe("bob command line", () => {
         assert.equal(result.stderr, "");
     });
 
-    for (const { args, usage } of INSTALL_COMMAND_LINES) {
+    for (const { args, usage, options } of INSTALL_COMMAND_LINES) {
         it(`prints the options of bob ${args.join(" ")} --help and exits 0`, async () => {
             const result = await runBob([...args, "--help"]);
 
             assert.equal(result.status, 0);
             assert.ok(result.stdout.startsWith(usage), result.stdout);
-            assert.ok(result.stdout.includes("--help"), result.stdout);
+            for (const option of [...options, "--help"]) {
+                assert.ok(result.stdout.includes(`  ${option} `), `${option} missing from ${result.stdout}`);
+            }
             assert.equal(result.stderr, "");
         });
 
