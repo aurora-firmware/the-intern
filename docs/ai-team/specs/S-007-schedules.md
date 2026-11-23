@@ -1,7 +1,7 @@
 ---
 id: S-007
 title: Schedules
-version: '0.6'
+version: '0.7'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-07'
 author: planner
@@ -220,12 +220,14 @@ Due time arrives, in local time                                                 
   (daemon stopped, machine off, or due time more than a minute past → no fire, no record)    REQ-007
   (entry has an open scheduled run → skipped fire naming the scheduled run)                  REQ-006
   (workspace folder missing, or job refused → skipped fire with the reason)                  REQ-006
+  (seat has no model → skipped fire "no model"; not made up after a pi login)                 REQ-006
 Job S-n created with a fresh lead conversation and the entry's seat values                   REQ-004
   (crash and restart → no second job for that due time)                                      REQ-016
 Lead is told it is a scheduled run of the entry and that earlier scheduled runs can be read  REQ-010
 Job runs and ends as any job; its end starts nothing                                         REQ-014
 Team member reads the run history; run now at any time                                       REQ-008, REQ-009
   (run now with an open scheduled run → refused busy, nothing recorded)                      REQ-008
+  (run now whose seat has no model → job S-n created, its lead waits for a model)            REQ-008
 ```
 
 ## Behavioral Requirements
@@ -419,10 +421,16 @@ A fire SHALL create no job and record a skipped fire when any of these holds:
 - the entry's role is a team role whose instruction file is missing or empty (S-008 REQ-007). The reason names the
   file.
 - the job is refused, for example because the entry's model is no longer available. The reason names the refusal.
+- the seat has no model: the entry names none, and neither its role nor pi agent's settings do (REQ-004; S-001
+  REQ-003). The reason is "no model" (product owner, 2026-11-24, CR-002). An entry that names its own model fires as
+  before.
 
-A refusal after the job is written follows S-004 REQ-007: the job is cancelled and appears as a cancelled scheduled run,
-not a skipped fire. A skipped fire SHALL publish the schedule fire skipped delta. The check for an open scheduled run
-and the creation of the job SHALL happen as one step, so two starts of one entry can't both pass the check.
+A fire skipped for "no model" is not made up once a model is available: the entry's next due time fires as usual
+(REQ-007).
+
+A refusal after the job is written follows S-004 REQ-007: the job is cancelled and appears as a cancelled scheduled
+run, not a skipped fire. A skipped fire SHALL publish the schedule fire skipped delta. The check for an open scheduled
+run and the creation of the job SHALL happen as one step, so two starts of one entry can't both pass the check.
 
 #### AC-006.1 — An open scheduled run skips the fire
 
@@ -465,6 +473,18 @@ and the creation of the job SHALL happen as one step, so two starts of one entry
 
 **Verification:** test — `test/service/schedule_fires.test.ts`.
 
+#### AC-006.6 — No model
+
+- **Given:** pi agent settings that name no default model, an entry due at 02:00 that names no model and whose role
+  names none, and a second entry due at 02:00 that names a model that resolves
+- **When:** the clock reaches 02:00; later the settings name the fake model as the default, and the first entry's next
+  due time arrives
+- **Then:** at 02:00 the first entry creates no job, uses no job number, and its run history shows a skipped fire with
+  the reason "no model", published as the schedule fire skipped delta; the second creates its job; after the change no
+  job is created for the skipped 02:00, and the next due time creates one job
+
+**Verification:** test — `test/service/schedule_fires.test.ts`.
+
 ### REQ-007 — Missed due times
 
 Fires SHALL begin once the daemon is ready (S-002 REQ-003). A due time that passes while the daemon is stopped or
@@ -504,6 +524,11 @@ It SHALL be refused, creating nothing and recording no skipped fire, because the
   (S-008 REQ-007)
 - `not_found` when no entry has that name
 
+Run now is a team member's request, not the schedule, so it SHALL NOT be refused for want of a model. When the seat has
+no model (REQ-006), it SHALL create the scheduled run's job as above, and the job's lead waits for a model like a team
+member's job (S-001 REQ-027; S-004 REQ-023) (product owner, 2026-11-24, answering the Architect's Q1 on CR-002).
+The refusals above still apply.
+
 A repeated call with the same idempotency key SHALL return the original job (S-002 REQ-013).
 
 #### AC-008.1 — Run now starts a scheduled run
@@ -541,6 +566,17 @@ A repeated call with the same idempotency key SHALL return the original job (S-0
 - **Then:** the call is refused `invalid_input` naming the file, no job is created, and no skipped fire is recorded
 
 **Verification:** test — `test/service/schedule_fires.test.ts`.
+
+#### AC-008.5 — Run now with no model
+
+- **Given:** pi agent settings that name no default model, and an entry with no open scheduled run that names no model
+  and whose role names none
+- **When:** a team member calls `schedules.run`, then runs `bob schedules run <name>`
+- **Then:** the call creates a job `S-n`, To do, whose origin records the entry and on demand, and whose lead
+  conversation holds its first input followed by the no-model notice; no skipped fire is recorded; the command is
+  refused `busy` naming `S-n`, because that To do scheduled run is open
+
+**Verification:** test — `test/service/schedule_fires.test.ts`, `test/service/bob_cli.test.ts`.
 
 ### REQ-009 — Reading schedules and their history
 
@@ -653,7 +689,8 @@ history. Each SHALL act as the matching service operation, a refusal SHALL retur
 goes on, and a call with the same tool call id SHALL act once. An interrupted call settles as an error result, and a new
 call from the model is a new call under the operation's rules. These tools SHALL be offered in no other conversation,
 apart from read schedule runs (REQ-010). A scheduled run the front desk starts SHALL have the letter `S` and record in
-its origin the way in of the team member's input and the front desk, with no address.
+its origin the way in of the team member's input and the front desk, with no address. Like `schedules.run`, the run
+tool SHALL NOT be refused for want of a model: it creates the job, whose lead waits for a model (REQ-008).
 
 #### AC-013.1 — Setting up a schedule in chat
 
@@ -747,14 +784,17 @@ identify the fire (S-002 REQ-013). A crash before the job is written leaves that
 The manual SHALL have a page on schedules, covering the file, the commands, the page, the skip rules and how to read the
 run history, in place of `docs/manual/index.md`'s "This page comes with its feature". The command reference and the
 origin letter table SHALL match. It SHALL also say that schedule entries aren't in an export, and that a To do scheduled
-run holds back fires until someone starts or cancels it (S-004 AC-008.8).
+run holds back fires until someone starts or cancels it (S-004 AC-008.8). It SHALL say that a fire whose seat has no
+model is skipped with the reason "no model" and not made up after signing in to pi, while a run now creates its job,
+which waits for a model.
 
 #### AC-017.1 — The manual matches
 
 - **Given:** the merged work
 - **When:** a reviewer builds the manual and compares it with `bob schedules --help` and the page
 - **Then:** every command, key and skip reason appears, the manual says that entries aren't in an export and that a To
-  do scheduled run holds back fires, and the site builds with no error
+  do scheduled run holds back fires, it says what a fire and a run now do with no model, and the site builds with no
+  error
 
 **Verification:** inspection — `npm run docs:build`, read by the reviewer.
 
@@ -789,8 +829,8 @@ This spec adds no other setting. One minute (REQ-015, REQ-007) is built in.
 1. A team member adds `0 2 * * *` by each of the command, the page, the front desk and a hand edit plus restart, and
    each entry then starts one `S-n` job at its due time, seated with its values (REQ-001 to REQ-005, REQ-011 to
    REQ-013).
-2. With an open scheduled run, a missing folder or a gone model, a fire creates no job and the reason appears in `bob
-   schedules show`; a Blocked scheduled run stops nothing (REQ-006).
+2. With an open scheduled run, a missing folder, a gone model or no model, a fire creates no job and the reason appears
+   in `bob schedules show`; a Blocked scheduled run stops nothing (REQ-006).
 3. A daemon killed around a due time creates at most one job for it, and a stopped daemon creates none later (REQ-007,
    REQ-016).
 4. A lead told by a fire reads an earlier scheduled run's resolution and worklog with its tools (REQ-009, REQ-010).
@@ -827,3 +867,4 @@ None. Feature Architecture settled the scheduling library question (`docs/develo
 | 2026-11-13 | v0.5. REQ-006: a fire is skipped when the entry's role is a team role whose instruction file is missing or empty, with a reason naming the file; new AC-006.5. REQ-008: run now is refused `invalid_input` for a team role whose instruction file is missing; new AC-008.4. Interfaces, the Schedules page: from an entry the page opens S-008's Skills panel for the entry's role, and the table names the panel's calls. No identifier changed or retired. | Product owner decisions of the S-008 brainstorm, 2026-11-13; S-008 architecture consistency review, findings B8 and C4. | S-008's tasks |
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.5 confirmed: Success Criterion 5 met by T-311's live run, AC-014.3 by T-325 and a fresh trigger grep, AC-006.5 and AC-008.4 by schedule_fires tests, and the Schedules page's Skills panel for the entry's role or bob (T-376) | none |
 | 2026-11-18 | v0.6. REQ-014: an email to an owned account is a team member's request through the `email` way in, not an event (S-009 REQ-006), and mail in a monitored account starts nothing. Users, Exclusions ("What Email does with mail") and Assumptions and Dependencies: the Email spec is S-009, no longer "not yet written". No identifier added or retired. | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18. | S-009's tasks |
+| 2026-11-24 | v0.7. Work without a model (CR-002). REQ-006 and new AC-006.6: a fire whose seat has no model (the entry names none, and neither its role nor pi agent's settings do) creates no job and is recorded as a skipped fire with the reason "no model", not made up after a pi login; an entry that names its own model fires as before. REQ-008 and new AC-008.5: run now isn't refused for want of a model; it creates the scheduled run's job, whose lead waits for a model, and the other refusals stay. REQ-013: the front desk's run tool alike. REQ-017 and AC-017.1: the manual says what a fire and a run now do with no model. Workflow and Success Criterion 2 follow. No identifier retired. | CR-002, approved by the product owner on 2026-11-24, with the answer to the Architect's Q1 of that day. | CR-002's tasks |
