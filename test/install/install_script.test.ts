@@ -88,7 +88,7 @@ describe("a fresh install of the base location", () => {
         assert.equal(result.status, 0, outputOf(result));
     });
 
-    test("bob runs the release's version from the program folder", () => {
+    test("the bob link resolves into the release's folder in the program folder", () => {
         const program = realpathSync(installedBob());
         assert.equal(program, join(programDir, "versions", FIRST_VERSION, "bin", "bob"));
         const manifest = JSON.parse(readFileSync(join(programDir, "current", "app", "package.json"), "utf8")) as {
@@ -103,6 +103,52 @@ describe("a fresh install of the base location", () => {
 
     test("with ~/.local/bin off the PATH the output holds the line to add it", () => {
         assert.match(result.stdout, /Add bob to your PATH: export PATH="\$HOME\/\.local\/bin:\$PATH"/);
+    });
+
+    describe("with no Node on the PATH, bob serve from the bundle", () => {
+        const runtimeDir = join(root, "runtime");
+        let server: FakeModelServer;
+        let daemon: { stop: () => Promise<void> };
+
+        before(async () => {
+            await cleanUpInstall([root]);
+            const installed = await runInstallScript("base", ["--version", FIRST_VERSION]);
+            assert.equal(installed.status, 0, outputOf(installed));
+            server = await startFakeModelServer(defaultScript);
+            await writePiAgentDir(piAgentDir, server.baseUrl);
+            daemon = await startDaemon(runtimeDir);
+        });
+
+        after(async () => {
+            await daemon?.stop();
+            await server?.close();
+            await cleanUpInstall([root]);
+        });
+
+        test("the runner's PATH finds no node", async () => {
+            const result = await runAs("sh", ["-c", "command -v node"]);
+            assert.equal(result.stdout.trim(), "");
+            assert.notEqual(result.status, 0);
+        });
+
+        test("the daemon reaches ready", async () => {
+            await waitUntil(
+                "the daemon answering ready",
+                async () => {
+                    const result = await runAs(installedBob(), ["status", "--json", "--runtime-dir", runtimeDir]);
+                    return result.status === 0
+                        ? (JSON.parse(result.stdout) as { phase: string }).phase
+                        : "not answering";
+                },
+                (phase) => phase === "ready",
+            );
+        });
+
+        test("the installed bob reports the release's version and the README's pi version in bob status", async () => {
+            const status = await statusOf(runtimeDir);
+            assert.equal(status.versions.intern, FIRST_VERSION);
+            assert.equal(status.versions.pi, readmePiVersion());
+        });
     });
 });
 
@@ -157,50 +203,6 @@ async function statusOf(runtimeDir: string): Promise<{ phase: string; versions: 
     assert.equal(result.status, 0, outputOf(result));
     return JSON.parse(result.stdout);
 }
-
-describe("bob serve with no Node on the PATH", () => {
-    const runtimeDir = join(root, "runtime");
-    let server: FakeModelServer;
-    let daemon: { stop: () => Promise<void> };
-
-    before(async () => {
-        await cleanUpInstall([root]);
-        const installed = await runInstallScript("base", ["--version", FIRST_VERSION]);
-        assert.equal(installed.status, 0, outputOf(installed));
-        server = await startFakeModelServer(defaultScript);
-        await writePiAgentDir(piAgentDir, server.baseUrl);
-        daemon = await startDaemon(runtimeDir);
-    });
-
-    after(async () => {
-        await daemon?.stop();
-        await server?.close();
-        await cleanUpInstall([root]);
-    });
-
-    test("the runner's PATH finds no node", async () => {
-        const result = await runAs("sh", ["-c", "command -v node"]);
-        assert.equal(result.stdout.trim(), "");
-        assert.notEqual(result.status, 0);
-    });
-
-    test("the daemon reaches ready", async () => {
-        await waitUntil(
-            "the daemon answering ready",
-            async () => {
-                const result = await runAs(installedBob(), ["status", "--json", "--runtime-dir", runtimeDir]);
-                return result.status === 0 ? (JSON.parse(result.stdout) as { phase: string }).phase : "not answering";
-            },
-            (phase) => phase === "ready",
-        );
-    });
-
-    test("bob status reports the release's version and the README's pi version", async () => {
-        const status = await statusOf(runtimeDir);
-        assert.equal(status.versions.intern, FIRST_VERSION);
-        assert.equal(status.versions.pi, readmePiVersion());
-    });
-});
 
 describe("an install script refused", () => {
     beforeEach(async () => {
@@ -270,6 +272,8 @@ describe("an install script refused", () => {
     describe("when the download is cut halfway", () => {
         let cutServer: Server;
         let baseUrl: string;
+        let bundleBytesServed = 0;
+        let connectionsCut = 0;
 
         before(async () => {
             const bundle = readFileSync(join(locationDir("base"), `v${FIRST_VERSION}`, bundleName(FIRST_VERSION)));
@@ -279,7 +283,12 @@ describe("an install script refused", () => {
                     return;
                 }
                 response.writeHead(200, { "content-length": bundle.length });
-                response.write(bundle.subarray(0, Math.floor(bundle.length / 2)), () => request.socket.destroy());
+                const half = bundle.subarray(0, Math.floor(bundle.length / 2));
+                response.write(half, () => {
+                    bundleBytesServed += half.length;
+                    connectionsCut += 1;
+                    request.socket.destroy();
+                });
             });
             await new Promise<void>((resolve) => cutServer.listen(0, "127.0.0.1", resolve));
             const address = cutServer.address();
@@ -298,6 +307,8 @@ describe("an install script refused", () => {
             });
             assert.equal(result.status, REFUSED, outputOf(result));
             assert.match(result.stderr, /download of .* failed/);
+            assert.equal(connectionsCut, 1, "the server must have cut the bundle's connection once");
+            assert.ok(bundleBytesServed > 0, "the server must have sent part of the bundle before the cut");
             assertNothingInstalled();
         });
     });
