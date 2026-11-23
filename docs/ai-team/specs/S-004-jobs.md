@@ -1096,15 +1096,19 @@ is not a job conversation (S-001 REQ-025).
 ### REQ-023 — A job whose lead waits for a model
 
 A job whose lead conversation is waiting for a model (S-001 REQ-027) SHALL be neither blocked nor failed for it, and
-no action SHALL be taken for want of a model (product owner, 2026-11-24, CR-002). Its status shows only what its
-actions have done:
+no action SHALL be taken for want of a model (product owner, 2026-11-24, CR-002; the points below that the Planner
+derived were confirmed in CR-002's settled details of the same day). Its status shows only what its actions have
+done:
 
 - `jobs.create` creates the job as usual, whatever the job source, and SHALL NOT refuse or cancel it because its lead's
   seat has no model (S-001 REQ-012). The job stays To do, because start is written only when the lead's first run takes
   a worker thread (REQ-005).
 - A job that was already In progress stays In progress while its lead waits.
-- Input waiting for a model counts as input queued for the reminder rule (REQ-008), so the rule neither reminds the
-  lead nor blocks the job while the input waits, at a turn's end or at startup.
+- Input waiting for a model counts as queued input wherever this spec reads queued input: in REQ-008's reminder rule,
+  at a turn's end and at startup, so the rule neither reminds the lead nor blocks the job while the input waits, and in
+  its abort rule, where it is input queued; in REQ-018's rules 1, 3 and 4, where a first input waiting for a model
+  counts as received and waiting input as queued input; and in REQ-007's close, which drops it as it drops queued
+  input (S-001 REQ-026).
 - Once a model is available the lead runs, and the actions follow REQ-005 to REQ-008 as for any job.
 
 #### AC-023.1 — A new job waits To do
@@ -1114,20 +1118,22 @@ actions have done:
   `jobs.history.list`
 - **Then:** the job is `C-n` and To do with no Blocked reason and no resolution, its history holds no action, and its
   lead conversation holds the first input and the no-model notice; once the isolated pi agent folder names the fake
-  model as the default, without a restart, the job goes In progress and its lead runs on the first input
+  model as the default, within 30 seconds of the change and without a restart, the job goes In progress and its lead
+  runs on the first input
 
 **Verification:** test — a service test on the fake model, changing the isolated pi agent folder while the daemon
 runs.
 
 #### AC-023.2 — No reminder while input waits
 
-- **Given:** an In progress job with a definition of done, led by `bob` with no configured model, whose lead holds a
-  team member's input waiting for a model because the isolated pi agent folder names no default model
+- **Given:** an isolated pi agent folder that names no default model, and an In progress job with a definition of
+  done whose lead, seated with a role whose configured model resolves, a team member reseats with a team role that has
+  no configured model; the team member then submits input to the lead, which waits for a model
 - **When:** the daemon is stopped and started again with the folder unchanged
 - **Then:** at startup the reminder rule sends no reminder and blocks nothing; the job stays In progress, its history
   gains no entry, and the input still waits
 
-**Verification:** test — a service test on the fake model, restarting the daemon with a changed pi agent folder.
+**Verification:** test — a service test on the fake model, restarting the daemon with the pi agent folder unchanged.
 
 ## Quality Requirements
 
@@ -1343,3 +1349,4 @@ None.
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.17 confirmed: the export copies the database only, leaving out the internal folder and [skills] | none |
 | 2026-11-18 | v0.18. Email (S-009). Interfaces, the job fields Contract: new `requestMark` and `email` (the account, sender, subject, saved message and attachments, and job thread), returned by `jobs.get`; the history entry Contract gains `mail` entries (`received`, `sent`, `held_back`, `may_not_have_gone_out`, `not_sent` for "result reply not sent: no mail text") and their authors. Job operations: `jobs.list` gains `mailAccount`, `jobs.complete` an optional `mailText`. Job tools: new mark request, offered to the lead of a job that came by email whatever its role's tool set; block job gains `mailText`, required whenever the question will be mailed; complete job gains `mailText`, required for a job with the request mark; none of them in the front desk. REQ-003: the email origin names the account. REQ-011: `mail` history entries. REQ-013: mark request and the mail text refusals, new AC-013.3 and AC-013.4. REQ-014: the email details and the mail account filter. REQ-016: the export stays one file and carries the saved mail; mail accounts, notice settings and the secrets store stay out. REQ-017: import restores the saved mail. REQ-018: owed mail recorded with the block or complete and sent after a restart if sending never began, never sent twice, and the intake record. Definitions (History, new Request mark and Mail text), Users, Exclusions and Assumptions follow. No identifier changed or retired. Revised 2026-11-19 on the same branch: "mail secrets store" becomes "secrets store" (product owner decision). Revised 2026-11-19 on the same branch: the history kinds add `refused` and `account_removed`, and REQ-011 lists them (S-009 v0.3). | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18. | S-009's tasks |
 | 2026-11-24 | v0.19. Work without a model (CR-002). New REQ-023 with AC-023.1 and AC-023.2: a job whose lead waits for a model is neither blocked nor failed and gets no action for want of a model; `jobs.create` neither refuses nor cancels it, a new job stays To do until its lead's first run, an In progress job stays In progress, and input waiting for a model counts as input queued for the reminder rule, at a turn's end and at startup. Workflow, Success Criterion 8 and Implementation Order (phase 7) follow. No identifier changed or retired. | CR-002, approved by the product owner on 2026-11-24 ("a job whose conversation is idle for want of a model is neither blocked nor failed"). | CR-002's tasks |
+| 2026-11-24 | v0.19, same version, revised on the planning branch after the Architect's consistency review (corrections C2, C4, C5, C10) and CR-002's settled details of the same day. REQ-023: credits the settled details; input waiting for a model counts as queued input wherever this spec reads it (REQ-008's reminder and abort rules, REQ-018's rules 1, 3 and 4, where a waiting first input counts as received, and REQ-007's close). AC-023.1: the job goes In progress within 30 seconds of the change. AC-023.2: the lead reaches the no-model seat through a team member's reseat, and the daemon restarts with the folder unchanged. No identifier added or retired. | Architect's consistency review of 2026-11-24; product owner, CR-002 settled details, 2026-11-24. | CR-002's tasks |
