@@ -106,4 +106,25 @@ const rollback: CommandSpec = {
     },
 };
 
-export const INSTALL_COMMANDS: readonly CommandSpec[] = [install, remove, status, upgrade, rollback];
+const uninstall: CommandSpec = {
+    verb: "uninstall",
+    summary:
+        "Remove the service, the program and the link to it; the instance's data stays unless you choose to remove it.",
+    positionals: [],
+    options: {
+        yes: { type: "boolean", description: "Don't ask whether to keep the data; keep it unless --remove-data." },
+        "remove-data": { type: "boolean", description: "Remove the instance's directories without asking." },
+    },
+    isData: false,
+    callsService: false,
+    async run(input) {
+        const { runUninstall } = await import("../install/uninstall.ts");
+        return runUninstall({
+            context: await contextOf(input),
+            yes: input.options.yes === true,
+            removeData: input.options["remove-data"] === true,
+        });
+    },
+};
+
+export const INSTALL_COMMANDS: readonly CommandSpec[] = [install, remove, status, upgrade, rollback, uninstall];
