@@ -22,7 +22,9 @@ test("the user manager of tester answers systemctl --user", () => {
 });
 
 test("the commands' PATH finds no node", () => {
-    assert.equal(runInShell("command -v node").status, 1);
+    const result = runInShell("command -v node");
+    assert.equal(result.stdout, "");
+    assert.notEqual(result.status, 0);
 });
 
 test("tester has no sudo rights", () => {
