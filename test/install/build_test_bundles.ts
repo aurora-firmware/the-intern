@@ -41,13 +41,18 @@ export const VARIANTS: readonly Variant[] = [
         ],
     },
     {
-        // One schema version below the 0.1.0 database's, with the last migration dropped, so the two stay in step at
-        // module load and step 4 refuses the database as newer than this build supports.
+        // One schema version below the 0.1.0 database's, so step 4 refuses that database as newer than this build
+        // supports. The last two migrations are folded into one, not dropped: the two counts stay in step at module
+        // load, and a fresh database still carries the full 0.2.0 schema (S-010 AC-008.2 starts 0.2.0 on one).
         name: "older_job_schema",
         location: "older-job-schema",
         patches: [
             { file: JOB_STORE, find: SCHEMA_VERSION_LINE, replace: "export const JOB_SCHEMA_VERSION = 5;" },
-            { file: JOB_STORE, find: MIGRATIONS_END, replace: `].slice(0, -1);${MIGRATIONS_END.slice(2)}` },
+            {
+                file: JOB_STORE,
+                find: MIGRATIONS_END,
+                replace: `].flatMap((sql, i, list) => (i === list.length - 1 ? [] : i === list.length - 2 ? [sql + list[i + 1]] : [sql]));${MIGRATIONS_END.slice(2)}`,
+            },
         ],
     },
     {
