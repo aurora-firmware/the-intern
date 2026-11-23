@@ -119,7 +119,10 @@ export function renderPlist(record: ServiceRecord, layout: ProgramLayout, userNa
 
 const INSTALL_SCRIPT =
     '/usr/bin/install -m 0644 -o root -g wheel "$1" "$2" && launchctl bootstrap system "$2" || { rm -f "$2"; exit 1; }';
-const REPLACE_SCRIPT = `launchctl bootout system/${LABEL} 2>/dev/null; ${INSTALL_SCRIPT}`;
+const REPLACE_SCRIPT =
+    `/bin/cp -p "$2" "$2.prev" || exit 1; launchctl bootout system/${LABEL} 2>/dev/null; ` +
+    'if /usr/bin/install -m 0644 -o root -g wheel "$1" "$2" && launchctl bootstrap system "$2"; then ' +
+    'rm -f "$2.prev"; else /bin/mv -f "$2.prev" "$2"; launchctl bootstrap system "$2"; exit 1; fi';
 const REMOVE_SCRIPT = `launchctl bootout system/${LABEL}; rm -f "$2"`;
 
 function detail(result: CommandResult): string {
@@ -148,7 +151,7 @@ export function launchdService(
     const stopTimeoutMs = options.stopTimeoutMs ?? STOP_TIMEOUT_MS;
 
     /** One `sudo /bin/sh -c` call. `$1` is the source file, and `$2` the plist. */
-    async function sudoShell(script: string, source: string, step: string): Promise<void> {
+    async function sudoShell(script: string, source: string, step: string, outcome: string): Promise<void> {
         const terminal = isTerminal();
         const args = ["/bin/sh", "-c", script, "sh", source, plistPath];
         const result = await runner("sudo", terminal ? args : ["-n", ...args], {
@@ -156,8 +159,8 @@ export function launchdService(
         });
         if (result.code !== 0) {
             throw new ServiceRefusedError(
-                `admin rights were refused or ${step} failed (${detail(result)}): it needs them, so nothing was ` +
-                    "registered; run it from an account that may use sudo",
+                `admin rights were refused or ${step} failed (${detail(result)}): it needs them, so ${outcome}; ` +
+                    "run it from an account that may use sudo",
             );
         }
     }
@@ -194,6 +197,7 @@ export function launchdService(
                     existing === undefined ? INSTALL_SCRIPT : REPLACE_SCRIPT,
                     source,
                     "installing the plist",
+                    "nothing was registered",
                 );
             } catch (error) {
                 if (createdLog) await rm(logPath, { force: true });
@@ -204,7 +208,7 @@ export function launchdService(
         },
 
         async remove() {
-            await sudoShell(REMOVE_SCRIPT, "", "removing the plist");
+            await sudoShell(REMOVE_SCRIPT, "", "removing the plist", "the service is still registered");
         },
 
         async stop(record) {

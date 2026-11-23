@@ -237,7 +237,7 @@ describe("register", () => {
         await writePlist(plistPath, USER);
         await manager.register(record, NO_IO);
         assert.equal(fake.sudoCalls().length, 1);
-        assert.match(fake.sudoCalls()[0]?.args[3] ?? "", /^launchctl bootout system\/.*; \/usr\/bin\/install/);
+        assert.match(fake.sudoCalls()[0]?.args[3] ?? "", /launchctl bootout system\/.*; if \/usr\/bin\/install/);
     });
 });
 
