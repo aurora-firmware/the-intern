@@ -7,8 +7,9 @@ import { type RunningDaemon, runDaemon } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { type StartupReport, writeStartupReport } from "../../src/daemon/startup_report.ts";
 import { runningVersions } from "../../src/host/versions.ts";
+import { READY_WAIT_MS, readRunningVersion, waitForReady } from "../../src/install/ready_wait.ts";
 import type { ServiceRecord } from "../../src/install/service_manager.ts";
-import { readRunningVersion, READY_WAIT_MS, waitForReady } from "../../src/install/ready_wait.ts";
+import { createLocalSocketComponent } from "../../src/listeners/local_socket.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { scaled } from "../support/time_scale.ts";
@@ -75,6 +76,7 @@ async function createWorld(): Promise<{ env: HermeticEnv; record: ServiceRecord;
                 env: env.env,
                 homeDir: env.root,
                 logger: createLogger({ verbose: false, stream: { write: () => true } }),
+                components: [createLocalSocketComponent()],
                 prepareModels: () => modelsFor(fake),
             });
             daemons.push(daemon);
