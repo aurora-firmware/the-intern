@@ -135,6 +135,20 @@ describe("the ready wait", () => {
         assert.equal(calls, answers.length);
     });
 
+    it("returns not ready at the timeout when a status call never answers", async () => {
+        const world = await createWorld();
+        await writeStartupReport(world.record.stateDir, FAILED_REPORT);
+        const startedAt = Date.now();
+
+        const result = await waitForReady(world.record, {
+            timeoutMs: SHORT_TIMEOUT_MS,
+            probe: () => new Promise(() => undefined),
+        });
+
+        assert.deepEqual(result, { ready: false, report: FAILED_REPORT });
+        assert.ok(Date.now() - startedAt < SHORT_TIMEOUT_MS * 4, "the wait ended near its timeout");
+    });
+
     it("returns not ready with the startup report the state directory holds when no daemon answers in time", async () => {
         const world = await createWorld();
         await writeStartupReport(world.record.stateDir, FAILED_REPORT);
