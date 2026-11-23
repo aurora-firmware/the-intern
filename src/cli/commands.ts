@@ -6,6 +6,7 @@ import { chatCommand } from "./chat_command.ts";
 import type { CommandInput, CommandSpec } from "./command_line.ts";
 import { CONVERSATIONS_COMMANDS } from "./conversations_commands.ts";
 import { followCommand, jobsFollowCommand } from "./follow_commands.ts";
+import { INSTALL_COMMANDS } from "./install_commands.ts";
 import { exportCommand, importCommand, statusCommand, usageCommand } from "./instance_commands.ts";
 import { INSTRUCTIONS_COMMANDS } from "./instructions_commands.ts";
 import { JOBS_COMMANDS } from "./jobs_commands.ts";
@@ -65,4 +66,5 @@ export const COMMANDS: readonly CommandSpec[] = [
     ...SKILLS_COMMANDS,
     ...INSTRUCTIONS_COMMANDS,
     ...MAIL_COMMANDS,
+    ...INSTALL_COMMANDS,
 ];
