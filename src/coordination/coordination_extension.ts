@@ -23,6 +23,7 @@ import { HostNotFoundError } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { createInvokedConversations, InvocationDepthError, type InvocationRequest } from "../host/invocation.ts";
 import { ConversationClosedError, inOpenConversation, isConversationClosed } from "../host/job_section.ts";
+import { waitWithCompaction } from "../host/model_wait.ts";
 import {
     type ContextMode,
     type ParkedState,
@@ -135,9 +136,10 @@ async function compactWithNote(
     context: never,
 ): Promise<string | undefined> {
     const conversationId = String(api.conversationId);
-    const taskId = await inOpenConversation(host, conversationId, () =>
-        api.commit(async (tx) => {
+    const taskId = await inOpenConversation(host, conversationId, async () => {
+        const created = await api.commit(async (tx) => {
             await seatWrites(tx, conversationId, change);
+            if (change.seat.model === null) return undefined;
             const input: CompactionInput = {
                 reason: "manual",
                 ...(change.note !== undefined && { instructions: change.note }),
@@ -146,8 +148,12 @@ async function compactWithNote(
                 ownership: { kind: "task", taskId: api.taskId },
                 abandonOnRestart: true,
             });
-        }, context),
-    );
+        }, context);
+        // With no model there is no compaction task: the release runs it, and the run ends `no_model` (ADR-014).
+        if (created === undefined) await waitWithCompaction(host, conversationId, change.note);
+        return created;
+    });
+    if (taskId === undefined) return undefined;
     const settled = await api.waitForTask(taskId, context);
     const { outcome } = settled.state;
     return outcome.status === "completed" ? undefined : `the compaction did not finish (${outcome.status})`;

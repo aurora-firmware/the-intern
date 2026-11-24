@@ -172,33 +172,46 @@ async function start(options: { leadCall?: { name: string; args: JsonObject }; w
 const waitingOf = async (rig: Rig, conversationId: string) =>
     (await readConversationMeta(rig.ctx.host, conversationId))?.waitingForModel;
 
+// A lead that answered its first input and then lost its model: its context holds an answered exchange, so a
+// compaction has something to summarize, and a second input waits.
+async function startWaitingLead(rig: Rig): Promise<string> {
+    const lead = await rig.createLead("worker");
+    await rig.waitFor(async () => (await rig.kinds(lead)).includes("pi.assistant"), "the lead's first answer");
+    await rig.invoke("conversations.seat", { conversationId: lead, role: "idle" });
+    await rig.invoke("conversations.submit", { conversationId: lead, content: "more work", requestId: "more-work" });
+    await rig.waitFor(async () => (await waitingOf(rig, lead)) !== undefined, "the lead to wait for a model");
+    return lead;
+}
+
 describe("a compaction with no model", () => {
     it("is accepted, creates no compaction task and runs before the conversation's next run once a model appears", async () => {
         const rig = await start({});
-        const lead = await rig.createLead("idle");
-        await rig.waitFor(async () => (await waitingOf(rig, lead)) !== undefined, "the lead to wait for a model");
+        const lead = await startWaitingLead(rig);
+        const requestsBefore = rig.requests.length;
 
         await rig.invoke("conversations.compact", { conversationId: lead, instructions: NOTE });
 
         assert.deepEqual((await waitingOf(rig, lead))?.compaction, { instructions: NOTE });
-        assert.equal(rig.requests.length, 0);
+        assert.equal(rig.requests.length, requestsBefore);
         assert.equal((await rig.kinds(lead)).includes("pi.compaction"), false);
         assert.equal((await rig.kinds(lead)).filter((kind) => kind === NOTICE_KIND).length, 1);
 
         await rig.setDefaultModel();
-        await rig.waitFor(async () => (await rig.kinds(lead)).includes("pi.assistant"), "the lead's answer");
+        await rig.waitFor(
+            async () => (await rig.kinds(lead)).filter((kind) => kind === "pi.assistant").length >= 2,
+            "the lead's second answer",
+        );
 
         const summaryIndex = rig.requests.findIndex(isSummarization);
-        assert.ok(summaryIndex >= 0, "the compaction ran");
-        assert.equal(summaryIndex, 0);
+        assert.ok(summaryIndex >= requestsBefore, "the compaction ran after the model appeared");
         assert.match(userTexts(rig.requests[summaryIndex] as Request).join("\n"), new RegExp(NOTE));
+        assert.ok(summaryIndex < rig.requests.length - 1, "the lead's request came after the compaction");
         assert.equal(await waitingOf(rig, lead), undefined);
     });
 
     it("adds its instructions to a fact that is already set", async () => {
         const rig = await start({});
-        const lead = await rig.createLead("idle");
-        await rig.waitFor(async () => (await waitingOf(rig, lead)) !== undefined, "the lead to wait for a model");
+        const lead = await startWaitingLead(rig);
         const before = await waitingOf(rig, lead);
 
         await rig.invoke("conversations.compact", { conversationId: lead, instructions: NOTE });
@@ -231,7 +244,7 @@ describe("a handoff to a role with no model", () => {
         );
 
         const summaryIndex = rig.requests.findIndex(isSummarization);
-        const newAgentIndex = rig.requests.findIndex((request) => systemText(request).includes("`idle`"));
+        const newAgentIndex = rig.requests.findIndex((request) => systemText(request).includes("idle"));
         assert.ok(summaryIndex >= 0 && summaryIndex < newAgentIndex, "the compaction came first");
         assert.match(userTexts(rig.requests[summaryIndex] as Request).join("\n"), new RegExp(NOTE));
     });
