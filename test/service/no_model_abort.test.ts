@@ -146,7 +146,7 @@ describe("a conversation waiting for a model that a team member aborts", () => {
             state: "unanswered",
             reason: "no_model",
         });
-        assert.ok((await kindsOf(daemon, desk)).includes("pi.user"), "the input stays in the transcript");
+        assert.ok((await kindsOf(daemon, desk)).includes("intern.steer"), "the input stays in the transcript");
     });
 });
 
