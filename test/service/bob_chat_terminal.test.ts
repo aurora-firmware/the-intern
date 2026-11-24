@@ -481,8 +481,7 @@ describe("bob chat on a terminal when the front desk has no model", { skip }, ()
         });
         await writeFile(join(fixture.env.piAgentDir, "settings.json"), LOOPBACK_DEFAULT);
         await until(
-            async () =>
-                ((await fixture.daemon.invoke("daemon.status", {})) as DaemonStatus).noDefaultModel === null,
+            async () => ((await fixture.daemon.invoke("daemon.status", {})) as DaemonStatus).noDefaultModel === null,
             "the daemon to see the default model",
         );
         await session.waitFor("output", `echo: ${FIRST}`);
