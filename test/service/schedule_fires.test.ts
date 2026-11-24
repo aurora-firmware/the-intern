@@ -10,6 +10,7 @@ import { createProvider } from "@earendil-works/pi-ai/models";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
+import { NOTICE_KIND } from "../../src/host/model_wait.ts";
 import { blockJob } from "../../src/jobs/job_actions.ts";
 import type { NewJob } from "../../src/jobs/job_store.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
@@ -327,7 +328,7 @@ type JobSummary = {
 type Listing = {
     id: string;
     isLead: boolean;
-    seat: { role: string; model: string; thinkingLevel?: string; workspace: string };
+    seat: { role: string; model: string | null; thinkingLevel?: string; workspace: string };
 };
 
 const entryToml = (name: string, cron: string, extra = ""): string =>
@@ -835,5 +836,131 @@ describe("what a scheduled run's lead is told", { timeout: TEST_TIMEOUT_MS }, ()
 
         assert.equal(once.firstInput, again.firstInput);
         assert.match(once.firstInput, /read_schedule_runs/);
+    });
+});
+
+const NO_MODEL_TIMEOUT_MS = scaled(30_000);
+const nextDay = (time: Date): Date =>
+    new Date(time.getFullYear(), time.getMonth(), time.getDate() + 1, time.getHours());
+
+const untilState = async (check: () => Promise<boolean>, description: string): Promise<void> => {
+    const deadline = Date.now() + NO_MODEL_TIMEOUT_MS;
+    while (!(await check())) {
+        if (Date.now() > deadline) throw new Error(`timed out waiting for ${description}`);
+        await sleep(POLL_INTERVAL_MS);
+    }
+};
+
+const reportsNoDefault = async (rig: ScheduleRig): Promise<boolean> =>
+    ((await rig.invoke("daemon.status")) as { noDefaultModel: unknown }).noDefaultModel !== null;
+
+// The fake model is registered in the daemon's first model runtime only, and a changed pi agent folder opens a new
+// one, so a model that must resolve after the change comes from the folder's own `models.json`.
+const LOCAL_MODEL = "local/local-1";
+const MODELS_JSON = {
+    providers: {
+        local: {
+            baseUrl: "http://127.0.0.1:9/v1",
+            api: "openai-completions",
+            apiKey: "x",
+            models: [{ id: "local-1" }],
+        },
+    },
+};
+
+/** A rig whose pi agent folder names no default model but defines `LOCAL_MODEL`, once the daemon has noticed. */
+async function noDefaultRig(configToml: string): Promise<ScheduleRig> {
+    const rig = await rigWith(configToml);
+    await writeFile(join(rig.env.piAgentDir, "models.json"), JSON.stringify(MODELS_JSON));
+    await writeFile(join(rig.env.piAgentDir, "settings.json"), "{}");
+    await rig.restart();
+    await untilState(() => reportsNoDefault(rig), "the daemon to see no default model");
+    return rig;
+}
+
+async function nameDefaultModel(rig: ScheduleRig): Promise<void> {
+    await writeFile(
+        join(rig.env.piAgentDir, "settings.json"),
+        JSON.stringify({ defaultProvider: "local", defaultModel: "local-1" }),
+    );
+    await untilState(async () => !(await reportsNoDefault(rig)), "the daemon to see the default model");
+}
+
+type RunItem = { kind: string; skip?: { reason: string; openRun: string | null } };
+const historyOfEntry = async (rig: ScheduleRig, name: string): Promise<RunItem[]> =>
+    ((await rig.invoke("schedules.runs", { name })) as { items: RunItem[] }).items;
+const jobsOfEntry = async (rig: ScheduleRig, name: string): Promise<JobSummary[]> =>
+    (await jobsOf(rig)).filter((job) => job.request.origin.entry === name);
+
+describe("a schedule fire with no model", { timeout: TEST_TIMEOUT_MS }, () => {
+    const twoEntries = `${entryToml("nomodel", "0 2 * * *")}\n${entryToml("named", "0 2 * * *", `model = "${LOCAL_MODEL}"\n`)}`;
+
+    it("skips the entry with no model, creates the other's job, and makes nothing up later (AC-006.6, AC-013.2)", async () => {
+        const rig = await noDefaultRig(twoEntries);
+        rig.clock.set(at(2));
+        const [named] = await waitForJobs(rig, 1);
+        assert.ok(named);
+        await untilState(async () => (await historyOfEntry(rig, "nomodel")).length === 1, "the skipped fire");
+        const [item] = await historyOfEntry(rig, "nomodel");
+        assert.equal(item?.kind, "skip");
+        assert.equal(item?.skip?.reason, "no model");
+        assert.equal(item?.skip?.openRun, null);
+        assert.equal(named.request.origin.entry, "named");
+        assert.equal(named.number, "S-1");
+        assert.equal((await leadSeatOf(rig, named)).model, LOCAL_MODEL);
+        assert.deepEqual(await jobsOfEntry(rig, "nomodel"), []);
+
+        await nameDefaultModel(rig);
+        assert.deepEqual(await jobsOfEntry(rig, "nomodel"), []);
+        rig.clock.set(nextDay(at(2)));
+        await untilState(async () => (await jobsOfEntry(rig, "nomodel")).length === 1, "the next fire");
+        const created = await jobsOfEntry(rig, "nomodel");
+        assert.equal(created[0]?.request.origin.fireTime, localTimeText(nextDay(at(2))));
+        // The named entry's first job is still open, so its next fire is skipped and takes no number.
+        assert.equal(created[0]?.number, "S-2");
+        assert.equal((await historyOfEntry(rig, "nomodel")).filter((run) => run.kind === "skip").length, 1);
+    });
+
+    it("publishes the skipped fire delta with the reason (AC-006.6)", async () => {
+        const rig = await noDefaultRig(entryToml("nomodel", "0 2 * * *"));
+        const sub = (await rig.invoke("feed.subscribe", { scope: "instance" })) as {
+            next(): Promise<{ delta?: { type: string; entry?: string; reason?: string; openRun?: string | null } }>;
+        };
+        rig.clock.set(at(2));
+        const { delta } = await sub.next();
+        assert.equal(delta?.type, "schedule_fire_skipped");
+        assert.equal(delta?.entry, "nomodel");
+        assert.equal(delta?.reason, "no model");
+        assert.equal(delta?.openRun ?? null, null);
+    });
+});
+
+describe("a schedule run on demand with no model", { timeout: TEST_TIMEOUT_MS }, () => {
+    it("creates a To do job whose lead waits, records no skipped fire, and refuses a second run (AC-008.5)", async () => {
+        const rig = await noDefaultRig(entryToml("nomodel", "0 2 * * *"));
+        const job = (await rig.invoke("schedules.run", { name: "nomodel" })) as JobSummary & {
+            status: string;
+            leadConversation: string;
+        };
+        assert.equal(job.number, "S-1");
+        assert.equal(job.status, "to_do");
+        assert.deepEqual(job.request.origin, {
+            kind: "schedule",
+            entry: "nomodel",
+            fireTime: localTimeText(rig.clock.now()),
+            onDemand: { wayIn: "command line" },
+        });
+        await untilState(
+            async () => (await entriesOf(rig, job.leadConversation)).some((entry) => entry.kind === NOTICE_KIND),
+            "the lead's notice",
+        );
+        const kinds = (await entriesOf(rig, job.leadConversation)).map((entry) => entry.kind);
+        assert.deepEqual(
+            kinds.filter((kind) => kind === "pi.user" || kind === NOTICE_KIND),
+            ["pi.user", NOTICE_KIND],
+        );
+        assert.equal((await leadSeatOf(rig, job)).model, null);
+        assert.deepEqual(await historyOfEntry(rig, "nomodel").then((items) => items.map((item) => item.kind)), ["run"]);
+        await assert.rejects(rig.invoke("schedules.run", { name: "nomodel" }), { code: "busy", message: /S-1/ });
     });
 });

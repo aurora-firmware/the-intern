@@ -76,7 +76,15 @@ async function mappingRefusals<T>(action: () => Promise<T>): Promise<T> {
     }
 }
 
-export type ScheduledRunOptions = { fireTime: string; onDemand?: JobOriginOnDemand; idempotencyKey?: string };
+export type ScheduledRunOptions = {
+    fireTime: string;
+    onDemand?: JobOriginOnDemand;
+    idempotencyKey?: string;
+    /** A fire creates no job for a seat with no model; a run now does, and its lead waits for a model (S-007 REQ-006, REQ-008). */
+    refuseNoModel?: boolean;
+};
+
+export const NO_MODEL_REASON = "no model";
 
 const SCHEDULE_SOURCE = { kind: "job_source", source: "schedule" } as const;
 
@@ -114,6 +122,7 @@ export async function startScheduledRun(
         if (error instanceof RoleRefusedError) throw new ServiceError("invalid_input", error.message);
         throw error;
     }
+    if (options.refuseNoModel === true && seat.model === null) throw new ServiceError("invalid_input", NO_MODEL_REASON);
     await requireFolder(seat.workspace);
     const origin = {
         kind: "schedule",
