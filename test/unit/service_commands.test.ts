@@ -461,6 +461,39 @@ describe("bob service install", () => {
         assert.equal(io.out(), "");
     });
 
+    it("exits 0 and prints the no-default-model notice on standard error when the ready report has noDefaultModel true", async () => {
+        const { context, io } = setup({
+            waitForReady: async () => ({ ready: true, version: "1.2.0", noDefaultModel: true }),
+        });
+
+        const status = await runServiceInstall(context);
+
+        assert.equal(status, 0);
+        assert.match(io.err(), /no default model/i);
+        assert.match(io.err(), /pi/);
+        assert.match(io.err(), /sign in|\/login/i);
+        assert.equal(io.out(), "");
+    });
+
+    it("prints no no-default-model notice when the ready report has noDefaultModel false", async () => {
+        const { context, io } = setup({
+            waitForReady: async () => ({ ready: true, version: "1.2.0", noDefaultModel: false }),
+        });
+
+        const status = await runServiceInstall(context);
+
+        assert.equal(status, 0);
+        assert.doesNotMatch(io.err(), /no default model/i);
+    });
+
+    it("prints no no-default-model notice when the ready result carries no noDefaultModel", async () => {
+        const { context, io } = setup();
+
+        await runServiceInstall(context);
+
+        assert.doesNotMatch(io.err(), /no default model/i);
+    });
+
     it("exits 1 naming the startup report's reason and the log command when the daemon isn't ready", async () => {
         const report = {
             format: 1 as const,
