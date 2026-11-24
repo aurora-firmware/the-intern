@@ -35,6 +35,15 @@ const defaultConfigDir = join(homedir(), ".config", "the-intern");
 
 const outputOf = (result: RunResult): string => `${result.stdout}${result.stderr}`;
 
+async function freePort(): Promise<number> {
+    const probe = createServer();
+    await new Promise<void>((resolve) => probe.listen(0, LOOPBACK, resolve));
+    const address = probe.address();
+    assert.ok(address !== null && typeof address === "object");
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    return address.port;
+}
+
 async function installRelease(): Promise<void> {
     const installed = await runInstallScript("base", ["--version", VERSION]);
     assert.equal(installed.status, 0, outputOf(installed));
@@ -115,6 +124,53 @@ describe("bob service install with a pi login on the fake model", () => {
     });
 });
 
+describe("bob service install with no pi login", () => {
+    let installed: RunResult;
+    let webPort: number;
+
+    before(async () => {
+        await cleanUpInstall([root]);
+        await installRelease();
+        webPort = await freePort();
+        await mkdir(defaultConfigDir, { recursive: true, mode: OWNER_ONLY_DIR_MODE });
+        await writeFile(
+            join(defaultConfigDir, "config.toml"),
+            `[network]\naddress = "${LOOPBACK}"\nport = ${webPort}\n`,
+            { mode: OWNER_ONLY_FILE_MODE },
+        );
+        installed = await serviceInstall();
+    });
+
+    after(async () => {
+        await cleanUpInstall([root]);
+    });
+
+    test("it exits 0", () => {
+        assert.equal(installed.status, 0, outputOf(installed));
+    });
+
+    test("it prints a notice that there is no default model, pointing at signing in to pi", () => {
+        assert.match(installed.stderr, /no default model/i);
+        assert.match(installed.stderr, /sign in/i);
+    });
+
+    test("bob service status shows registered and running", async () => {
+        const status = await statusJson();
+        assert.equal(status.registered, true);
+        assert.equal(status.running, true);
+    });
+
+    test("bob status answers", async () => {
+        const result = await runAs(installedBob(), ["status", "--json"]);
+        assert.equal(result.status, 0, outputOf(result));
+    });
+
+    test("the web interface's /ui/ answers", async () => {
+        const response = await fetch(`http://${LOOPBACK}:${webPort}/ui/`);
+        assert.equal(response.status, 200);
+    });
+});
+
 describe("bob service install that can't get the daemon ready", () => {
     let server: FakeModelServer;
 
@@ -124,33 +180,6 @@ describe("bob service install that can't get the daemon ready", () => {
 
     after(async () => {
         await server?.close();
-    });
-
-    describe("with no pi login", () => {
-        let installed: RunResult;
-
-        before(async () => {
-            await cleanUpInstall([root]);
-            await installRelease();
-            await mkdir(piAgentDir, { recursive: true, mode: OWNER_ONLY_DIR_MODE });
-            installed = await serviceInstall();
-        });
-
-        after(async () => {
-            await cleanUpInstall([root]);
-        });
-
-        test("it exits 1", () => {
-            assert.equal(installed.status, REFUSED, outputOf(installed));
-        });
-
-        test("it names the daemon's reason", () => {
-            assert.match(installed.stderr, /the daemon isn't ready: .*model/i);
-        });
-
-        test("it names the command that shows the service's log", () => {
-            assert.ok(installed.stderr.includes(LOG_COMMAND), installed.stderr);
-        });
     });
 
     describe("with the web port taken by another listener", () => {

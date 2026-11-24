@@ -19,7 +19,10 @@ export type DaemonAnswer = { phase: string; version: string };
 /** Asks the daemon of the record for its status once; null when it can't be reached or doesn't answer. */
 export type StatusProbe = (record: ServiceRecord) => Promise<DaemonAnswer | null>;
 
-export type ReadyWaitResult = { ready: true; version: string } | { ready: false; report: StartupReport | undefined };
+/** `noDefaultModel` is the ready startup report's field (ADR-013 decision 6); absent reads as false. */
+export type ReadyWaitResult =
+    | { ready: true; version: string; noDefaultModel?: boolean }
+    | { ready: false; report: StartupReport | undefined };
 
 type StatusAnswer = { phase: string; versions: { intern: string } };
 
@@ -64,7 +67,10 @@ export async function waitForReady(
     const deadline = Date.now() + timeoutMs;
     for (;;) {
         const answer = await probeWithin(probe, record, Math.max(deadline - Date.now(), 0));
-        if (answer?.phase === "ready") return { ready: true, version: answer.version };
+        if (answer?.phase === "ready") {
+            const report = await readStartupReport(record.stateDir).catch(() => undefined);
+            return { ready: true, version: answer.version, noDefaultModel: report?.noDefaultModel ?? false };
+        }
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;
         await pause(Math.min(POLL_INTERVAL_MS, remaining));
