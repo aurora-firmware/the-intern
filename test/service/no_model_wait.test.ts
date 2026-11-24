@@ -5,6 +5,7 @@
  * and the model's context.
  */
 import assert from "node:assert/strict";
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -12,6 +13,8 @@ import { fauxAssistantMessage, type Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
 import { AssistantEntry } from "@earendil-works/pi-durable";
+import { createClient } from "../../src/client/client.ts";
+import { nodeTransport } from "../../src/client/node_transport.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { requireConversation, submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
 import { toConversationId } from "../../src/host/conversation_id.ts";
@@ -20,7 +23,9 @@ import { createInvokedConversations } from "../../src/host/invocation.ts";
 import { handleNoModelEnd, NOTICE_KIND } from "../../src/host/model_wait.ts";
 import { REPORT_KIND, startReportDelivery } from "../../src/host/reports.ts";
 import { changeSeat, createSeatedConversation, readConversationMeta, type SeatActor } from "../../src/host/seating.ts";
+import { localSocketPath } from "../../src/listeners/socket_path.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
+import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { scaled } from "../support/time_scale.ts";
@@ -36,8 +41,13 @@ const envs: HermeticEnv[] = [];
 const hosts: HarnessHost[] = [];
 const fakes: FakeModel[] = [];
 const deliveries: { stop(): void }[] = [];
+const childDaemons: DaemonProcess[] = [];
 
 afterEach(async () => {
+    for (const child of childDaemons.splice(0)) {
+        child.signal("SIGTERM");
+        await child.exited;
+    }
     for (const delivery of deliveries.splice(0)) delivery.stop();
     for (const host of hosts.splice(0)) await host.close();
     for (const fake of fakes.splice(0)) fake.unregister();
@@ -193,6 +203,37 @@ describe("a run that ends with no_model", () => {
         assert.deepEqual((await readConversationMeta(host, id))?.waitingForModel, { order: firstInput?.id });
     });
 
+    it("takes the order from the first entry after the newest answer, not from an answered input", async () => {
+        const { host, seat, send, seatWith, modelName, drainRunEnds } = await fixture();
+        const id = await seat(modelName);
+        await send(id, "early");
+        await until(async () => (await kindsOf(host, id)).includes("pi.assistant"), "the answer");
+        await (await requireConversation(host, id)).waitForIdle(context);
+        await changeSeat(host, id, { seat: seatWith(null), actor });
+
+        await waitNoModel(host, await send(id, "late"));
+        await drainRunEnds();
+
+        const inputs = (await entriesOf(host, id)).filter((entry) => entry.kind === "pi.user");
+        assert.equal(inputs.length, 2);
+        assert.deepEqual((await readConversationMeta(host, id))?.waitingForModel, { order: inputs[1]?.id });
+    });
+
+    it("handles a normal run end that is handled late, after a no_model end, as one waiting period with one notice", async () => {
+        const { host, seat, send, seatWith, modelName } = await fixture({ isDelivering: false });
+        const id = await seat(modelName);
+        await send(id, "early");
+        await until(async () => (await kindsOf(host, id)).includes("pi.assistant"), "the answer");
+        await (await requireConversation(host, id)).waitForIdle(context);
+        await changeSeat(host, id, { seat: seatWith(null), actor });
+        await waitNoModel(host, await send(id, "late"));
+
+        const handled = [await handleNoModelEnd(host, id), await handleNoModelEnd(host, id)];
+
+        assert.deepEqual(handled, [true, true]);
+        assert.equal((await noticesOf(host, id)).length, 1);
+    });
+
     it("leaves the notice out of the model's context", async () => {
         const { host, seat, send, drainRunEnds } = await fixture();
         const id = await seat(null);
@@ -273,5 +314,73 @@ describe("a run that ends with no_model", () => {
 
         assert.deepEqual((await readConversationMeta(host, invokerId))?.awaiting, [invokedId]);
         assert.equal((await kindsOf(host, invokerId)).includes(REPORT_KIND), false);
+    });
+});
+
+type Client = ReturnType<typeof createClient>;
+type WireEntry = { kind: string };
+
+// A daemon whose pi agent folder is missing, so no default model exists and the front desk and every lead have none.
+async function startDaemonWithNoModel() {
+    const env = await createHermeticEnv();
+    envs.push(env);
+    await rm(env.piAgentDir, { recursive: true });
+    const child = startDaemon({ hermetic: env, realModels: true, networkListener: true });
+    childDaemons.push(child);
+    await child.ready;
+    return {
+        commandLine: createClient(nodeTransport({ socketPath: localSocketPath(env.runtimeDir) })),
+        webInterface: createClient(nodeTransport({ baseUrl: `http://127.0.0.1:${await child.networkPort()}` })),
+    };
+}
+
+// The entries a team member reads, without the seat record that every conversation starts with.
+async function kindsAt(client: Client, conversationId: string): Promise<string[]> {
+    const { entries } = (await client.invoke("conversations.entries", { conversationId, limit: 100 })) as {
+        entries: WireEntry[];
+    };
+    return entries.map((entry) => entry.kind).filter((kind) => kind !== "intern.seat");
+}
+
+async function submitAt(client: Client, conversationId: string, content: string): Promise<string> {
+    const { submissionId } = (await client.invoke("conversations.submit", {
+        conversationId,
+        content,
+        requestId: content,
+    })) as { submissionId: string };
+    const settled = await client.invoke("submissions.wait", { submissionId, timeoutMs: WAIT_MS });
+    assert.deepEqual(settled, { state: "unanswered", reason: "no_model" });
+    return submissionId;
+}
+
+describe("a daemon with no default model", () => {
+    it("takes a front-desk message from the command line and one from the web interface with one notice between", async () => {
+        const { commandLine, webInterface } = await startDaemonWithNoModel();
+        const { conversationId } = (await commandLine.invoke("desk.get", {})) as { conversationId: string };
+
+        await submitAt(commandLine, conversationId, "from the command line");
+        await until(
+            async () => (await kindsAt(commandLine, conversationId)).includes(NOTICE_KIND),
+            "the desk's notice",
+        );
+        await submitAt(webInterface, conversationId, "from the web interface");
+        // The run ends are handled in order, so the lead's notice comes after any second notice of the desk.
+        const job = (await commandLine.invoke("jobs.create", { text: "drain" })) as { leadConversation: string };
+        await until(async () => (await kindsAt(commandLine, job.leadConversation)).includes(NOTICE_KIND), "the drain");
+
+        assert.deepEqual(await kindsAt(commandLine, conversationId), ["intern.steer", NOTICE_KIND, "intern.steer"]);
+    });
+
+    it("creates a job's lead with its first input followed by one notice, idle", async () => {
+        const { commandLine } = await startDaemonWithNoModel();
+
+        const job = (await commandLine.invoke("jobs.create", { text: "do it" })) as { leadConversation: string };
+        await until(async () => (await kindsAt(commandLine, job.leadConversation)).includes(NOTICE_KIND), "the notice");
+
+        assert.deepEqual(await kindsAt(commandLine, job.leadConversation), ["pi.user", NOTICE_KIND]);
+        const lead = (await commandLine.invoke("conversations.get", { conversationId: job.leadConversation })) as {
+            status: string;
+        };
+        assert.equal(lead.status, "idle");
     });
 });
