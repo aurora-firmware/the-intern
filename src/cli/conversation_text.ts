@@ -11,9 +11,14 @@ type TranscriptEntry = { id: string; kind: string; data: unknown; seat?: SeatSum
 
 const MAX_TEXT_LENGTH = 200;
 const NO_VALUE = "-";
+const NO_MODEL = "no model";
+
+function modelText(model: string | null): string {
+    return model === null ? NO_MODEL : flat(model);
+}
 
 function seatText(seat: SeatSummary | null): string {
-    return seat === null ? NO_VALUE : `${flat(seat.role)} (${flat(seat.model)})`;
+    return seat === null ? NO_VALUE : `${flat(seat.role)} (${modelText(seat.model)})`;
 }
 
 function placeText(listing: ConversationListing): string {
@@ -58,7 +63,7 @@ function seatRecordText(record: SeatRecord): string {
     const previous = record.previous === null ? NO_VALUE : flat(record.previous.role);
     const mode = record.contextMode === undefined ? "" : `, ${flat(record.contextMode)} context`;
     const note = record.note === undefined ? "" : `, note: ${oneLine(record.note)}`;
-    return `seat: ${previous} -> ${flat(record.next.role)} (${flat(record.next.model)}) by ${actorText(record.actor)}${mode}${note}`;
+    return `seat: ${previous} -> ${flat(record.next.role)} (${modelText(record.next.model)}) by ${actorText(record.actor)}${mode}${note}`;
 }
 
 function formatEntry(entry: TranscriptEntry): string {
@@ -91,7 +96,12 @@ export function formatInvocations(tree: InvocationTree, depth = 0): string[] {
     return [line, ...tree.invoked.flatMap((child) => formatInvocations(child, depth + 1))];
 }
 
-export function formatSeat(seat: { role: string; model: string; thinkingLevel?: string; workspace: string }): string {
+export function formatSeat(seat: {
+    role: string;
+    model: string | null;
+    thinkingLevel?: string;
+    workspace: string;
+}): string {
     const thinking = seat.thinkingLevel === undefined ? "" : `, thinking ${flat(seat.thinkingLevel)}`;
-    return `${flat(seat.role)} (${flat(seat.model)}${thinking}, workspace ${flat(seat.workspace)})`;
+    return `${flat(seat.role)} (${modelText(seat.model)}${thinking}, workspace ${flat(seat.workspace)})`;
 }
