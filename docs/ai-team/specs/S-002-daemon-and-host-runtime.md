@@ -1,6 +1,6 @@
 ---
 title: Daemon and host runtime
-version: '0.18'
+version: '0.19'
 status: approved  # draft | review | approved | superseded
 created: '2026-10-16'
 author: planner
@@ -57,7 +57,9 @@ Journeys, in priority order:
 
 1. **The daemon starts and becomes ready.** The supervisor starts `bob serve`; it validates its configuration and
    directories, takes single ownership, opens the database, resumes work and reports ready, or exits non-zero naming the
-   failing step. Delivered by REQ-002, REQ-003, REQ-004, REQ-006, REQ-021, REQ-001.
+   failing step. A missing pi login doesn't stop it: it reaches ready, its listeners answer, and its status says that
+   there is no default model and how to sign in to pi. Delivered by REQ-002, REQ-003, REQ-004, REQ-006, REQ-021,
+   REQ-001.
 2. **Work survives every stop.** A shutdown, a storage failure or a kill at any point loses no committed work, and the
    next start resumes it. Delivered by REQ-005, REQ-007, REQ-008.
 3. **A caller drives work through the service layer.** Every capability is a named read or control operation with
@@ -124,9 +126,9 @@ failed (REQ-013). **Contract** (operation names and kinds):
 
 | Operation | Kind | Purpose |
 |---|---|---|
-| `daemon.status` | read | Phase, versions, start time, instance directories, worker threads in use and waiting, and each mail account's status (REQ-003, REQ-011, REQ-020; S-009 REQ-005) |
-| `conversations.list`, `conversations.get` | read | Conversations with seat, enabled set, origin, status, depth and invocation links; the list marks the front desk (REQ-012; S-001 REQ-016, REQ-021; S-008 REQ-006) |
-| `desk.get` | read | The front desk's conversation id and seat (REQ-012; S-001 REQ-021) |
+| `daemon.status` | read | Phase, versions, start time, instance directories, worker threads in use and waiting, each mail account's status, and, while pi agent's settings name no default model, that fact and how to sign in to pi (REQ-003, REQ-011, REQ-020; S-009 REQ-005) |
+| `conversations.list`, `conversations.get` | read | Conversations with seat, enabled set, origin, status, depth and invocation links; the list marks the front desk; a seat with no model shows its model as `null` (REQ-012; S-001 REQ-016, REQ-021, REQ-027; S-008 REQ-006) |
+| `desk.get` | read | The front desk's conversation id and seat, whose model is `null` when the seat has no model (REQ-012; S-001 REQ-021, REQ-027) |
 | `conversations.invocations` | read | The conversations a conversation invoked, recursively (S-001 REQ-016) |
 | `conversations.entries` | read | Stored entries, paged, including entries from before resets and compactions |
 | `conversations.context` | read | The current context |
@@ -183,7 +185,9 @@ the same sequence (S-004 REQ-015). The conversation scope carries its live view 
 ### Consumed
 
 - The pi agent folder: login, `settings.json` and model registry, at pi agent's default location or
-  `PI_CODING_AGENT_DIR` (**Contract**: pi agent's variable name) (REQ-018, REQ-019).
+  `PI_CODING_AGENT_DIR` (**Contract**: pi agent's variable name) (REQ-018, REQ-019). A default model that appears in it
+  or disappears while the daemon runs is noticed within 30 seconds of the change, without a restart (REQ-003; S-001
+  REQ-027).
 - The XDG base directories `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME` and `XDG_RUNTIME_DIR` (REQ-006).
 - The configuration file `config.toml` in the config directory. Its keys are documented in the user manual
   (`docs/manual/running_the_intern.md`, `docs/manual/roles_and_agents.md`) (REQ-021).
@@ -211,13 +215,15 @@ Read job schema version → newer? exit non-zero, naming both versions          
   ↓
 Open database, create or migrate job store, ready the tools → check             REQ-002
   the models and thinking levels configured for roles → unresolvable? exit non-zero, naming
-  the role and value
+  the role and value (a role that nothing names a model for has no model; that goes on)  S-001 REQ-003
   ↓
-Ensure per-role default workspaces
+Ensure per-role default workspaces and the front desk, also with no model               S-001 REQ-021
   ↓
 Restore admission order, apply the job repair rules (S-004 REQ-018), resume     REQ-010
   unfinished work (held worker threads first, then the queue), then submit the
-  input those rules owe (S-004 REQ-018)
+  input those rules owe (S-004 REQ-018); before resuming, mark crash-cut waits   S-001 REQ-027
+  and take up the folder's default model; after, start the waiting conversations
+  whose seat now has a model
   ↓
 Remove the secrets of accounts the file no longer holds; start listeners,       REQ-003,
   scheduler and mail intake → status "ready"                                    S-009 REQ-002
@@ -233,6 +239,8 @@ Service layer validates input, records the caller's actor                       
   ↓
 Submission committed (idempotent by request id); conversation becomes ready
   (parked for reports? the message is held, { held: true })                     REQ-012
+  (seat has no model? accepted into the transcript, idle with the no-model     S-001 REQ-027
+   notice; the input stays in the transcript, settled `no_model`)
   ↓
 Admission: free worker thread? → run starts; else waits in arrival order        REQ-010, REQ-011
   ("waiting for a worker thread")
@@ -277,10 +285,15 @@ cause:
 4. read the job schema version, open the database, create or migrate the job store's tables, and make the-intern's
    tools ready, before anything resumes
 5. check that every model and thinking level configured for a role resolves (S-001 Configuration Requirements); a
-   schedule entry's model is checked at a fire (S-007 REQ-002)
-6. ensure the per-role default workspaces (S-001 REQ-003) and the front desk (S-001 REQ-021)
+   schedule entry's model is checked at a fire (S-007 REQ-002). A role that no setting names a model for, while pi
+   agent's settings name no default model either, has no model (S-001 REQ-003); that doesn't fail this step
+6. ensure the per-role default workspaces (S-001 REQ-003) and the front desk (S-001 REQ-021), also when the front
+   desk's seat has no model
 7. restore admission (REQ-010), apply the job repair rules (S-004 REQ-018), resume unfinished work, then submit the
-   input those rules owe (S-004 REQ-018)
+   input those rules owe (S-004 REQ-018). Before it resumes unfinished work, the daemon marks as waiting for a model,
+   with the no-model notice, each conversation a crash left with work its seat's missing model couldn't take, and gives
+   the default model the pi agent folder names, if any, to every seat with no model (S-001 REQ-027). After it resumes
+   unfinished work, it starts each waiting conversation whose seat now has a model (ADR-014 decision 7)
 8. remove the secrets of every account the configuration file no longer holds (S-009 REQ-002), start the
    components that start after work resumes (listeners, scheduler, mail intake), then report ready
 
@@ -301,10 +314,21 @@ cause:
   role, a failing workspace or a component that fails to start in step 8
 - **When:** the daemon starts
 - **Then:** it exits non-zero naming the failing step and its cause, creates no database file where the step precedes
-  step 4, releases ownership it took, and stops the components already started
+  step 4, releases ownership it took, and stops the components already started. A role with no model at all is not
+  among these failures (AC-002.3)
 
 **Verification:** test — `test/service/daemon_startup.test.ts` ("runDaemon startup failures"),
 `test/service/daemon_lifecycle.test.ts` ("startup failures"), `test/service/agents_startup.test.ts`.
+
+#### AC-002.3 — No pi login
+
+- **Given:** a valid instance and an isolated pi agent folder that is missing, and in a second case one whose
+  `settings.json` names no default model, with no model configured for any role
+- **When:** the daemon starts
+- **Then:** it runs all eight steps, the front desk exists, status reports "ready", and both listeners answer
+  `daemon.status` and `desk.get`
+
+**Verification:** test — `test/service/daemon_startup.test.ts`, `test/service/agents_startup.test.ts`.
 
 ### REQ-003 — Readiness
 
@@ -312,6 +336,13 @@ Until step 8 has finished, the status operation SHALL report "starting". Afterwa
 writes one log line naming the instance, the versions in use and the worker-thread count. Listeners open in step 8,
 so they can receive calls before the daemon is ready; until then every call but the status operation is refused as
 `unavailable`, as for any other caller (S-003).
+
+While pi agent's settings name no default model, the status operation SHALL report that there is no default model and
+how to sign in to pi, which includes choosing a default model with pi's `/model` when pi asks for one (S-001
+Assumptions) (product owner, 2026-11-24, CR-002 and its settled details). Once the settings name one, the status
+operation SHALL stop reporting it within 30 seconds of the change, without a restart (S-001 REQ-027). When the
+settings stop naming a default model while the daemon runs, the status operation SHALL report it again within 30
+seconds of the change. Reading the pi agent folder for this writes nothing into it (REQ-018).
 
 #### AC-003.1 — Starting until ready
 
@@ -331,6 +362,17 @@ so they can receive calls before the daemon is ready; until then every call but 
 
 **Verification:** test — `test/service/daemon_startup.test.ts` ("logs one ready line naming the state directory, the
 versions and the worker-thread count"), `test/service/bob_serve.test.ts`.
+
+#### AC-003.3 — No model in the status
+
+- **Given:** a ready daemon whose isolated pi agent folder names no default model
+- **When:** `daemon.status` is called, then the folder comes to name the fake model as the default while the daemon
+  runs, and `daemon.status` is called again
+- **Then:** the first answer reports that there is no default model and how to sign in to pi; within 30 seconds of the
+  change, with no restart, an answer no longer reports it; the pi agent folder holds only what the test wrote
+
+**Verification:** test — `test/unit/status_operation.test.ts`, a service test changing the isolated pi agent folder
+while the daemon runs.
 
 ### REQ-004 — Supervision contract
 
@@ -539,6 +581,11 @@ names):
 - Mail: the `mail.*` operations of S-009, read and control as Interfaces marks them. Those that change the
   configuration file (mail accounts, the notice settings) follow REQ-022, and none returns a secret (S-009 REQ-020).
   The status operation reports each mail account's status (S-009 REQ-005).
+
+A submit to a conversation whose seat has no model (S-001 REQ-027) is accepted: the input is placed in the transcript
+and its submission settles `unanswered` with reason `no_model`. The input is not lost: it is answered once a model is
+available, with nothing sent again, and `submissions.get` and `submissions.wait` report that settled state. While that
+run ends, the conversation lists briefly as running, then as idle.
 
 A submit to a conversation parked for reports holds the message until the conversation continues (S-001 REQ-020),
 whatever its busy mode, and returns `{ held: true }` with no submission id. A submit to a job's lead conversation
@@ -985,8 +1032,14 @@ credential is kept in the database or anywhere else.
     variable name).
   - **Constraints:** read-only for the daemon, apart from the login's token refresh (REQ-018). Tests always point it
     at an isolated folder.
-  - **Missing:** a missing login doesn't stop the daemon unless a model configured for a role needs it (S-001). Model
-    requests fail with an error the agent run shows.
+  - **Missing:** a missing login, or settings that name no default model, doesn't stop the daemon. A role with no
+    configured model then has no model, its work waits for one with the no-model notice, and the status operation says
+    that there is no default model and how to sign in to pi (REQ-003; S-001 REQ-003, REQ-027). Once the folder names a
+    default model, the running daemon notices it within 30 seconds of the change, without a restart. When it stops
+    naming one while the daemon runs, the daemon notices that within 30 seconds too: a role with no configured model has
+    no model again, and the status operation reports that there is no default model again. A model configured for a role
+    that can't be resolved still stops startup at step 5 (S-001 Configuration Requirements). With a login that names a
+    model but fails, model requests fail with an error the agent run shows.
 - **Fake model (test only).**
   - **What:** runs the daemon on the fake model with no network, for deterministic tests. A second test-only switch
     sets a smaller worker-thread count, so tests can fill every worker thread.
@@ -1037,8 +1090,8 @@ records the two capacity constants by amendment.
 
 ## Implementation Order
 
-Delivered: every phase below is implemented, apart from live acceptance test 3, which waits for Installation's
-supervisor registration.
+Delivered: phases 1 to 5 are implemented, apart from live acceptance test 3, which waits for Installation's
+supervisor registration. Phase 6 comes with CR-002 and the v0.19 amendment.
 
 | Phase | What | Depends On |
 |---|---|---|
@@ -1047,12 +1100,21 @@ supervisor registration.
 | 3 | Service layer with the read and control catalogue, and the observation feed | Phase 1 |
 | 4 | Admission and worker threads, durable across restarts | Phase 3 |
 | 5 | Supervision: storage-failure exit, shutdown bound, live tests 2 and 3 with the installed supervisor registration | Phases 1–4, the bootstrap plan's supervisor registration |
+| 6 | Startup with no model, the no-default-model notice in the status, and noticing a default model that appears or disappears while the daemon runs (CR-002) | Phases 1–5 |
 
 S-001 phase 1 needs phases 1 to 3 of this spec. S-001 phase 4 needs phase 4.
 
 ## Open Questions
 
 None affect the specified behaviour. Retention of old conversations is a later decision, recorded under Exclusions.
+
+The two design questions CR-002 left to its Feature Architecture are resolved:
+
+- **Resolved by ADR-014 decision 6. How the daemon notices a default model that appears or disappears:** it reads the
+  pi agent folder every 10 seconds, writing nothing into it (REQ-003, REQ-018).
+- **Resolved by ADR-014 decision 1 and the ADR-001 decision 4 amendment. Where input waiting for a model is held:** in
+  the transcript, with its submission settled `no_model` (REQ-012; S-001 REQ-027). Admission is unchanged (REQ-010,
+  REQ-011).
 
 ## Amendment Log
 
@@ -1079,3 +1141,6 @@ None affect the specified behaviour. Retention of old conversations is a later d
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.16 confirmed: startup steps 1 and 3, the eleven S-008 operations, enabled sets in reads and the snapshot, skills_changed and files_changed (T-331 to T-335, T-355 to T-364) | none |
 | 2026-11-18 | v0.17. Email (S-009). REQ-018 and AC-018.1: credentials are used in place, except that the instance keeps the mail passwords and client secrets a team member gives it, and the OAuth tokens it obtains, in its owner-only secrets store, never in the database or anywhere else; AC-018.1 allows credential strings in that store only. REQ-006: the instance directories hold the secrets store, in an owner-only directory, with owner-only files. REQ-021 and Configuration Requirements, Configuration file: the file holds S-009's `[mail]` and `[[mail_account]]` sections, and no mail secret. REQ-012: the email origin holds the message ID, the sender and the account name, which Email observes. REQ-002 and Workflow: step 8 removes the mail secrets of accounts the file no longer holds, then starts the listeners, the scheduler and mail intake; the step numbers stay. Interfaces and REQ-012: the catalogue adds `mail.accounts.list`, `mail.accounts.get`, `mail.accounts.create`, `mail.accounts.change`, `mail.accounts.remove`, `mail.accounts.signin`, `mail.accounts.test`, `mail.notices.get` and `mail.notices.set`. Interfaces, the feed, and REQ-014: the instance feed adds the `mail_account_status` delta. Interfaces, `daemon.status`, and REQ-012: the status operation reports each mail account's status. No identifier added or retired. Revised 2026-11-19 on the same branch: the store is the instance's secrets store for every account it connects to, not for mail only; mail accounts are its only users today (product owner decision). | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18 | S-009's tasks |
 | 2026-11-22 | v0.18. Exclusions, Installation: release form and supervisor registration belong to S-010, in place of the bootstrap plan. Wording only; no identifier added or retired. | S-010 architecture consistency review, finding L5, 2026-11-22. | None |
+| 2026-11-24 | v0.19. The daemon starts and stays reachable without a pi login (CR-002). REQ-002 steps 5 and 6: a role that nothing names a model for has no model, which doesn't fail step 5, and step 6 ensures the front desk also when its seat has no model; a configured model that can't be resolved still fails step 5. AC-002.2: a role with no model at all is not among the failures. New AC-002.3: with no pi login the daemon reaches ready and both listeners answer. REQ-003 and new AC-003.3: while pi agent's settings name no default model, `daemon.status` reports that no model is available and how to sign in to pi, and stops reporting it, without a restart, once they name one. Interfaces (the `daemon.status` row; Consumed, the pi agent folder), Users and Journeys (journey 1), Workflow, Configuration Requirements (pi agent folder, Missing) and Open Questions (two questions for CR-002's Feature Architecture; REQ-010 and REQ-011 change only if it holds waiting input at admission). No identifier retired. | CR-002, approved by the product owner on 2026-11-24. | CR-002's tasks |
+| 2026-11-24 | v0.19, same version, revised on the planning branch after the Architect's consistency review (corrections C2, C3, C11, C13, C15) and CR-002's settled details of the same day. REQ-003 and AC-003.3: the status says there is no default model, with how to sign in to pi, which includes choosing a default model with `/model`; it stops within 30 seconds of a default model appearing, and reports it again within 30 seconds of one disappearing. Interfaces (the `daemon.status` row; Consumed), journey 1 and Configuration Requirements (pi agent folder, Missing) follow. Workflow: the no-model branch no longer says where input is held. Implementation Order: new phase 6, and the "Delivered" sentence names phases 1 to 5. No identifier added or retired. | Architect's consistency review of 2026-11-24; product owner, CR-002 settled details, 2026-11-24. | CR-002's tasks |
+| 2026-11-24 | v0.19, same version, revised on the planning branch with CR-002's Feature Architecture (ADR-014; Spec findings SF2, SF4, SF5, SF6). Interfaces: `conversations.list`, `conversations.get` and `desk.get` show a seat's model as `null` when it has none. REQ-012: a submit to a conversation with no model is accepted, its input placed in the transcript and its submission settled `unanswered` with reason `no_model`, answered once a model is available; the conversation lists briefly as running. REQ-002 step 7 and Workflow: before resuming unfinished work the daemon marks the waits a crash left unwritten and takes up the folder's default model; after it, it starts the waiting conversations whose seat now has a model. Open Questions: both CR-002 questions resolved, and the sentence that REQ-010 and REQ-011 would change is gone. No identifier added or retired. | CR-002 Feature Architecture, ADR-014 and the ADR-001 decision 4 amendment, 2026-11-24. | CR-002's tasks |

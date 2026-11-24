@@ -1,7 +1,7 @@
 ---
 id: S-005
 title: Command line
-version: '0.9'
+version: '0.10'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-03'
 author: planner
@@ -123,7 +123,7 @@ resolved by the service, S-004 REQ-002):
 | `bob follow` | the instance feed (S-002 REQ-014) | REQ-007 |
 | `bob status` | `daemon.status` (S-002 REQ-003) | REQ-008 |
 | `bob usage` | `usage.get` for the total, `conversations.list`, then `usage.get` for each conversation (S-002 REQ-012) | REQ-008 |
-| `bob chat` | `desk.get`, `conversations.entries`, the conversation feed, `conversations.submit` for each line, `conversations.abort` and `submissions.get` on Ctrl-C, `submissions.wait` after Ctrl-D, and `submissions.wait` and `conversations.entries` after each line without a terminal (S-001 REQ-021; S-002 REQ-012) | REQ-009, REQ-010 |
+| `bob chat` | `desk.get`, whose seat's model is `null` when the front desk has no model (S-001 REQ-027), `conversations.entries`, the conversation feed, `conversations.submit` for each line, `conversations.abort` and `submissions.get` on Ctrl-C, `submissions.wait` after Ctrl-D, and `submissions.wait` and `conversations.entries` after each line without a terminal (S-001 REQ-021; S-002 REQ-012) | REQ-009, REQ-010 |
 | `bob chat --reset` | `desk.get`, `conversations.reset` (S-001 REQ-024), then as `bob chat` | REQ-009 |
 | `bob conversations list` | `conversations.list`, optionally for one job, with `jobs.get` first to name that job (S-001 REQ-016) | REQ-011 |
 | `bob conversations show <id>` | `conversations.get`, `conversations.entries`, `conversations.invocations` (S-001 REQ-016) | REQ-011 |
@@ -158,7 +158,8 @@ maps to the input of the same meaning in the operation it calls.
   resolves, names the directory of the daemon's `bob.sock` (REQ-002).
 - Data on standard output; errors, notices and hints on standard error.
 - Exit codes: `0` success; `1` the service refused or failed, with its error code and message on standard error; `2`
-  a usage error, or a reserved group; `3` the daemon can't be reached (REQ-003).
+  a usage error, or a reserved group; `3` the daemon can't be reached (REQ-003). `bob chat` without a terminal also
+  exits `1` when the front desk has no model, with the no-model notice on standard error (REQ-010).
 - With `--json`, standard output holds the service's answer unchanged. A `show` command that calls several
   operations prints one JSON object keyed by operation name, each value that operation's answer unchanged (for
   example `{ "jobs.get": …, "jobs.worklog.list": …, "jobs.history.list": … }`). `bob usage` prints
@@ -202,8 +203,12 @@ A following command (`bob chat`, `bob follow`, `bob jobs follow`):
 Subscribe: snapshot, then deltas, printed as lines                                          REQ-006, REQ-007, REQ-009
   ├─ chat: each typed line → conversations.submit (queued while busy); Ctrl-C → abort the
   │        turn, queued lines dropped and named, chat stays open; Ctrl-D → exit 0            REQ-009
+  ├─ chat with no model: the no-model notice, chat stays open; lines answered once a model
+  │        is available                                                                      REQ-009
   ├─ chat without a terminal: submit each line, wait until it settles, print its answer,
   │        exit 0 at end of input                                                           REQ-010
+  │        (no model → submit every line, notice once on standard error, nothing on
+  │         standard output, exit 1)                                                         REQ-010
   └─ jobs follow: exits 0 when the job is Done                                               REQ-006
 Daemon unreachable or unavailable → notice on standard error, reconnect when it is back      REQ-015
 Feed ends "lagging" → subscribe again                                                       REQ-015
@@ -415,7 +420,9 @@ done, and agents starting and stopping runs, until the team member presses Ctrl-
 
 `bob status` SHALL print the daemon status (`daemon.status`: phase, versions, start time, instance directories,
 worker threads in use and waiting), and `bob usage` the usage per conversation and in total (`usage.get`). With
-`--json`, `bob usage` SHALL print one object that holds both, in the shape Interfaces names.
+`--json`, `bob usage` SHALL print one object that holds both, in the shape Interfaces names. While `daemon.status`
+reports that there is no default model (S-002 REQ-003), `bob status` SHALL print that notice and how to sign in to
+pi, and it SHALL print neither once the status stops reporting it.
 
 #### AC-008.1 — Status and usage
 
@@ -424,6 +431,16 @@ worker threads in use and waiting), and `bob usage` the usage per conversation a
 - **Then:** the text names the phase "ready" and the worker threads, and the usage of that run; the `bob status` JSON
   equals the `daemon.status` answer, and the `bob usage` JSON holds the `usage.get` answers for the total and for each
   conversation, unchanged
+
+**Verification:** test — a service test running `bob` as a child process.
+
+#### AC-008.2 — Status with no model
+
+- **Given:** a ready test daemon whose isolated pi agent folder names no default model
+- **When:** a team member runs `bob status` and `bob status --json`, then the folder comes to name the fake model as
+  the default and, 30 seconds after the change, they run `bob status` again
+- **Then:** the first text says that there is no default model and how to sign in to pi, and exits 0; the JSON equals
+  the `daemon.status` answer; the last text, with no restart of the daemon, holds no such notice
 
 **Verification:** test — a service test running `bob` as a child process.
 
@@ -437,10 +454,16 @@ and a prompt, and then:
 - print the front desk's answers from the conversation feed as they stream
 - on Ctrl-C, stop the current turn with `conversations.abort` and keep the chat open. The abort also withdraws the
   input still queued (S-001 REQ-008), so `bob` reads the state of each line it submitted and not yet answered
-  (`submissions.get`) and prints on standard error each line that was dropped, so the team member can send it again
+  (`submissions.get`) and prints on standard error, as dropped, every line it submitted that is still unanswered,
+  so the team member can send it again. That includes lines settled `unanswered` with reason `no_model` that waited
+  for a model, whose wait the abort ends (S-001 REQ-027)
 - on Ctrl-D, exit 0
 
 `bob chat --reset` SHALL reset the front desk with `conversations.reset` (S-001 REQ-024), then open it as above.
+
+While the front desk has no model (S-001 REQ-027), `bob chat` on a terminal SHALL show the no-model notice and stay
+open. It submits each line as above; the lines wait for a model in the front desk's transcript, and their answers
+stream once a model is available (product owner, 2026-11-24, CR-002).
 
 #### AC-009.1 — A chat with a queued line
 
@@ -468,12 +491,28 @@ and a prompt, and then:
 
 **Verification:** test — a service test running `bob` as a child process on the fake model.
 
+#### AC-009.4 — A chat with no model
+
+- **Given:** a test daemon whose isolated pi agent folder names no default model, and a `desk` role with no configured
+  model
+- **When:** a team member runs `bob chat` on a terminal and types "what's running?"
+- **Then:** the chat shows the no-model notice and stays open, and the line is in the front desk's transcript with way
+  in `command line`; once the folder names the fake model as the default, the answer to the line streams in the same
+  chat
+
+**Verification:** test — a service test driving `bob chat` on a pseudo-terminal on the fake model.
+
 ### REQ-010 — Chat without a terminal
 
 When standard input or output isn't a terminal, `bob chat` SHALL show no prompt, history or colour; it SHALL submit
 each line of standard input in turn and wait for the submission to settle, calling `submissions.wait` again each time
 a wait ends with the submission still unsettled (each wait lasts at most 5 minutes, S-002 REQ-012). It SHALL then read
 the front desk's answer with `conversations.entries`, print it and, at the end of input, exit 0.
+
+When the front desk has no model (S-001 REQ-027), `bob chat` without a terminal SHALL submit every line of its input,
+each accepted into the front desk's transcript, without waiting for answers. It SHALL print the no-model notice once on
+standard error and nothing on standard output, and exit 1. The lines are answered in the front desk once a model is
+available (product owner, 2026-11-24, answering the Architect's Q2 on CR-002).
 
 #### AC-010.1 — A piped question
 
@@ -499,6 +538,17 @@ the front desk's answer with `conversations.entries`, print it and, at the end o
 - **Then:** the file holds only the front desk's answer, with no prompt, history or control sequence, and `bob` exits 0
 
 **Verification:** test — `test/service/bob_chat_terminal.test.ts` ("bob chat with standard output redirected").
+
+#### AC-010.4 — A piped chat with no model
+
+- **Given:** a test daemon whose isolated pi agent folder names no default model, and a `desk` role with no configured
+  model
+- **When:** a script runs `printf 'first\nsecond\n' | bob chat`
+- **Then:** standard output is empty, standard error holds the no-model notice once, `bob` exits 1, and the front
+  desk's transcript holds, in this order, `first`, one no-model notice and `second`, both lines with way in `command
+  line`; once the folder names the fake model as the default, the front desk answers them with no line sent again
+
+**Verification:** test — a service test running `bob` as a child process on the fake model.
 
 ### REQ-011 — Conversation commands
 
@@ -757,10 +807,12 @@ sense.
 | 3 | Conversations, roles, workspaces and models commands | Phase 1 |
 | 4 | The following commands: `follow`, `jobs follow` and `chat`, with reconnection and lag handling | Phases 1 and 2, the front desk of S-001 v0.8 and `desk.get` of S-002 v0.10 |
 | 5 | The command reference in the user manual, the live check and the spec map | Phases 1–4 |
+| 6 | `bob status` and `bob chat` with no default model, on a terminal and without one (CR-002) | Phases 1–5, S-001 phase 8, S-002 phase 6 |
 
 ## Open Questions
 
-None.
+None. Resolved in CR-002's Feature Architecture: `bob chat` learns that the front desk has no model from `desk.get`,
+whose seat's model is `null` (Interfaces, the `bob chat` row).
 
 ## Amendment Log
 
@@ -780,3 +832,6 @@ None.
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.7 confirmed: knowledge and mail stay reserved, bob skills and bob instructions exist, bob roles change reads the token first (T-366 to T-369) | none |
 | 2026-11-18 | v0.8. Definitions (Group, Reserved group), Users (Later specs), Exclusions (Commands for later components), Interfaces (the conventions' reserved groups) and Dependencies: `mail` leaves the reserved groups because S-009 adds `bob mail`; only `knowledge` stays reserved. Interfaces, the command table: one row names S-009's `bob mail` commands by reference to S-009 Interfaces and REQ-017, which own them; `bob jobs list` gains `--mail`, the account filter; `bob jobs show` prints the email details and request mark that `jobs.get` carries; `bob jobs complete` gains `--mail-text`, sent as `jobs.complete`'s `mailText`. REQ-004: `bob jobs show` prints a job's email details and request mark, and `bob jobs complete` takes `--mail-text`. No identifier added or retired. | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18. | S-009's tasks |
 | 2026-11-22 | v0.9. Definitions: "Top-level command" adds S-010's `upgrade`, `rollback` and `uninstall`; new "Installation command" for S-010's commands that manage the program and the service; "Data command" leaves them out. REQ-001: the top-level commands include S-010's. REQ-003: the installation commands exit 2 on a usage error and otherwise as S-010 states, which owns their output. REQ-016, AC-016.1 and Exclusions (State or logic of its own): the installation commands are outside the no-state rule. Users (Later specs), Exclusions (Commands for later components, An install launcher), Interfaces (the command table) and Assumptions: S-010 adds the `service` group and the three top-level commands, and its install script puts `bob` on the `PATH`. No identifier added or retired. | Cross-spec amendment carried by S-010 Installation and service setup; S-010 architecture consistency review, findings B3 and B4, 2026-11-22. | S-010's tasks |
+| 2026-11-24 | v0.10. The daemon starts and stays reachable without a pi login (CR-002). REQ-008 and new AC-008.2: `bob status` prints the no-model notice and how to sign in to pi while `daemon.status` reports it, and stops once it doesn't. REQ-009 and new AC-009.4: on a terminal, `bob chat` with a front desk that has no model shows the notice and stays open, and the lines are answered once a model is available. REQ-010 and new AC-010.4: without a terminal, it submits every line, prints the notice once on standard error and nothing on standard output, and exits 1; the lines are answered once a model is available. Interfaces (the exit-code convention), Workflow and Open Questions (which operation `bob chat` reads, for CR-002's Feature Architecture). No identifier changed or retired. | CR-002, approved by the product owner on 2026-11-24, with the answer to the Architect's Q2 of that day. | CR-002's tasks |
+| 2026-11-24 | v0.10, same version, revised on the planning branch after the Architect's consistency review (corrections C1, C2, C5, C13) and CR-002's settled details of the same day. REQ-008 and AC-008.2: `bob status` says there is no default model, and the notice is gone 30 seconds after a default model appears. REQ-009: Ctrl-C withdraws lines waiting for a model and `bob` names those it drops. AC-010.4: the transcript holds one no-model notice, after the first line. Implementation Order: new phase 6. No identifier added or retired. | Architect's consistency review of 2026-11-24; product owner, CR-002 settled details, 2026-11-24. | CR-002's tasks |
+| 2026-11-24 | v0.10, same version, revised on the planning branch with CR-002's Feature Architecture (ADR-014; Spec findings SF4, SF7). REQ-009: after Ctrl-C, `bob chat` names as dropped every submitted line still unanswered, including those settled `no_model` that waited for a model. Interfaces, the `bob chat` row: `desk.get` tells it the front desk has no model, its seat's model being `null`. Open Questions: resolved. No identifier added or retired. | CR-002 Feature Architecture, ADR-014, 2026-11-24. | CR-002's tasks |

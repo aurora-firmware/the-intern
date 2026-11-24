@@ -1,7 +1,7 @@
 ---
 id: S-006
 title: Web interface
-version: '0.9'
+version: '0.10'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-06'
 author: planner
@@ -67,6 +67,9 @@ Journeys, in priority order:
    REQ-011, REQ-012.
 8. **Carry on through a restart.** The service restarts while a page is open, and the page recovers with nothing typed
    lost. Delivered by REQ-014.
+9. **Reach the service before signing in to pi.** With no pi login, the pages load, every page says that there is no
+   default model, and work sent from the browser waits until a team member signs in to pi. Delivered by REQ-011,
+   REQ-023.
 
 ## Exclusions
 
@@ -147,7 +150,7 @@ S-008 Interfaces lists and this table names.
 
 | Page | Reads | Actions |
 |---|---|---|
-| Every page | `daemon.status`, to check the connection and the version (ADR-007 decisions 6 and 9) | — |
+| Every page | `daemon.status`, to check the connection and the version (ADR-007 decisions 6 and 9), and whether a default model is available, for the no-model banner (REQ-023) | — |
 | Board | `jobs.list`, instance feed (`GET /feed?scope=instance`) | — |
 | Job page | `jobs.get`, `jobs.history.list`, `jobs.worklog.list`, `conversations.get`, `conversations.entries`, `conversations.invocations`, `models.list`, `roles.list`, `workspaces.list`, instance feed, the job's conversations on the shared stream (`GET /feed?scope=conversations`, S-003 REQ-006; ADR-007); for the Skills panel, `skills.list`, `instructions.list` and `files.read` (S-008 REQ-013) | `jobs.update`, `jobs.complete`, `jobs.cancel`, `jobs.resume`, `jobs.relate`, `jobs.unrelate`, `conversations.submit`, `conversations.abort`, `conversations.compact`, `conversations.reset`, `conversations.seat`; for the Skills panel, `skills.enable`, `skills.disable` and `files.write` (S-008 REQ-013) |
 | Front desk | `desk.get`, `conversations.entries`, `submissions.get`, conversation feed, which reaches the page on the shared stream (`GET /feed?scope=conversations`, S-003 REQ-006; ADR-007) | `conversations.submit`, `conversations.abort`, `jobs.create` |
@@ -216,6 +219,12 @@ Lost connection
   → reconnects on its own → fresh data → banner gone, text can be sent              REQ-014
   feed ends lagging → subscribes again, missed entries shown once, no banner        REQ-014
   feed ends stopped, or the service answers unavailable → as for a failed feed      REQ-014
+
+No default model (no pi login)
+  every page → no-model banner; Status → the notice and how to sign in to pi        REQ-023, REQ-011
+  message or job sent → accepted, the transcript shows the no-model notice          REQ-023
+  a default model appears → banner and Status notice gone, no reload                REQ-023, REQ-011
+  the default model disappears → banner and Status notice back, no reload           REQ-023, REQ-011
 
 Backup
   Status → Export → one confirmation stating what the copy holds                    REQ-012
@@ -541,7 +550,9 @@ The Workspaces page SHALL list the registered workspaces, and SHALL let a team m
 ### REQ-011 — Status and usage
 
 The Status page SHALL show the daemon's state as `daemon.status` reports it, usage per conversation and in total, and
-the available models and thinking levels, kept current without a manual reload.
+the available models and thinking levels, kept current without a manual reload. While `daemon.status` reports that
+there is no default model (S-002 REQ-003), the Status page SHALL show that notice and how to sign in to pi, and SHALL
+stop showing it, without a manual reload, once the status stops reporting it (product owner, 2026-11-24, CR-002).
 
 #### AC-011.1 — Status shown
 
@@ -550,6 +561,15 @@ the available models and thinking levels, kept current without a manual reload.
 - **Then:** the state, the usage totals and the models match what `daemon.status`, `usage.get` and `models.list` return
 
 **Verification:** test — a browser test comparing the page with the operations' answers.
+
+#### AC-011.2 — Status with no model
+
+- **Given:** a test daemon whose isolated pi agent folder names no default model
+- **When:** a team member opens the Status page, and later the folder comes to name the fake model as the default
+- **Then:** the page shows that there is no default model and how to sign in to pi; after the change, with no reload and
+  no daemon restart, the notice is gone
+
+**Verification:** test — a browser test changing the isolated pi agent folder while the daemon runs.
 
 ### REQ-012 — The export download
 
@@ -663,6 +683,36 @@ record the way in and the front desk, with no address (S-004 REQ-003, REQ-021).
 - **When:** a team member asks it for one in the browser
 - **Then:** the job is `W-n`, its origin records the way in `web interface` and the front desk, with no address, and the
   Job page shows the way in and the front desk
+
+**Verification:** test — a browser test.
+
+### REQ-023 — No default model
+
+While `daemon.status` reports that there is no default model (S-002 REQ-003), every page of the web interface SHALL
+show a banner saying so. It SHALL stop showing it, without a manual reload, once the status stops reporting it, and show
+it again, without a manual reload, when the status reports it again (product owner, 2026-11-24, CR-002; the points
+below that the Planner derived were confirmed in CR-002's settled details of the same day). The banner doesn't disable
+any action: messages, jobs and answers are still accepted, and wait for
+a model (S-001 REQ-027). The Front desk page and the Job page SHALL show the no-model notice where a conversation's
+transcript holds it, and keep showing it there after a model is available, because the transcript keeps it.
+
+#### AC-023.1 — The banner on every page
+
+- **Given:** a test daemon whose isolated pi agent folder names no default model
+- **When:** a team member opens each page of the sidebar and a Job page, then the folder comes to name the fake model
+  as the default, and later stops naming it
+- **Then:** each page shows the no-model banner; after the first change, with no reload and no daemon restart, the
+  banner is gone from the open page; after the second, with no reload, it is back
+
+**Verification:** test — a browser test changing the isolated pi agent folder while the daemon runs.
+
+#### AC-023.2 — Work sent from the browser waits
+
+- **Given:** a test daemon whose isolated pi agent folder names no default model, and `desk` and `bob` with no
+  configured model
+- **When:** a team member sends the front desk a message on the Front desk page and creates a job directly
+- **Then:** neither is refused; the Front desk page shows the message followed by the no-model notice, the job appears
+  on the Board as `W-n` To do, and its Job page shows its first input followed by the notice
 
 **Verification:** test — a browser test.
 
@@ -892,6 +942,8 @@ None. The web interface adds no setting. The existing `[network]` section of `co
    REQ-011, REQ-012, S-003 REQ-016. Depends on phase 1.
 5. **Finish.** Browser coverage, the manual chapter, the by-hand checks and `docs/system_overview.html`. Delivers
    REQ-020, REQ-021, REQ-022. Depends on phases 3 and 4.
+6. **No default model (CR-002).** The no-model banner on every page, the notice on the Status page and the no-model
+   notice in transcripts. Delivers REQ-011's notice and REQ-023. Depends on phases 1 to 5 and S-001 phase 8.
 
 ## Open Questions
 
@@ -922,3 +974,5 @@ Both were for the Architect, and Feature Architecture resolved them. Neither cha
 | 2026-11-15 | spec-truth reconciliation — PASS | v0.8 confirmed: Skills panel and file editor layout meets REQ-016 and AC-016.1 (B-040, Job and Roles pages seen in Chrome); the Exclusions exception for context files matches files.read and files.write (T-392) | none |
 | 2026-11-16 | spec-truth reconciliation — PASS | v0.8 confirmed after B-041, B-045, B-046, B-048: Roles, Workspaces, Schedules, Front desk and Status (per read kind) show only the read that started last; reads after deltas and reconnects still apply; AC-006.6 test waits for the held thread; no drift | none |
 | 2026-11-18 | v0.9. Users: the Later specs row adds Email, whose Mail page sits at `/ui/#/mail` (S-009 REQ-018). REQ-003: the Job page of a job that came by email shows the mail account, the sender, the subject, the saved message with links to its attachments, the job thread and the request mark. REQ-004: the complete action takes an optional mail text, sent as the result reply for a job with the request mark (S-009 REQ-015). No identifier added or retired. Revised 2026-11-19 on the same branch: the Job page shows each attachment's name and size with no download, in place of links (S-009 v0.3). | Cross-spec amendment carried by S-009 Email; approved by the product owner at Gate 1 with S-009, 2026-11-18. | S-009's tasks |
+| 2026-11-24 | v0.10. The daemon starts and stays reachable without a pi login (CR-002). REQ-011 and new AC-011.2: the Status page shows the no-model notice and how to sign in to pi while `daemon.status` reports it, and drops it without a reload once it doesn't. New REQ-023 with AC-023.1 and AC-023.2: while no model is available every page shows a banner saying so, which goes without a reload once a model is available; it disables no action, and the Front desk page and the Job page show the no-model notice a transcript holds. Users and Journeys (journey 9), Workflow and Implementation Order (phase 6). No identifier changed or retired. | CR-002, approved by the product owner on 2026-11-24 (the banner on every page decided that day). | CR-002's tasks |
+| 2026-11-24 | v0.10, same version, revised on the planning branch after the Architect's consistency review (corrections C3, C4, C14) and CR-002's settled details of the same day. REQ-011, AC-011.2, REQ-023 (renamed "No default model"), journey 9, Workflow and Implementation Order: the notice and the banner say there is no default model. REQ-023 and AC-023.1: the banner comes back, without a reload, when the default model disappears; REQ-023 credits the settled details. Interfaces, the "Every page" row: `daemon.status` also says whether a default model is available, for the banner. No identifier added or retired. | Architect's consistency review of 2026-11-24; product owner, CR-002 settled details, 2026-11-24. | CR-002's tasks |

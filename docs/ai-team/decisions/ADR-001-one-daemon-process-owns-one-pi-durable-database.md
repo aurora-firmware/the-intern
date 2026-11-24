@@ -67,9 +67,10 @@ exceptions in decision 4.
 
    **First bounded exception: the-intern's own facts about a conversation, and redelivery from them.**
    - The facts are held messages (`held`), awaiting links (`awaiting`), the parked state (`parked`), the abort mark
-     (`aborted`), the stop mark (`stopped`), the closed mark (`closed`) and the enabled set (`enabledSkills`) in the
-     conversation's `intern.conversation` document, and creation keys in `intern.invocations` and `intern.idempotency`,
-     the front desk's fixed key included. Each is written in the commit of the change it describes.
+     (`aborted`), the stop mark (`stopped`), the closed mark (`closed`), the enabled set (`enabledSkills`) and the
+     waiting fact (`waitingForModel`, ADR-014) in the conversation's `intern.conversation` document, and creation keys
+     in `intern.invocations` and `intern.idempotency`, the front desk's fixed key included. Each is written in the
+     commit of the change it describes.
    - The abort mark records that an invoker is owed an "aborted" report. Only a lone abort of an awaited invoked
      conversation sets it, never a cascade or a job abort (S-001 REQ-019).
    - The stop mark holds the ID of the lead's newest transcript entry when a team member's abort, never a cascade,
@@ -99,6 +100,13 @@ exceptions in decision 4.
      pi-durable's abort leaves the abort undone and safe to repeat; repair rule 4 finishes a job's abort.
    - A close that fails with the harness still open doesn't stop the job's aborts, and isn't retried: rule 4 sets the
      missing marks at the next start (S-004 REQ-007).
+   - The waiting fact records that a conversation with no model has work that waits: its input, already placed in
+     the transcript by a run that ended `no_model`, a handoff's continuation, or a compaction. It is written with the
+     no-model notice after such a run, and cleared by the release commit, an abort's commit or the closed-mark commit.
+     The release is the one path that starts a run with no new input: once the seat has a model, it starts a
+     `pi.generation` for the conversation that continues from the transcript (ADR-014 decision 4). At startup step 7 the
+     daemon sets a fact a crash left unwritten, then releases after `host.resume()` (ADR-014 decision 7). The 10-second
+     read of the pi agent folder (ADR-014 decision 6) is no recovery timer: it holds no input and retries nothing.
    - Nothing else: no retry, no timer, no list that holds input for a conversation that can take it, and no repair of
      pi-durable's state beyond the closed-mark commit's inbox removal (ADR-003) and the abort of a closed conversation's
      compaction. A new kind of fact or a new redelivery path amends this decision first.
