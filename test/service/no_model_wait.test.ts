@@ -148,17 +148,17 @@ async function waitNoModel(host: HarnessHost, submissionId: string): Promise<voi
 }
 
 describe("a run that ends with no_model", () => {
-    it("records the waiting fact with the input's submission id and one notice after the input", async () => {
+    it("records the waiting fact with the first input's entry id and one notice after the input", async () => {
         const { host, seat, send, drainRunEnds, requests } = await fixture();
         const id = await seat(null);
 
-        const submissionId = await send(id, "first");
-        await waitNoModel(host, submissionId);
+        await waitNoModel(host, await send(id, "first"));
         await until(async () => (await noticesOf(host, id)).length === 1, "the notice");
         await drainRunEnds();
 
         const meta = await readConversationMeta(host, id);
-        assert.deepEqual(meta?.waitingForModel, { order: submissionId });
+        const inputEntry = (await entriesOf(host, id)).find((entry) => entry.kind === "pi.user");
+        assert.deepEqual(meta?.waitingForModel, { order: inputEntry?.id });
         assert.deepEqual(
             (await kindsOf(host, id)).filter((kind) => kind === "pi.user" || kind === NOTICE_KIND),
             ["pi.user", NOTICE_KIND],
@@ -189,7 +189,8 @@ describe("a run that ends with no_model", () => {
             shown.map((entry) => entry.kind),
             ["pi.user", NOTICE_KIND, "pi.user"],
         );
-        assert.deepEqual((await readConversationMeta(host, id))?.waitingForModel, { order: first });
+        const firstInput = (await entriesOf(host, id)).find((entry) => entry.kind === "pi.user");
+        assert.deepEqual((await readConversationMeta(host, id))?.waitingForModel, { order: firstInput?.id });
     });
 
     it("leaves the notice out of the model's context", async () => {

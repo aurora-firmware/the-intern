@@ -4,7 +4,15 @@
  * holds the input a `no_model` run placed.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { type CommitChange, defineEntry, GenerationTask, LiveDoc, type Tx } from "@earendil-works/pi-durable";
+import {
+    type CommitChange,
+    type ConversationId,
+    type Cursor,
+    defineEntry,
+    GenerationTask,
+    LiveDoc,
+    type Tx,
+} from "@earendil-works/pi-durable";
 import { toConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { type ConversationMeta, conversationMetaDoc, readConversationMeta } from "./seating.ts";
@@ -18,24 +26,46 @@ const noticeEntry = defineEntry<NoticeRecord>(NOTICE_KIND);
 
 const NOTICE_TEXT =
     "There is no default model: pi agent's settings name none. This conversation waits and runs once a model is available.";
-// pi-durable's text for a run whose agent has no model; a model it names but the registry lacks reads "... is not available".
+// The text pi-durable 1.4.0 gives a run whose agent has no model (`failNoModel` in `harness/generation.js`); a model it
+// names but the registry lacks reads "Model ... is not available". Both fail with `detail.reason: "no_model"`, so the
+// text is the only way to tell them apart. Each pi-durable upgrade rechecks it.
+const ASSISTANT_KIND = "pi.assistant";
 const NO_MODEL_CONFIGURED_MESSAGE = "No model is configured";
 const GENERATION_KIND = GenerationTask.definition.name;
 
+const ENTRY_SCAN_PAGE_SIZE = 50;
+
+// The id of the period's first waiting entry: the oldest entry that carries model messages after the newest assistant
+// entry and the newest notice, found by a descending scan. A table read must come before the commit's first table write.
+async function firstWaitingEntryId(tx: Tx, conversationId: ConversationId): Promise<string | undefined> {
+    let first: string | undefined;
+    let cursor: Cursor | undefined;
+    do {
+        const page = await tx.scanEntries({ conversationId, order: "descending" }, ENTRY_SCAN_PAGE_SIZE, cursor);
+        for (const entry of page.items) {
+            if (entry.kind === ASSISTANT_KIND || entry.kind === NOTICE_KIND) return first;
+            if ((entry.model?.length ?? 0) > 0) first = String(entry.id);
+        }
+        cursor = page.next;
+    } while (cursor !== undefined);
+    return first;
+}
+
 /**
  * Marks the conversation as waiting for a model in the caller's host commit, with the notice, unless the fact is
- * already set: a waiting period gets one notice. `order` is the id of the period's first waiting input submission;
- * without one it is the notice's entry id.
+ * already set: a waiting period gets one notice. `order` is read from the transcript in the same commit (ADR-014
+ * decision 2): the id of the first entry the model sees after the newest assistant entry and notice, or the notice's own
+ * id when there is none.
  */
 export async function markWaiting(
     tx: Tx,
     conversationId: string,
     compaction?: { instructions?: string },
-    order?: string,
 ): Promise<void> {
     const id = toConversationId(conversationId);
     const meta = (await tx.doc(conversationMetaDoc, id)) as ConversationMeta;
     if (meta.waitingForModel !== undefined) return;
+    const order = await firstWaitingEntryId(tx, id);
     const notice = await tx.appendEntry(noticeEntry, id, {
         data: { notice: "no_default_model", text: NOTICE_TEXT },
     });
@@ -72,57 +102,13 @@ async function newestGeneration(host: HarnessHost, conversationId: string) {
     return page.items[0];
 }
 
-const smallestId = (ids: readonly string[]): string | undefined =>
-    ids.reduce<string | undefined>(
-        (smallest, id) => (smallest === undefined || Number(id) < Number(smallest) ? id : smallest),
-        undefined,
-    );
-
-/**
- * Hears each run that ends with `no_model` and the input submissions that commit settled for it: pi-durable settles
- * them in the commit that ends the run, and `handleNoModelEnd` reads them back only here, since a settled submission
- * can't be read by conversation. Only commits after the call are heard.
- */
-export function watchNoModelEnds(
-    host: HarnessHost,
-    listener: (end: { conversationId: string; inputIds: string[] }) => void,
-): { stop(): void } {
-    let isStopped = false;
-    const unsubscribe = internalHarness(host).subscribeCommits((publication) => {
-        if (isStopped) return;
-        const ended = new Set<string>();
-        const inputs = new Map<string, string[]>();
-        for (const change of publication.changes) {
-            if (change.type === "task" && change.value.kind === GENERATION_KIND) {
-                if (failureOf(change.value).reason === "no_model") ended.add(String(change.value.conversationId));
-            } else if (change.type === "submission") {
-                const { value } = change;
-                if (value.type !== "input" || value.status !== "unanswered" || value.reason !== "no_model") continue;
-                const key = String(value.conversationId);
-                inputs.set(key, [...(inputs.get(key) ?? []), String(value.id)]);
-            }
-        }
-        for (const conversationId of ended) listener({ conversationId, inputIds: inputs.get(conversationId) ?? [] });
-    });
-    return {
-        stop() {
-            isStopped = true;
-            unsubscribe();
-        },
-    };
-}
-
 /**
  * Handles the end of a run in the run-end queue (ADR-014 decision 2). Returns `true` when the conversation's run ended
  * with `no_model`, which delivers no report. A seat that has a model now continues at once, and a seat that names a
  * model the registry doesn't resolve stays failed. A seat with no model sets the waiting fact and the notice in one
- * commit, unless the fact is set. `inputIds` are the input submissions the run's end settled, from `watchNoModelEnds`.
+ * commit, unless the fact is set.
  */
-export async function handleNoModelEnd(
-    host: HarnessHost,
-    conversationId: string,
-    inputIds: readonly string[] = [],
-): Promise<boolean> {
+export async function handleNoModelEnd(host: HarnessHost, conversationId: string): Promise<boolean> {
     const run = await newestGeneration(host, conversationId);
     if (run === undefined) return false;
     const { reason, message } = failureOf(run);
@@ -133,8 +119,7 @@ export async function handleNoModelEnd(
         if (message === NO_MODEL_CONFIGURED_MESSAGE) await startRunWithoutInput(host, conversationId);
         return true;
     }
-    const order = smallestId(inputIds);
-    await internalHarness(host).commit((tx) => markWaiting(tx, conversationId, undefined, order), context);
+    await internalHarness(host).commit((tx) => markWaiting(tx, conversationId), context);
     return true;
 }
 

@@ -71,8 +71,8 @@ export type ConversationMeta = JobLinks & {
     enabledSkills?: string[];
     /**
      * Set while the conversation waits for a model (ADR-014 decision 2): `order` is the id of the period's first
-     * waiting input submission, or of the notice when the period began without one, and `compaction` is a compaction
-     * the conversation needs. A document without it reads as not waiting.
+     * waiting entry, the oldest entry the model sees after the newest assistant entry and notice, or of the notice
+     * when there is none, and `compaction` is a compaction the conversation needs. A document without it reads as not waiting.
      */
     waitingForModel?: { order: string; compaction?: { instructions?: string } };
 };

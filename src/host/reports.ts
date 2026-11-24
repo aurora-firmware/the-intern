@@ -15,7 +15,7 @@ import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { watchConversationMeta, watchInstance } from "./host_observation.ts";
 import { continueParked } from "./invocation.ts";
 import { ConversationClosedError, inOpenConversation, isConversationClosed } from "./job_section.ts";
-import { handleNoModelEnd, watchNoModelEnds } from "./model_wait.ts";
+import { handleNoModelEnd } from "./model_wait.ts";
 import { type ConversationMeta, conversationMetaDoc, readConversationMeta, type SeatActor } from "./seating.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -161,16 +161,12 @@ async function deliverInSection(host: HarnessHost, invokedId: string): Promise<v
 export async function startReportDelivery(host: HarnessHost, options: { logger: Logger }): Promise<{ stop(): void }> {
     let queue: Promise<void> = Promise.resolve();
     let isStopped = false;
-    // The input submissions of each run that ended with no_model, kept from its commit until its run end is handled.
-    const noModelInputs = new Map<string, string[]>();
     const enqueue = (invokedId: string, isRunEnd = false): void => {
         queue = queue.then(async () => {
             if (isStopped) return;
             try {
                 // A run that ended with no_model is not the end of an agent's work: it sends no report (ADR-014).
-                const inputIds = noModelInputs.get(invokedId);
-                noModelInputs.delete(invokedId);
-                if (isRunEnd && (await handleNoModelEnd(host, invokedId, inputIds))) return;
+                if (isRunEnd && (await handleNoModelEnd(host, invokedId))) return;
                 await deliver(host, invokedId);
             } catch (error) {
                 options.logger.error("report delivery failed", {
@@ -181,9 +177,6 @@ export async function startReportDelivery(host: HarnessHost, options: { logger: 
         });
     };
 
-    const watchNoModel = watchNoModelEnds(host, ({ conversationId, inputIds }) => {
-        noModelInputs.set(conversationId, inputIds);
-    });
     const watch = await watchInstance(host, (event) => {
         if (event.type === "run_finished") enqueue(event.conversationId, true);
     });
@@ -199,7 +192,6 @@ export async function startReportDelivery(host: HarnessHost, options: { logger: 
             isStopped = true;
             watch.stop();
             watchMarks.stop();
-            watchNoModel.stop();
         },
     };
 }
