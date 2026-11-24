@@ -57,9 +57,12 @@ folder layout, each file carrying a format number, and each step of an operation
    each startup step and when it fails or reports ready: its version, pid, `BOB_SERVICE_LABEL` (ADR-012 decision 6),
    the furthest step this version reached since the file was last removed, the failed step with the reason it logged,
    whether the database was refused as unreadable (a newer job schema, or pi-durable data it can't read, S-002 REQ-002
-   step 4), and whether it is ready. An installation command removes the file before it starts a version, and reads
-   it while it waits: an unreadable refusal is REQ-008; any other failure is REQ-007; a furthest step of 4 or more
-   without an unreadable refusal means the database was opened.
+   step 4), whether it is ready, and with the ready write `noDefaultModel`, whether pi agent's settings named no default
+   model at that moment (CR-002, ADR-014 decision 6). A report without the field reads as `false`. An installation
+   command removes the file before it starts a version, and reads it while it waits: an unreadable refusal is REQ-008; any other failure is REQ-007; a furthest step of 4 or more
+   without an unreadable refusal means the database was opened. `bob service install` prints the no-default-model
+   notice when the ready report says `noDefaultModel` (S-010 REQ-004). The field is optional, so the report stays format
+   1 and earlier versions read it (decision 8).
 7. **The upgrades folder.** `<state dir>/upgrades/`, owner-only. A pre-upgrade copy is the folder
    `<UTC time>-<from>-to-<to>/` holding `copy.json` (format, versions, time, the parts it holds, and whether REQ-008's
    "no" keeps it), `database.sqlite`, `config.toml` when the instance had one, and `internal/` with `instructions/`,
