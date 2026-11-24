@@ -1671,16 +1671,19 @@ records the design, and ADR-001 decision 4 lists its fact and its release.
 - **Taking a run's input.** Nothing in the submit paths changes. pi-durable places the input, starts a run, and ends it
   in `prepare` with `no_model`, before the admission hook, so no worker thread is taken and S-004's start is never
   written. The run's submissions settle `unanswered` with reason `no_model`.
-- **The run-end queue.** The agents component's serial run-end queue, where report delivery and the turn-end check
-  already run, sees a generation that failed with `detail.reason: "no_model"` first. If the seat has a model by now
-  that the registry resolves, it releases the conversation at once. If the seat names a model the registry doesn't
-  resolve, the run stays failed as before. If the seat model is `null`, it commits `waitingForModel` and an
-  `intern.notice` entry in one commit, unless the fact is already set. A `no_model` end delivers no report, and the
-  turn-end check counts a set fact as something to wait for. The fact is `{ order, compaction? }`: `order` is read
-  in the fact's commit by a descending entry scan that stops at the newest `pi.assistant` or `intern.notice` entry: the
-  smallest id among the entries passed that carry model messages (the first waiting input, or a handoff's tool
-  result), or the notice's entry id when there is none. `compaction` is `{ instructions? }`. The run-end queue hears
-  run ends through `watchInstance` only; it reads nothing from the commit that ended the run.
+- **The run-end queue.** Report delivery's serial run-end queue (`startReportDelivery` in `src/host/reports.ts`) sees a
+  generation that failed with `detail.reason: "no_model"` first. If the seat has a model by now that the registry
+  resolves, it releases the conversation at once. If the seat names a model the registry doesn't resolve, the run stays
+  failed as before. If the seat model is `null`, it commits `waitingForModel` and an `intern.notice` entry in one
+  commit, unless the fact is already set. A `no_model` end delivers no report. The turn-end rule
+  (`src/jobs/turn_end_rule.ts`) hears run ends in a queue of its own, so the fact may not be committed yet when it
+  checks: it skips a run end whose newest generation failed `no_model`, and counts a set fact as something to wait for.
+  A lead stopped by an abort is checked through `leadStopped`, not as a run end, so it still blocks. The fact is
+  `{ order, compaction? }`: `order` is read in the fact's commit by a descending entry scan that stops at the newest
+  `pi.assistant` or `intern.notice` entry: the smallest id among the entries passed that carry model messages (the first
+  waiting input, or a handoff's tool result), or the notice's entry id when there is none. `compaction` is
+  `{ instructions? }`. The run-end queue hears run ends through `watchInstance` only; it reads nothing from the commit
+  that ended the run.
 - **Compaction with no model.** `compactConversation` (team member) and the Compact mode of a handoff
   (`compactWithNote`) or an invocation check the seat first. With no model they set the fact with `compaction`, and
   the notice for a new period, in their own host commit. They create no compaction task. An invocation then submits
