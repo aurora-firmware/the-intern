@@ -61,13 +61,21 @@ async function indexConversations(ctx: ServiceContext): Promise<Map<string, JobC
     return index;
 }
 
-// Input the lead has not taken: queued in its inbox (a queued write is not input), or held. A held message waits only
-// for a lead parked for reports (S-004 REQ-012), so one beside a park for an answer is older than the block.
+// Input a conversation has not acted on: queued in its inbox (a queued write is not input), or waiting for a model,
+// which the waiting fact records (ADR-014).
+async function hasUnactedInput(ctx: ServiceContext, conversationId: string): Promise<boolean> {
+    const meta = await readConversationMeta(ctx.host, conversationId);
+    if (meta?.waitingForModel !== undefined) return true;
+    return hasQueuedUserInput(ctx.host, conversationId);
+}
+
+// Input the lead has not taken: unacted input (see above), or held. A held message waits only for a lead parked for
+// reports (S-004 REQ-012), so one beside a park for an answer is older than the block.
 async function leadHoldsInput(ctx: ServiceContext, leadId: string): Promise<boolean> {
     const meta = await readConversationMeta(ctx.host, leadId);
     if (meta === undefined) return false;
     if (meta.held.length > 0 && meta.parked?.waitingFor !== "answer") return true;
-    return hasQueuedUserInput(ctx.host, leadId);
+    return hasUnactedInput(ctx, leadId);
 }
 
 // Input the lead took since the job blocked: an input entry after the one the block recorded (ADR-001 decision 4).
@@ -170,11 +178,12 @@ async function applyRule2(deps: JobActionDeps, jobId: string, leadId: string | u
     await parkConversation(ctx.host, leadId, { waitingFor: "answer", continueOn: "each" });
 }
 
-// Whether a Done job's conversations need rule 4: one isn't closed, runs, parks or awaits, or has queued input. A
-// queued write is not input: a closed conversation runs nothing, so it is never placed and needs no repair.
+// Whether a Done job's conversations need rule 4: one isn't closed, runs, parks or awaits, or has queued input or input
+// waiting for a model. A queued write is not input: a closed conversation runs nothing, so it is never placed and needs
+// no repair.
 async function needsClosing(ctx: ServiceContext, known: JobConversations): Promise<boolean> {
     if (known.isUnsettled) return true;
-    for (const id of known.idleClosedIds) if (await hasQueuedUserInput(ctx.host, id)) return true;
+    for (const id of known.idleClosedIds) if (await hasUnactedInput(ctx, id)) return true;
     return false;
 }
 

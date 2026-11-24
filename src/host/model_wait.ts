@@ -104,6 +104,15 @@ async function newestGeneration(host: HarnessHost, conversationId: string) {
 }
 
 /**
+ * Whether the conversation's newest terminal generation failed with `no_model`: its run end is no turn end, because the
+ * agent never ran (ADR-014 decision 2). A conversation with no generation, or one that ended another way, is `false`.
+ */
+export async function endedWithNoModel(host: HarnessHost, conversationId: string): Promise<boolean> {
+    const run = await newestGeneration(host, conversationId);
+    return run !== undefined && failureOf(run).reason === "no_model";
+}
+
+/**
  * Handles the end of a run in the run-end queue (ADR-014 decision 2). Returns `true` when the conversation's run ended
  * with `no_model`, which delivers no report. A seat that has a model now continues at once, and a seat that names a
  * model the registry doesn't resolve stays failed. A seat with no model sets the waiting fact and the notice in one
