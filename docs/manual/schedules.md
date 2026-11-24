@@ -102,14 +102,21 @@ A fire creates no job and is recorded as a skipped fire when any of these holds:
 | The entry has an open scheduled run | "A job of this schedule entry is still open: S-4." The number links to the run. |
 | The workspace's folder no longer exists | The reason names the folder.                              |
 | The service refuses the job, for example because the model is no longer available | The reason names the refusal. |
+| The entry has no model: it names none, and neither its role nor pi agent's settings do | The reason is "no model". |
 
 An open scheduled run is one that is To do or In progress. A Blocked or Done scheduled run doesn't stop a fire: a
 Blocked scheduled run stays Blocked while the next one starts, so the check goes on even when nobody answers.
 
-A To do scheduled run is open too. It waits for a worker thread and starts as soon as one is free. While it is To do,
+A To do scheduled run is open too. It waits for a worker thread and starts as soon as one is free. A scheduled run
+created with no model, as run now can do, waits for a model instead. While it is To do,
 it holds back every fire of its entry, and run now is refused, until someone starts or cancels it. If it stays To do,
 for example because a team member stopped its lead while it waited, send the lead a message to start it, or cancel the
 job. See [Giving, following and answering jobs](jobs.md#statuses-and-actions).
+
+A fire skipped for "no model" isn't made up after you sign in to pi and choose a default model. The entry's next due
+time fires as usual, and the skipped fire uses no job number. An entry that names its own model fires as before, and so
+does an entry whose role has a model of its own. See
+[Models and the pi login](running_the_intern.md#models-and-the-pi-login).
 
 A scheduled run that ends cancelled isn't run again until the next due time.
 
@@ -118,6 +125,12 @@ A scheduled run that ends cancelled isn't run again until the next due time.
 **Run now** on the page, or `bob schedules run <name>`, starts a scheduled run at once. It doesn't change the entry's
 next due time. The Job page and `bob schedules show` mark it as run on demand, and its origin records the way in you
 used.
+
+Run now isn't refused for want of a model. If the entry has no model, as described under
+[Skipped fires](#skipped-fires), it creates the scheduled run's job. The job stays To do with the notice "There is no
+default model: pi agent's settings name none. This conversation waits and runs once a model is available." It runs once
+a model is available, and you send nothing again. Until then it counts as the entry's open scheduled run: it holds back
+every fire of the entry and run now is refused (`busy`, naming the run). Cancel the job to free the entry sooner.
 
 The service refuses it, creates nothing and records no skipped fire when:
 
