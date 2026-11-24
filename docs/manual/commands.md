@@ -77,7 +77,7 @@ A data command stops quietly, with exit 0, when the program that reads its outpu
 | Exit code | Meaning                                                                                              |
 | --------- | ---------------------------------------------------------------------------------------------------- |
 | 0         | The command succeeded.                                                                               |
-| 1         | The service refused or failed. Standard error holds its error code and message, as `conflict: <message>`. |
+| 1         | The service refused or failed. Standard error holds its error code and message, as `conflict: <message>`. `bob chat` without a terminal also exits 1, with the no-default-model notice, when the front desk has no model. |
 | 2         | A usage error: an unknown command or option, a missing or extra argument, or a reserved group. Standard error holds the usage of the group concerned, except for a reserved group, which prints one line saying the group isn't available yet. |
 | 3         | The daemon can't be reached.                                                                         |
 
@@ -119,6 +119,10 @@ goes to standard output. See [Running The Intern](running_the_intern.md) for wha
 
 Print the daemon's status: its phase, versions, start time, instance directories and worker threads in use and
 waiting. With `--json` it prints the answer of `daemon.status`.
+
+While pi's settings name no default model, the text ends with one more line: the daemon's notice, which says where pi
+agent's folder is and how to sign in to pi. The line is gone once a model is named, with no restart of the daemon. The
+`--json` output is unchanged; it holds the notice as the `noDefaultModel` field of the answer.
 
 Options: `--json`, `--runtime-dir <value>`, `--help`.
 
@@ -176,10 +180,19 @@ Talk to the front desk. Its behaviour depends on where your input comes from.
   while Ctrl-D waits, the chat exits 0 and says on standard error that the daemon went away, naming each line not sent
   and each line not answered. Ctrl-C while Ctrl-D waits stops the turn and names the dropped lines as before; the chat
   then exits 0. If Ctrl-C's abort could not reach the daemon before Ctrl-D, the chat says so on standard error.
+  While pi's settings name no default model, the front desk can't answer, unless you set a `model` for the `desk` role
+  in `config.toml`; then it keeps running and none of the rest of this paragraph applies. With no model, the chat prints
+  the daemon's no-default-model notice on standard error and stays open. A line you type is accepted and waits, and the
+  chat shows the `notice: <text>` entry the front desk's history holds. The front desk answers the waiting lines once a
+  model is available, in the same chat, and you send nothing again. Ctrl-C names each line still unanswered as dropped.
 - Without a terminal, such as `echo "what's blocked?" | bob chat`, or with its output redirected, such as
   `bob chat > answers.txt`, it shows no prompt, history or colour. It sends each line of standard input in turn, waits
   for the answer, prints it and exits 0 at the end of input. If the daemon isn't running when the command starts, it
-  exits 3. If the daemon goes away later, it prints a notice on standard error, waits for the daemon and goes on.
+  exits 3. If the daemon goes away later, it prints a notice on standard error, waits for the daemon and goes on. While
+  pi's settings name no default model and the `desk` role has no `model` of its own in `config.toml`, it submits every
+  line without waiting for answers, prints the daemon's no-default-model notice once on standard error, prints nothing
+  on standard output and exits 1. The lines wait in the front desk and are answered once a model is available; send
+  nothing again.
 
 | Option    | Meaning                                                           |
 | --------- | ----------------------------------------------------------------- |
@@ -293,7 +306,8 @@ The command refuses in three cases, each with exit 1 and nothing sent:
 ### `bob jobs follow <job>`
 
 Print the job's current status, then its status changes, edits and worklog entries, and the activity of each of its
-conversations. A line of a conversation starts with the conversation's ID in brackets. It exits 0 when the job is Done,
+conversations. A line of a conversation starts with the conversation's ID in brackets. A conversation that waits for a default model shows a
+`notice: <text>` line. It exits 0 when the job is Done,
 after printing its resolution, or when you press Ctrl-C. A job that is already Done prints its resolution and exits 0.
 If the daemon restarts, it prints a notice on standard error and goes on, and it prints the entries the job's
 conversations wrote while the daemon was away. Worklog entries, edits and status changes made meanwhile are not
