@@ -82,6 +82,7 @@ function formatEntry(entry: TranscriptEntry): string {
         const record = data as { actor: SeatActor; content: string };
         return `report from ${actorText(record.actor)}: ${oneLine(record.content)}`;
     }
+    if (kind === "intern.notice") return `notice: ${oneLine((data as { text?: string }).text ?? "")}`;
     if (kind === "pi.reset") return "reset";
     if (kind === "pi.compaction") return "compaction";
     return flat(kind);
