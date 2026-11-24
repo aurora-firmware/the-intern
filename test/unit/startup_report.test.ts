@@ -25,6 +25,7 @@ function report(overrides: Partial<StartupReport> = {}): StartupReport {
         reason: null,
         unreadableDatabase: false,
         ready: false,
+        noDefaultModel: false,
         ...overrides,
     };
 }
@@ -65,6 +66,27 @@ describe("startup report", () => {
 
     it("reads as undefined when there is no file", async () => {
         assert.equal(await readStartupReport(env.stateDir), undefined);
+    });
+
+    it("reads noDefaultModel true as written", async () => {
+        await writeStartupReport(env.stateDir, report({ ready: true, noDefaultModel: true }));
+
+        assert.equal((await readStartupReport(env.stateDir))?.noDefaultModel, true);
+    });
+
+    it("reads noDefaultModel false as written", async () => {
+        await writeStartupReport(env.stateDir, report({ ready: true, noDefaultModel: false }));
+
+        assert.equal((await readStartupReport(env.stateDir))?.noDefaultModel, false);
+    });
+
+    it("reads a report without noDefaultModel as false", async () => {
+        await writeFile(
+            join(env.stateDir, STARTUP_REPORT_FILE),
+            JSON.stringify({ ...report({ ready: true }), noDefaultModel: undefined }),
+        );
+
+        assert.equal((await readStartupReport(env.stateDir))?.noDefaultModel, false);
     });
 
     it("refuses a newer format, naming the file", async () => {

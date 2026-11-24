@@ -96,6 +96,7 @@ const FAILED_REPORT: StartupReport = {
     reason: "broken",
     unreadableDatabase: false,
     ready: false,
+    noDefaultModel: false,
 };
 
 describe("the ready wait", () => {

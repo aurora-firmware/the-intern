@@ -227,7 +227,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
 
     /** Writes the startup report after the earlier writes; a write that fails is logged and never stops the startup. */
     function reportStartup(
-        update: Pick<Partial<StartupReport>, "ready" | "unreadableDatabase"> & {
+        update: Pick<Partial<StartupReport>, "ready" | "unreadableDatabase" | "noDefaultModel"> & {
             failure?: StartupFailure;
             reachedStep?: number;
         },
@@ -256,6 +256,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
                 reason: update.failure?.message ?? null,
                 unreadableDatabase: update.unreadableDatabase ?? false,
                 ready: update.ready ?? false,
+                ...(update.ready && { noDefaultModel: update.noDefaultModel ?? false }),
             });
         } catch (error) {
             logger.error("could not write the startup report", {
@@ -463,7 +464,11 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
                 await undoAll();
                 return;
             }
-            await reportStartup({ reachedStep: LAST_STEP, ready: true });
+            await reportStartup({
+                reachedStep: LAST_STEP,
+                ready: true,
+                noDefaultModel: modelRuntime?.noDefaultModel() ?? false,
+            });
             if (shutdownInFlight) {
                 await shutdownInFlight;
                 await undoAll();
