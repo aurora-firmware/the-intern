@@ -69,6 +69,7 @@ export async function createSchedulesComponent(options: SchedulesComponentOption
                     try {
                         await startScheduledRun(ctx, options.jobs, entry, {
                             fireTime,
+                            refuseNoModel: true,
                             idempotencyKey: fireKey(entry.name, fireTime),
                         });
                     } catch (error) {

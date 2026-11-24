@@ -10,6 +10,7 @@ import { createProvider } from "@earendil-works/pi-ai/models";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
+import { NOTICE_KIND } from "../../src/host/model_wait.ts";
 import { blockJob } from "../../src/jobs/job_actions.ts";
 import type { NewJob } from "../../src/jobs/job_store.ts";
 import { createJobsComponent } from "../../src/jobs/jobs_component.ts";
@@ -17,7 +18,6 @@ import { localSocketPath } from "../../src/listeners/socket_path.ts";
 import { RoleRefusedError } from "../../src/roles/role_catalog.ts";
 import { localTimeText } from "../../src/schedules/schedule_time.ts";
 import { createSchedulesComponent } from "../../src/schedules/schedules_component.ts";
-import { NOTICE_KIND } from "../../src/host/model_wait.ts";
 import { leadStartFor } from "../../src/service/job_operations.ts";
 import { ServiceError } from "../../src/service/operations.ts";
 import { roleInstructionPath } from "../../src/skills/internal_folder.ts";
@@ -840,7 +840,8 @@ describe("what a scheduled run's lead is told", { timeout: TEST_TIMEOUT_MS }, ()
 });
 
 const NO_MODEL_TIMEOUT_MS = scaled(30_000);
-const nextDay = (time: Date): Date => new Date(time.getFullYear(), time.getMonth(), time.getDate() + 1, time.getHours());
+const nextDay = (time: Date): Date =>
+    new Date(time.getFullYear(), time.getMonth(), time.getDate() + 1, time.getHours());
 
 const untilState = async (check: () => Promise<boolean>, description: string): Promise<void> => {
     const deadline = Date.now() + NO_MODEL_TIMEOUT_MS;
@@ -853,19 +854,34 @@ const untilState = async (check: () => Promise<boolean>, description: string): P
 const reportsNoDefault = async (rig: ScheduleRig): Promise<boolean> =>
     ((await rig.invoke("daemon.status")) as { noDefaultModel: unknown }).noDefaultModel !== null;
 
-/** A rig whose pi agent folder names no default model, once the daemon has noticed. */
+// The fake model is registered in the daemon's first model runtime only, and a changed pi agent folder opens a new
+// one, so a model that must resolve after the change comes from the folder's own `models.json`.
+const LOCAL_MODEL = "local/local-1";
+const MODELS_JSON = {
+    providers: {
+        local: {
+            baseUrl: "http://127.0.0.1:9/v1",
+            api: "openai-completions",
+            apiKey: "x",
+            models: [{ id: "local-1" }],
+        },
+    },
+};
+
+/** A rig whose pi agent folder names no default model but defines `LOCAL_MODEL`, once the daemon has noticed. */
 async function noDefaultRig(configToml: string): Promise<ScheduleRig> {
     const rig = await rigWith(configToml);
+    await writeFile(join(rig.env.piAgentDir, "models.json"), JSON.stringify(MODELS_JSON));
     await writeFile(join(rig.env.piAgentDir, "settings.json"), "{}");
+    await rig.restart();
     await untilState(() => reportsNoDefault(rig), "the daemon to see no default model");
     return rig;
 }
 
 async function nameDefaultModel(rig: ScheduleRig): Promise<void> {
-    const [provider, id] = FAKE_MODEL.split("/");
     await writeFile(
         join(rig.env.piAgentDir, "settings.json"),
-        JSON.stringify({ defaultProvider: provider, defaultModel: id }),
+        JSON.stringify({ defaultProvider: "local", defaultModel: "local-1" }),
     );
     await untilState(async () => !(await reportsNoDefault(rig)), "the daemon to see the default model");
 }
@@ -877,7 +893,7 @@ const jobsOfEntry = async (rig: ScheduleRig, name: string): Promise<JobSummary[]
     (await jobsOf(rig)).filter((job) => job.request.origin.entry === name);
 
 describe("a schedule fire with no model", { timeout: TEST_TIMEOUT_MS }, () => {
-    const twoEntries = `${entryToml("nomodel", "0 2 * * *")}\n${entryToml("named", "0 2 * * *", `model = "${FAKE_MODEL}"\n`)}`;
+    const twoEntries = `${entryToml("nomodel", "0 2 * * *")}\n${entryToml("named", "0 2 * * *", `model = "${LOCAL_MODEL}"\n`)}`;
 
     it("skips the entry with no model, creates the other's job, and makes nothing up later (AC-006.6, AC-013.2)", async () => {
         const rig = await noDefaultRig(twoEntries);
@@ -891,7 +907,7 @@ describe("a schedule fire with no model", { timeout: TEST_TIMEOUT_MS }, () => {
         assert.equal(item?.skip?.openRun, null);
         assert.equal(named.request.origin.entry, "named");
         assert.equal(named.number, "S-1");
-        assert.equal((await leadSeatOf(rig, named)).model, FAKE_MODEL);
+        assert.equal((await leadSeatOf(rig, named)).model, LOCAL_MODEL);
         assert.deepEqual(await jobsOfEntry(rig, "nomodel"), []);
 
         await nameDefaultModel(rig);
@@ -900,7 +916,8 @@ describe("a schedule fire with no model", { timeout: TEST_TIMEOUT_MS }, () => {
         await untilState(async () => (await jobsOfEntry(rig, "nomodel")).length === 1, "the next fire");
         const created = await jobsOfEntry(rig, "nomodel");
         assert.equal(created[0]?.request.origin.fireTime, localTimeText(nextDay(at(2))));
-        assert.equal(created[0]?.number, "S-3");
+        // The named entry's first job is still open, so its next fire is skipped and takes no number.
+        assert.equal(created[0]?.number, "S-2");
         assert.equal((await historyOfEntry(rig, "nomodel")).filter((run) => run.kind === "skip").length, 1);
     });
 
@@ -914,7 +931,7 @@ describe("a schedule fire with no model", { timeout: TEST_TIMEOUT_MS }, () => {
         assert.equal(delta?.type, "schedule_fire_skipped");
         assert.equal(delta?.entry, "nomodel");
         assert.equal(delta?.reason, "no model");
-        assert.equal(delta?.openRun, null);
+        assert.equal(delta?.openRun ?? null, null);
     });
 });
 
