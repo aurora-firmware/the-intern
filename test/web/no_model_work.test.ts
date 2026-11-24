@@ -20,6 +20,7 @@ const BOX = "main .desk textarea";
 const SEND = "main .desk .desk-send";
 const ENTRY = "main .activity-entry";
 const NOTICE_KIND = "intern.notice";
+const STEER_KIND = "intern.steer";
 const NO_DEFAULT = "{}";
 const LOOPBACK_DEFAULT = JSON.stringify({ defaultProvider: "loopback", defaultModel: MODEL_ID });
 
@@ -122,12 +123,12 @@ describe("the Front desk page with no model", () => {
         await page.fill(BOX, "hello desk");
         await page.click(SEND);
 
-        await waitForKinds(page, ["pi.user", NOTICE_KIND]);
-        await waitForText(page, `${ENTRY}[data-kind='pi.user']`, "hello desk");
+        await waitForKinds(page, [STEER_KIND, NOTICE_KIND]);
+        await waitForText(page, `${ENTRY}[data-kind='${STEER_KIND}']`, "hello desk");
         t.assert.equal(await page.locator("main .desk-dropped, main .error").count(), 0);
 
         await nameDefaultModel(rig);
-        await waitForKinds(page, ["pi.user", NOTICE_KIND, "pi.assistant"]);
+        await waitForKinds(page, [STEER_KIND, NOTICE_KIND, "intern.seat", "pi.assistant"]);
         await waitForText(page, ".activity-assistant", "ok");
     });
 });

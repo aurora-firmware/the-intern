@@ -107,13 +107,15 @@ const toolCall = (part: Part) =>
         h(Output, { text: `${part.name ?? "tool"} ${JSON.stringify(part.arguments ?? {})}` }),
     );
 
-type Seating = { role: string; model: string; workspace: string };
+type Seating = { role: string; model: string | null; workspace: string };
+const NO_MODEL_WORDS = "no model";
 
 /** A seat change names the previous and the new role. A conversation's first seat record has no previous and stays undrawn. */
 const seatBoxes = (entry: ActivityEntry): Box[] => {
     const { previous, next } = (entry.data ?? {}) as { previous?: Seating | null; next?: Seating };
     if (previous === null || previous === undefined || next === undefined) return [];
-    const text = `${next.role} on ${next.model} in ${next.workspace}`;
+    const model = next.model === null ? NO_MODEL_WORDS : `on ${next.model}`;
+    const text = `${next.role} ${model} in ${next.workspace}`;
     return [
         {
             kind: "seat",
@@ -172,6 +174,14 @@ const boxesOf = (entry: ActivityEntry): Box[] => {
             const text = heldNotice(entry) ?? (typeof content === "string" ? content : undefined);
             return text === undefined ? [] : [{ kind: "steer", label: "Input", body: [h(Output, { text })] }];
         }
+        case "intern.notice":
+            return [
+                {
+                    kind: "notice",
+                    label: "Notice",
+                    body: [h(Output, { text: String((entry.data as { text?: unknown } | null)?.text ?? "") })],
+                },
+            ];
         case "intern.seat":
             return seatBoxes(entry);
         case "intern.skills":
