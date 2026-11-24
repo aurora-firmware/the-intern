@@ -47,7 +47,7 @@ export type HeldMessage = {
     requestId: string;
     kind?: "intern.report";
 };
-export type SeatSummary = { role: string; model: string; thinkingLevel?: string; workspace: string };
+export type SeatSummary = { role: string; model: string | null; thinkingLevel?: string; workspace: string };
 export type SeatRecord = {
     previous: SeatSummary | null;
     next: SeatSummary;

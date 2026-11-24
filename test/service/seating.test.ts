@@ -31,6 +31,7 @@ import {
     seatWrites,
 } from "../../src/host/seating.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
+import { summarizeSeat } from "../../src/service/conversation_entries.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { scaled } from "../support/time_scale.ts";
 
@@ -208,6 +209,47 @@ describe("createSeatedConversation", () => {
 
         const [record] = (await seatRecordsOf(host, conversationId)) as { next: object }[];
         assert.equal("thinkingLevel" in record.next, false);
+    });
+});
+
+describe("a seat with no model", () => {
+    it("stores a null model in the agent, the document seat and the seat record", async () => {
+        const { open, seatOn } = await createFixture();
+        const host = await open();
+        const seat = seatOn("model-one", { model: null });
+
+        const { conversationId } = await createSeatedConversation(host, {
+            scope: "start-job",
+            key: "k1",
+            job,
+            seat,
+            actor,
+        });
+
+        const agent = await agentOf(host, conversationId);
+        // pi-durable reads an agent given `model: null` back with no model.
+        assert.ok(agent);
+        assert.equal(agent.model, undefined);
+        assert.equal((await readConversationMeta(host, conversationId))?.seat.model, null);
+        const [record] = (await seatRecordsOf(host, conversationId)) as { next: { model: unknown } }[];
+        assert.equal(record.next.model, null);
+    });
+
+    it("reads back as a seat summary with a null model", async () => {
+        const { open, seatOn } = await createFixture();
+        const host = await open();
+        const { conversationId } = await createSeatedConversation(host, {
+            scope: "start-job",
+            key: "k1",
+            job,
+            seat: seatOn("model-one", { model: null }),
+            actor,
+        });
+
+        const meta = await readConversationMeta(host, conversationId);
+
+        assert.ok(meta);
+        assert.equal(summarizeSeat(meta.seat).model, null);
     });
 });
 
