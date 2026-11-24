@@ -101,6 +101,11 @@ function reportLine(data: unknown): string {
     return `report from conversation ${flat(String(actor?.conversationId))} (${flat(String(actor?.role))}): ${oneLine(content ?? "")}`;
 }
 
+function noticeLine(data: unknown): string {
+    const { text } = data as { text?: string };
+    return `notice: ${oneLine(text ?? "")}`;
+}
+
 /** The line for one entry of a conversation, or undefined for an entry the command doesn't report. */
 export function conversationEntryLine(entry: unknown): string | undefined {
     const { kind, data } = entry as { kind?: string; data?: unknown };
@@ -116,6 +121,8 @@ export function conversationEntryLine(entry: unknown): string | undefined {
                 .join("\n");
         case "intern.report":
             return reportLine(data);
+        case "intern.notice":
+            return noticeLine(data);
         default:
             return undefined;
     }
