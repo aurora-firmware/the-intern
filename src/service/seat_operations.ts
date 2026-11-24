@@ -7,6 +7,7 @@
 import type { AgentsComponent } from "../agents/agents_component.ts";
 import type { ServiceContext } from "../daemon/daemon.ts";
 import { ConversationClosedError, inOpenConversation } from "../host/job_section.ts";
+import { releaseWaiting } from "../host/model_wait.ts";
 import { changeSeat, readConversationMeta, resetWithSeat, type SeatActor } from "../host/seating.ts";
 import { RoleRefusedError } from "../roles/role_catalog.ts";
 import type { Seat } from "../roles/role_model.ts";
@@ -100,6 +101,8 @@ export function seatOperations(component: AgentsComponent) {
                               change: { seat, actor, contextMode: "clean" },
                           }),
                 );
+                // A waiting conversation whose seat now has a model runs (ADR-014 decision 4).
+                await releaseWaiting(host, conversationId);
             } catch (error) {
                 if (error instanceof ConversationClosedError) throw new ServiceError("conflict", error.message);
                 throw error;

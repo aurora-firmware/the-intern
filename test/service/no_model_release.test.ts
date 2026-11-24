@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { NOTICE_KIND } from "../../src/host/model_wait.ts";
 import type { JobView } from "../../src/service/job_operations.ts";
+import { ServiceError } from "../../src/service/operations.ts";
 import { type DaemonProcess, type StartDaemonOptions, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { JOB_STATUS_DEADLINE_MS, waitForJobStatus } from "../support/job_status.ts";
@@ -169,5 +170,74 @@ describe("a daemon whose pi agent folder comes to name a default model", () => {
             assert.equal(taken?.previous?.model, null);
             assert.equal(taken?.next.model, FAKE_MODEL);
         }
+    });
+});
+
+describe("a team member who reseats a waiting lead with a role whose model resolves", () => {
+    it("runs the lead on its accepted input with nothing sent again and answers it once", async () => {
+        const rig = await startWithNoDefault();
+        await rig.daemon.invoke("roles.create", { name: "worker", instructions: "Work.", model: FAKE_MODEL });
+        const job = await rig.createWaitingJob(JOB_A_TEXT);
+        assert.equal(await rig.requestsFor(JOB_A_TEXT), 0);
+
+        await rig.daemon.invoke("conversations.seat", { conversationId: job.leadConversation, role: "worker" });
+
+        await until(async () => (await rig.kindsOf(job.leadConversation)).includes("pi.assistant"), "the answer");
+        const kinds = await rig.kindsOf(job.leadConversation);
+        assert.equal(kinds.filter((kind) => kind === "pi.user").length, 1);
+        assert.equal(kinds.filter((kind) => kind === "pi.assistant").length, 1);
+        assert.equal(await rig.requestsFor(JOB_A_TEXT), 1);
+    });
+
+    it("also releases it when the seat change names a reset", async () => {
+        const rig = await startWithNoDefault();
+        await rig.daemon.invoke("roles.create", { name: "worker", instructions: "Work.", model: FAKE_MODEL });
+        const job = await rig.createWaitingJob(JOB_A_TEXT);
+
+        await rig.daemon.invoke("conversations.seat", {
+            conversationId: job.leadConversation,
+            role: "worker",
+            reset: { note: "Start again." },
+        });
+
+        await until(async () => (await rig.kindsOf(job.leadConversation)).includes("pi.assistant"), "the answer");
+        assert.equal(await rig.requestsFor("Start again."), 1);
+    });
+});
+
+describe("a pi agent folder that stops naming a default model", () => {
+    it("seats a new job's lead as bob with no model and leaves the seat that took up the default unchanged", async () => {
+        const rig = await startWithNoDefault();
+        const { conversationId: desk } = (await rig.daemon.invoke("desk.get", {})) as { conversationId: string };
+        // The registry the daemon opens when the folder changes lacks the fake model, so the probe is made before.
+        const probe = await rig.createWaitingJob("probe");
+        await rig.setDefaultModel(true);
+        await until(async () => (await rig.seatRecordsOf(desk)).length === 2, "the desk to take up the default");
+
+        await rig.setDefaultModel(false);
+        // A seat change resolves the seat from the folder as the daemon last read it, so it shows when the daemon noticed.
+        // Until then the registry of the folder's new reading refuses the fake model the folder still names.
+        await until(async () => {
+            try {
+                const seat = (await rig.daemon.invoke("conversations.seat", {
+                    conversationId: probe.leadConversation,
+                    role: "bob",
+                })) as { model: string | null };
+                return seat.model === null;
+            } catch (error) {
+                if (error instanceof ServiceError && error.code === "invalid_input") return false;
+                throw error;
+            }
+        }, "the daemon to notice that the folder names no default model");
+        const job = await rig.createWaitingJob(JOB_B_TEXT);
+
+        const [seatRecord] = await rig.seatRecordsOf(job.leadConversation);
+        assert.equal(seatRecord?.next.role, "bob");
+        assert.equal(seatRecord?.next.model, null);
+        const kinds = (await rig.kindsOf(job.leadConversation)).filter((kind) => kind !== "intern.seat");
+        assert.deepEqual(kinds, ["pi.user", NOTICE_KIND]);
+        const deskSeats = await rig.seatRecordsOf(desk);
+        assert.equal(deskSeats.length, 2);
+        assert.equal(deskSeats[1]?.next.model, FAKE_MODEL);
     });
 });
