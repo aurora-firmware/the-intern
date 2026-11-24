@@ -150,16 +150,23 @@ The file is `config.toml` in the config directory. It is optional: without it, T
 ## Models and the pi login
 
 Models and their logins come from the service account's pi login. The Intern uses it in place: it doesn't copy the
-credentials. Log in with pi as the service account before you start the service.
+credentials. Log in with pi as the service account: run `pi`, sign in with `/login`, and choose a default model with
+`/model` when pi asks for one.
 
 Every other credential The Intern acts with, such as for a wiki, a repository or another host, is the service
 account's, in that account's usual places. The one exception is the account secrets a team member gives The Intern:
 it keeps those, and only those, in the secrets store in the state directory. It copies no other credential into its
 directories.
 
-The service needs a default model to start. At startup it seats the [front desk](front_desk.md) as the `desk` role with
-that role's defaults, so it needs the default model of the pi login or a `model` set for `desk` in `config.toml`. When
-neither exists, the service refuses to start and names the `desk` role and its model.
+The service starts and is reachable without a pi login. Until pi's settings name a default model, no agent of a role
+without its own model runs. That includes the [front desk](front_desk.md), which runs as the `desk` role with that
+role's defaults, unless you set a `model` for `desk` in `config.toml`. A message you send and a job you start are
+accepted and wait with a notice that there is no default model, and a schedule fire with no model is skipped. A role
+with a `model` of its own keeps running. `bob status`, the Status page and a banner on every web page say there is no
+default model.
+
+Sign in to fix it. The service notices the sign-in within 30 seconds, with no restart, and the waiting work runs in
+the order the service accepted it.
 
 The service reads the pi agent folder, `~/.pi/agent` by default. Set `PI_CODING_AGENT_DIR` in the service's environment
 to use another folder.
