@@ -39,12 +39,16 @@ gives every seat with no model pi agent's default by an ordinary seat write when
    continuation at once (decision 4). A seat that names a model the registry doesn't resolve is not "no model" (S-001
    Definitions): its run stays failed as before, with no fact. Otherwise one host commit writes `waitingForModel` into
    the conversation's `intern.conversation` document and appends the no-model notice. When the fact is already set, the
-   commit changes nothing, so the notice is written once per waiting period. The fact holds `order`: the id of the
-   period's first waiting input submission, or of the notice when the period began without one. pi-durable mints every
-   id from one sequence, so `order` follows acceptance across conversations. It may also hold `compaction`, a compaction
-   the conversation needs, with its instructions. A run end with `no_model` is not the end of an agent's work: it sends
-   no report (S-001 REQ-019) and is no turn end for S-004 REQ-008, and a conversation with the fact set has something to
-   wait for.
+   commit changes nothing, so the notice is written once per waiting period. The fact holds `order`, read from the
+   transcript in the fact's commit: the id of the period's first waiting entry, the oldest entry the model sees after
+   the conversation's newest assistant entry and newest no-model notice, or the notice's own id when there is none.
+   That entry is a waiting input, which pi-durable places in the commit that accepts it into an idle conversation, or
+   a handoff's tool result. pi-durable mints every id from one sequence, so `order` follows acceptance across
+   conversations. It is not read from the input submissions, which a host commit can't find by conversation, nor
+   taken from the notice alone, whose id follows when each run end is handled rather than when its input was
+   accepted. It may also hold `compaction`, a compaction the conversation needs, with its instructions. A run end
+   with `no_model` is not the end of an agent's work: it sends no report (S-001 REQ-019) and is no turn end for S-004
+   REQ-008, and a conversation with the fact set has something to wait for.
 3. **Compaction waits.** A team member's compaction, or the Compact context mode of a handoff or an invocation whose
    seat has no model, creates no compaction task. It sets the fact with `compaction` (and the notice, for a new
    period). The handoff tool then reports success, and the run ends as decision 1 says. Automatic compaction only runs

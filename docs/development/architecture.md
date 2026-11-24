@@ -1676,9 +1676,11 @@ records the design, and ADR-001 decision 4 lists its fact and its release.
   that the registry resolves, it releases the conversation at once. If the seat names a model the registry doesn't
   resolve, the run stays failed as before. If the seat model is `null`, it commits `waitingForModel` and an
   `intern.notice` entry in one commit, unless the fact is already set. A `no_model` end delivers no report, and the
-  turn-end check counts a set fact as something to wait for. The fact is `{ order, compaction? }`: `order` is the
-  smallest input submission id of the failed run, or the notice's entry id when the run had none, and `compaction` is
-  `{ instructions? }`.
+  turn-end check counts a set fact as something to wait for. The fact is `{ order, compaction? }`: `order` is read
+  in the fact's commit by a descending entry scan that stops at the newest `pi.assistant` or `intern.notice` entry: the
+  smallest id among the entries passed that carry model messages (the first waiting input, or a handoff's tool
+  result), or the notice's entry id when there is none. `compaction` is `{ instructions? }`. The run-end queue hears
+  run ends through `watchInstance` only; it reads nothing from the commit that ended the run.
 - **Compaction with no model.** `compactConversation` (team member) and the Compact mode of a handoff
   (`compactWithNote`) or an invocation check the seat first. With no model they set the fact with `compaction`, and
   the notice for a new period, in their own host commit. They create no compaction task. An invocation then submits
