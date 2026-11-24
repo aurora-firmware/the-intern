@@ -250,9 +250,9 @@ Clients read these entry kinds through `conversations.entries` and the conversat
   sends to a job's conversation names the front desk as its sender (REQ-023).
 - **`intern.skills`**, a change to the agent's enabled set: actor, skill, enabled or disabled, and the new set (S-008
   REQ-006). It is not part of the model's context.
-- **The no-model notice**, written once per waiting period, after the period's first waiting input: it says that
-  there is no default model (REQ-027). It is not part of the model's context. It stays in the transcript once a model
-  is available. Its entry kind is fixed in Feature Architecture (Open Questions).
+- **`intern.notice`**, the no-model notice, written once per waiting period, after the period's first waiting input:
+  it says that there is no default model (REQ-027; ADR-014 decision 8). It is not part of the model's context. It stays
+  in the transcript once a model is available.
 
 Each assistant entry is returned with the seat that produced it (REQ-007).
 
@@ -625,8 +625,8 @@ model turn finish with the old seat and runs the next turn with the new one").
 After a seat is applied, every model turn in that conversation MUST:
 
 - use the seat's model and thinking level. A seat with no model (REQ-003) takes no model turn until pi agent's settings
-  name a default model; from then on its model turns use that default model (REQ-027). How the seat takes it up, and
-  whether that shows as a seat record (REQ-007), is decided in Feature Architecture (Open Questions)
+  name a default model. The daemon then gives the seat that default model with an ordinary seat change, recorded with
+  the daemon as actor (REQ-007, REQ-027), and its model turns use it from then on
 - see the common prompt and its role's instructions as their files hold them at that model request, and the listing of
   the agent's enabled skills (S-008 REQ-006, REQ-007)
 - be offered exactly the role's tools, the coordination capabilities and the job tools (S-004 REQ-013) in a job's
@@ -737,9 +737,11 @@ human confirms it. A handoff in a job's lead conversation passes the lead to the
 
 Every seat change MUST show in the transcript. The record names:
 
-- the previous seat and the new seat (role, model, thinking level, workspace)
+- the previous seat and the new seat (role, model, thinking level, workspace); a seat with no model (REQ-003) shows
+  its model as `null`
 - the actor: a team member (with the way in they used), the agent that handed off (with its role), a job source, or
-  the daemon, for input it sends under a job's rules (S-004 REQ-008) and for the front desk's first seat (REQ-021)
+  the daemon, for input it sends under a job's rules (S-004 REQ-008), for the front desk's first seat (REQ-021) and
+  for taking up pi agent's default model in a seat with no model (REQ-027)
 - for a handoff, the context mode, and the handoff note when there is one
 
 Every assistant message MUST be attributed to the seat that produced it.
@@ -789,7 +791,8 @@ defaults, and a job prompt for its part.
   and ends its own run; the operation that does it belongs to the Jobs spec, and this spec delivers the capability it
   calls. A closed conversation can't be aborted (REQ-026).
 - An abort leaves no aborted conversation parked for reports or waiting for a report. Its held messages (REQ-020) are
-  withdrawn, as an abort withdraws queued input, and so is input waiting for a model (REQ-027). Whether its invoking
+  withdrawn, as an abort withdraws queued input, and it ends a wait for a model (REQ-027), so its waiting input is
+  not answered when a model is available. Whether its invoking
   conversation gets a report follows REQ-019. The
   one exception is the abort after a failed close (REQ-026), which clears nothing itself: S-004 REQ-018 rule 4 clears
   these at the next start.
@@ -1223,9 +1226,10 @@ REQ-012, REQ-014), without the daemon interrupting any running work. The command
 command-line spec (product owner ruling, 2026-10-31).
 
 - list all conversations with id, job, whether it is the job's lead conversation, whether it is the front desk,
-  seat (role, model, thinking level, workspace), enabled set (S-008 REQ-006), origin (job source, invoking
-  conversation or front desk), status (running, idle, parked, waiting for a worker thread or closed, REQ-026) and last
-  activity. A conversation waiting for a model lists as idle (REQ-027)
+  seat (role, model, thinking level, workspace; the model reads as `null` for a seat with no model), enabled set
+  (S-008 REQ-006), origin (job source, invoking conversation or front desk), status (running, idle, parked, waiting
+  for a worker thread or closed, REQ-026) and last activity. A conversation waiting for a model lists as idle
+  (REQ-027), after briefly listing as running while its run ends
 - list the conversations of a job
 - show the conversations a conversation invoked, recursively
 - read a transcript with seat records and attribution (REQ-007), including entries from before a reset
@@ -1533,9 +1537,10 @@ closed conversation never works again. Its transcript stays as the record of wha
 which a team member or an agent of any job may create and may relate to the first, as it chooses (S-004 REQ-009).
 
 - Closing is part of the job abort (REQ-008): every conversation of the job, whether running, idle, parked or waiting
-  for a worker thread, or waiting for a model (REQ-027), is aborted, with no report sent (REQ-019). Its queued input,
-  input waiting for a model and queued writes are removed and its held messages dropped, and it is marked closed, all
-  as one change. Each removed item settles `unanswered` with reason
+  for a worker thread, or waiting for a model (REQ-027), is aborted, with no report sent (REQ-019). Its queued input
+  and queued writes are removed, its held messages dropped and its wait for a model ended, and it is marked closed, all
+  as one change. Input that waited for a model is already settled `unanswered` with reason `no_model` (REQ-027), keeps
+  that reason and stays in the transcript. Each removed item settles `unanswered` with reason
   `closed`. A held message has no submission (S-002 REQ-012), so it settles nothing. A compaction still running in the
   conversation is aborted after that change; a summary it had already finished may follow the mark, and no model turn
   follows it. That covers the lead conversation and every conversation invoked within the job, at any depth. A lead that
@@ -1678,7 +1683,9 @@ details of the same day):
 
 - Input that reaches it, from a team member, the front desk, a job source or an agent, is accepted into its
   transcript as for any idle conversation. So is the continuation of a handoff to a seat with no model (REQ-006), and
-  the job prompt of an invoked agent with no model (REQ-008).
+  the job prompt of an invoked agent with no model (REQ-008). Its submission settles `unanswered` with reason
+  `no_model` (S-002 REQ-012); the input stays in the transcript and is answered once a model is available, with
+  nothing sent again. While that run ends the conversation lists briefly as running, then as idle.
 - A compaction it needs, whether a team member's compaction, the Compact context mode or automatic compaction, waits
   with its input like any other work, and is not refused.
 - It is waiting for a model: it stays idle, not parked, doesn't fail and holds no worker thread (REQ-010, REQ-014), and
@@ -1686,27 +1693,29 @@ details of the same day):
 - Its transcript shows the no-model notice once per waiting period, after the period's first waiting input. Later
   input in the same period adds no second notice, and neither does a daemon stop, kill or restart.
 - Its waiting work survives a daemon stop, a kill and a restart, and is still waiting afterwards. An abort of the
-  conversation withdraws its waiting input, as it withdraws queued input (REQ-008), and the close of its job drops it
-  (REQ-026).
+  conversation ends its wait, so its waiting input is not answered when a model is available (REQ-008), and the close
+  of its job ends the wait too (REQ-026).
 
 When pi agent's settings come to name a default model while the daemon runs, such as when a team member signs in to pi,
 the daemon SHALL notice it within 30 seconds of the change, without a restart and without writing into the pi agent
-folder (S-002 REQ-018). Every conversation waiting for a model SHALL then run, the conversations in the order their
-input was accepted, taking worker threads like other work (REQ-010), and nobody has to send anything again. A no-model
-notice already in a transcript stays there, because a transcript is append-only.
+folder (S-002 REQ-018). The daemon SHALL then give every open conversation whose seat has no model that default model,
+with an ordinary seat change recorded with the daemon as actor (REQ-005, REQ-007; ADR-014 decision 5). Every
+conversation waiting for a model SHALL then run, the conversations in the order their input was accepted, taking worker
+threads like other work (REQ-010), and nobody has to send anything again. A no-model notice already in a transcript
+stays there, because a transcript is append-only.
 
 When pi agent's settings stop naming a default model while the daemon runs, the daemon SHALL notice it within 30
 seconds of the change, and a role with no configured model has no model again (REQ-003). A run that has already
 started ends as runs do today. New work for a seat that has no model waits with the notice and starts a new waiting
-period. What a seat that took up pi agent's default does when it disappears is decided in Feature Architecture (Open
-Questions).
+period. A conversation whose seat already took up pi agent's default keeps it, like any seat value (AC-003.7); only
+seats resolved after the default disappears have no model (product owner, 2026-11-24, accepting ADR-014 decision 5).
 
 A conversation waiting for a model SHALL also run, with nothing sent again, once a team member's seat change (REQ-004)
 or reset with a new seat (REQ-011) gives it a model. A change to a role's default model doesn't reach an agent already
 seated (AC-003.7), so it doesn't end a waiting period.
 
-How the daemon notices the default model, and where waiting input is held, are decided in Feature Architecture (Open
-Questions); neither changes what this requirement states.
+The daemon reads the pi agent folder every 10 seconds to notice the change (ADR-014 decision 6), and waiting input is
+held in the transcript itself (ADR-014 decision 1).
 
 A seat that names a model, through an override or a role default, runs as before whether or not pi agent's settings
 name a default model. A login that names a model but fails is outside this requirement: its model requests fail with an
@@ -1739,7 +1748,8 @@ error the agent run shows (S-002 Configuration Requirements, pi agent folder).
 - **When:** while the daemon runs, the pi agent settings come to name the fake model as the default
 - **Then:** within 30 seconds of the change, without a restart and with nothing sent again, the front desk, the lead of
   A and the lead of B start running in that order, each input is answered once, and the no-model notices already in
-  the three transcripts stay
+  the three transcripts stay; each of the three has a seat record naming the daemon as actor and the fake model as
+  its new model
 
 **Verification:** test — a service test on the fake model with one worker thread, changing the isolated pi agent
 folder while the daemon runs.
@@ -1975,17 +1985,17 @@ behaviour. Deciding it is a scope amendment of this spec.
   the "after every report" behaviour exists in the host and is tested. Resolved when the choice and who makes it are
   decided.
 
-The others are design questions CR-002 leaves to its Feature Architecture. Owner: Architect. Each is resolved in the
-Feature Architecture of CR-002, and any wording it needs here is applied as a Spec finding on CR-002's planning branch.
+The four design questions CR-002 left to its Feature Architecture are resolved, and the requirements above state the
+answers:
 
-- **How a seat with no model takes up pi agent's default model, and what a seat that took up pi agent's default does
-  when it disappears** (REQ-005, REQ-007, REQ-027): whether the daemon reseats with a seat record, or the seat follows
-  pi agent's default. REQ-007 follows the choice.
-- **How the daemon notices a default model that appears or disappears while it runs** (REQ-027; S-002 REQ-018;
-  ADR-002 decision 5), reading the pi agent folder only, within the 30 seconds REQ-027 sets.
-- **Where input waiting for a model is held** (REQ-010, REQ-027; S-002 REQ-010; ADR-001 decision 4), so that no run
-  takes it before a model exists.
-- **The entry kind of the no-model notice** (Interfaces, transcript entries; ADR-004).
+- **Resolved by ADR-014 decision 5. How a seat with no model takes up pi agent's default model, and what a seat that
+  took up the default does when it disappears:** an ordinary seat change with the daemon as actor (REQ-005, REQ-007);
+  a seat that took up the default keeps it (REQ-027).
+- **Resolved by ADR-014 decision 6. How the daemon notices a default model that appears or disappears:** it reads the
+  pi agent folder every 10 seconds (REQ-027).
+- **Resolved by ADR-014 decision 1 and the ADR-001 decision 4 amendment. Where input waiting for a model is held:** in
+  the transcript, with its submission settled `no_model` (REQ-027).
+- **Resolved by ADR-014 decision 8. The entry kind of the no-model notice:** `intern.notice` (Interfaces).
 
 ## Amendment Log
 
@@ -2025,3 +2035,4 @@ Feature Architecture of CR-002, and any wording it needs here is applied as a Sp
 | 2026-11-21 | spec-truth reconciliation — PASS | v0.19 confirmed after B-053: the unknown-role refusal of handoff and invoke also lists the catalog's roles, still an error result with the seat unchanged and nothing created (REQ-006, AC-006.4, REQ-008); the new triage instruction text stays within REQ-002 | none |
 | 2026-11-24 | v0.20. Work without a model (CR-002): when no override, no role default and no pi agent default names a model, a role or seat has no model, which doesn't stop startup, refuses nothing and loses nothing. New REQ-027 with AC-027.1 to AC-027.5: a conversation with no model runs no model turn, accepts its input, stays idle with the no-model notice in its transcript and holds no worker thread; its waiting work survives a restart; once pi agent's settings name a default model, the running daemon notices it and the waiting conversations run in the order their input was accepted, with nothing sent again. Changed: REQ-003 and AC-003.5 (a role with no model can be seated and doesn't stop startup); REQ-005 (a seat with no model takes no model turn until a default model appears, then uses it); REQ-010 and new AC-010.3 (waiting for a model holds no worker thread and holds up nothing); REQ-012 and new AC-012.5 (a lead with no model is created and waits); REQ-013 and new AC-013.2 (a fire with no model starts nothing and is skipped by S-007); REQ-016 (a conversation waiting for a model lists as idle); REQ-021 and AC-021.1 (the front desk is created with no model). Definitions (No model, Waiting for a model, No-model notice; pi agent's default), Users and Journeys (journey 8), Interfaces (the no-model notice entry; Consumed), Workflow, Configuration Requirements (Roles, Missing), Assumptions and Dependencies, Success Criterion 8, Implementation Order (phase 8) and Open Questions (four questions for CR-002's Feature Architecture, including how REQ-005 and REQ-007 take up the default model). No identifier retired. | CR-002, approved by the product owner on 2026-11-24, with the answers to the Architect's Q1 and Q2 of that day. | CR-002's tasks |
 | 2026-11-24 | v0.20, same version, revised on the planning branch after the Architect's consistency review (corrections C1 to C12) and CR-002's settled details of the same day. Definitions: new Waiting period; No model includes a default model that disappears while the daemon runs; the No-model notice says there is no default model and is written once per waiting period. Interfaces: the notice is written once per waiting period and is not part of the model's context; Consumed: a default model that appears or disappears is noticed within 30 seconds. REQ-003: the same no-model rule when the default disappears. REQ-006: a handoff to a seat with no model gives the worker thread back and waits. REQ-008: an invoked agent with no model waits and its invoker keeps awaiting its report; an abort withdraws waiting input. REQ-014: a conversation waiting for a model is idle, not parked. REQ-026: the close drops waiting input. REQ-027: credits the settled details; compaction a no-model conversation needs waits, not refused; one notice per waiting period; abort and close; noticing within 30 seconds both ways; a disappearing default model; a team member's seat change or reset with a new seat ends the wait. AC-027.1, AC-027.3 and AC-027.4 changed; new AC-027.6 and AC-027.7. Assumptions: confirmed in pi-coding-agent 1.4.0 with exceptions, where signing in includes choosing a default model with `/model`. Open Questions: the first CR-002 question also covers a seat that took up the default when it disappears. No identifier retired. | Architect's consistency review of 2026-11-24, C1 to C12; product owner, CR-002 settled details, 2026-11-24. | CR-002's tasks |
+| 2026-11-24 | v0.20, same version, revised on the planning branch with CR-002's Feature Architecture (ADR-014; Spec findings SF1 to SF5) and the product owner's acceptance of its rule the same day. REQ-005, REQ-007 and REQ-027: once pi agent's settings name a default model, the daemon gives every open seat with no model that model by an ordinary seat change recorded with the daemon as actor, a new actor in REQ-007; a seat that took up the default keeps it when the default disappears, and only seats resolved afterwards have no model. REQ-007, REQ-016: a seat with no model shows its model as `null`. Interfaces: the notice is the entry `intern.notice`. REQ-027: waiting input settles `unanswered` with reason `no_model`, stays in the transcript and is answered once a model is available, the conversation briefly listing as running; the folder is read every 10 seconds and waiting input is held in the transcript. REQ-008 and REQ-026: an abort or a close ends the wait instead of withdrawing input; waiting input keeps reason `no_model`. AC-027.3: the seat records of the take-up. Open Questions: the four CR-002 questions are resolved. No identifier added or retired. | CR-002 Feature Architecture, ADR-014 and the ADR-001 decision 4 amendment, 2026-11-24; product owner's acceptance of ADR-014 decision 5. | CR-002's tasks |
