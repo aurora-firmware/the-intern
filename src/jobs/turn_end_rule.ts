@@ -6,6 +6,7 @@
 import { hasQueuedUserInput, hasSubmissionWithRequestId, isStopMarkLive } from "../host/conversation_control.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { watchInstance } from "../host/host_observation.ts";
+import { endedWithNoModel } from "../host/model_wait.ts";
 import { readConversationMeta } from "../host/seating.ts";
 import { type SteerInput, steerConversation } from "../host/steering.ts";
 import { leadConversationOf } from "../service/job_operations.ts";
@@ -19,13 +20,14 @@ export const REMINDER_TEXT =
     "Your turn ended, but the job is still In progress. Continue the work, block the job with block_job if you " +
     "cannot go on, or complete it with complete_job.";
 
-// The lead waits for something while it is parked, awaits invoked conversations, runs, or has input queued; an
-// invoked conversation of the job that runs is work the lead is waiting on too. A queued entry write, such as a reset
-// that an abort left behind, is not input the lead will act on, so it is not waited for.
+// The lead waits for something while it is parked, awaits invoked conversations, runs, has input queued, or waits for a
+// model (ADR-014 decision 2); an invoked conversation of the job that runs is work the lead is waiting on too. A queued
+// entry write, such as a reset that an abort left behind, is not input the lead will act on, so it is not waited for.
 async function isLeadWaiting(deps: JobActionDeps, jobId: string, leadId: string): Promise<boolean> {
     const { host } = deps.ctx;
     const meta = await readConversationMeta(host, leadId);
     if (meta === undefined || meta.parked !== null || meta.awaiting.length > 0) return true;
+    if (meta.waitingForModel !== undefined) return true;
     if ((await host.conversationInfo(leadId))?.busy !== false) return true;
     if (await hasQueuedUserInput(host, leadId)) return true;
     for (const { id, busy } of await host.listConversations()) {
@@ -97,7 +99,8 @@ export async function checkTurnEnd(deps: JobActionDeps, jobId: string, knownLead
 }
 
 /**
- * Checks the job of each lead conversation whose run finishes, and of another conversation of a job whose lead is
+ * Checks the job of each lead conversation whose run finishes, unless the run ended with `no_model`, which is no turn
+ * end (ADR-014 decision 2), and of another conversation of a job whose lead is
  * stopped, and of each lead handed to `leadStopped`, one at a time in the order the runs finished. `ready`
  * settles once the watch is in place, so runs that resume after a restart are seen.
  */
@@ -109,8 +112,9 @@ export function startTurnEndRule(deps: JobActionDeps): {
     const { ctx, options } = deps;
     let queue: Promise<void> = Promise.resolve();
     let isStopped = false;
-    const check = async (conversationId: string): Promise<void> => {
+    const check = async (conversationId: string, isRunEnd: boolean): Promise<void> => {
         if (isStopped) return;
+        if (isRunEnd && (await endedWithNoModel(ctx.host, conversationId))) return;
         const meta = await readConversationMeta(ctx.host, conversationId);
         if (meta === undefined || meta.jobId === null) return;
         // The run of another conversation of the job matters only when its lead is stopped, which nothing else ends.
@@ -118,9 +122,9 @@ export function startTurnEndRule(deps: JobActionDeps): {
         await options.afterWrite?.("turn-ended", meta.jobId);
         await checkTurnEnd(deps, meta.jobId);
     };
-    const enqueue = (conversationId: string): void => {
+    const enqueue = (conversationId: string, isRunEnd: boolean): void => {
         queue = queue.then(() =>
-            check(conversationId).catch((error: unknown) => {
+            check(conversationId, isRunEnd).catch((error: unknown) => {
                 options.logger.error("turn-end check failed", {
                     conversation: conversationId,
                     cause: error instanceof Error ? error.message : String(error),
@@ -129,7 +133,7 @@ export function startTurnEndRule(deps: JobActionDeps): {
         );
     };
     const watching = watchInstance(ctx.host, (event) => {
-        if (event.type === "run_finished") enqueue(event.conversationId);
+        if (event.type === "run_finished") enqueue(event.conversationId, true);
     });
     return {
         stop() {
@@ -137,6 +141,6 @@ export function startTurnEndRule(deps: JobActionDeps): {
             watching.then((watch) => watch.stop()).catch(() => undefined);
         },
         ready: watching.then(() => undefined),
-        leadStopped: enqueue,
+        leadStopped: (leadId) => enqueue(leadId, false),
     };
 }
