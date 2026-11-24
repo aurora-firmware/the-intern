@@ -192,6 +192,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
     const startedComponents: DaemonComponent[] = [];
     let phase: DaemonPhase = "starting";
     let admission: Admission | undefined;
+    let modelRuntime: InternModels | undefined;
     let isHostClosedByStorageFailure = false;
     const serviceLabel = options.env.BOB_SERVICE_LABEL || null;
     let furthestStep = 0;
@@ -199,6 +200,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
     let reportWrites: Promise<void> = Promise.resolve();
 
     const { dirs, failure: pathFailure } = resolveDirs(options);
+    const piAgentDir = resolvePiAgentDir(options.env);
     const status: StatusSources = {
         phase: () => phase,
         startedAt,
@@ -206,6 +208,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         dirs,
         admission: () => admission?.state() ?? { capacity: workerThreadCount, active: [], waiting: [] },
         mailAccounts: () => options.accountStatus?.list(MAIL_OWNER) ?? [],
+        noDefaultModel: () => (modelRuntime?.noDefaultModel() ? { piAgentDir } : null),
     };
     // The operations are rejected by phase until ready, so the context is complete by the time any of them runs.
     const context = { status, dirs, logger } as ServiceContext;
@@ -291,10 +294,11 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         jobStore: JobStore;
     }> {
         const models = await createModelRuntime({
-            piAgentDir: resolvePiAgentDir(options.env),
+            piAgentDir,
             onReadError: (error) => logger.error("could not read the pi agent folder again", { cause: error.message }),
         });
         undoStack.push(() => models.close());
+        modelRuntime = models;
         const gate = createAdmissionGate();
         const host = await openHarnessHost({
             databaseFile: dirs.databaseFile,
