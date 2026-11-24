@@ -5,10 +5,10 @@
  */
 import { browserTransport } from "./client/browser_transport.ts";
 import { type Client, ClientError, createClient, UnreachableError } from "./client/client.ts";
-import type { TabMessage, WorkerMessage } from "./feed_hub.ts";
+import type { NoDefaultModelNotice, TabMessage, WorkerMessage } from "./feed_hub.ts";
 
-/** What the worker tells a tab other than the connection state. */
-export type FeedEvent = Exclude<WorkerMessage, { type: "connection" }>;
+/** What the worker tells a tab other than the connection state and the status. */
+export type FeedEvent = Exclude<WorkerMessage, { type: "connection" | "status" }>;
 
 export type FeedConnection = {
     /** Asks the worker for these conversations' streams; the call replaces the tab's earlier set. */
@@ -16,6 +16,8 @@ export type FeedConnection = {
     onEvent(listener: (event: FeedEvent) => void): void;
     /** The listener hears the current state at once when the worker has told it, and each change after. */
     onConnection(listener: (isConnected: boolean) => void): void;
+    /** The listener hears the current notice at once, and each change after, from the worker's status checks. */
+    onNoDefaultModel(listener: (notice: NoDefaultModelNotice | null) => void): void;
     /** Fires on each new instance snapshot, after a restart or a `lagging` end, so a page reads its records again. */
     onInstanceSnapshot(listener: (snapshot: unknown) => void): void;
 };
@@ -54,8 +56,12 @@ export function pageClient(): Client {
     return sharedClient;
 }
 
-const internVersion = async (): Promise<string> =>
-    ((await pageClient().invoke("daemon.status")) as { versions: { intern: string } }).versions.intern;
+type ServiceStatus = { versions: { intern: string }; noDefaultModel?: NoDefaultModelNotice | null };
+
+const readServiceStatus = async (): Promise<ServiceStatus> =>
+    (await pageClient().invoke("daemon.status")) as ServiceStatus;
+
+const internVersion = async (): Promise<string> => (await readServiceStatus()).versions.intern;
 
 /** Reloads the tab when the service now runs another version than the one that served this page. */
 async function reloadOnNewVersion(loadedVersion: string): Promise<void> {
@@ -68,7 +74,8 @@ async function reloadOnNewVersion(loadedVersion: string): Promise<void> {
 
 /** Connects to the shared worker, loaded with the service's version in its address, and asks it for instance events. */
 export async function connectFeed(): Promise<FeedConnection> {
-    const loadedVersion = await internVersion();
+    const firstStatus = await readServiceStatus();
+    const loadedVersion = firstStatus.versions.intern;
     const worker = new SharedWorker(`${WORKER_URL}?v=${encodeURIComponent(loadedVersion)}`, { type: "module" });
     const port = worker.port;
     const probeClient = createClient(browserTransport(location.origin));
@@ -78,7 +85,9 @@ export async function connectFeed(): Promise<FeedConnection> {
     const connectionListeners: ((isConnected: boolean) => void)[] = [];
     const snapshotListeners: ((snapshot: unknown) => void)[] = [];
     let followed: readonly string[] = [];
+    const noticeListeners: ((notice: NoDefaultModelNotice | null) => void)[] = [];
     let isConnected: boolean | undefined;
+    let notice: NoDefaultModelNotice | null = firstStatus.noDefaultModel ?? null;
 
     // The tab's own state: the worker's word, or at once a failure of the tab's own call (see `probeUntilAnswered`).
     const setConnected = (value: boolean) => {
@@ -116,6 +125,12 @@ export async function connectFeed(): Promise<FeedConnection> {
             setConnected(data.isConnected);
             return;
         }
+        if (data.type === "status") {
+            if (JSON.stringify(data.noDefaultModel) === JSON.stringify(notice)) return;
+            notice = data.noDefaultModel;
+            for (const listener of noticeListeners) listener(notice);
+            return;
+        }
         for (const listener of eventListeners) listener(data);
         if (data.type === "instance-snapshot") for (const listener of snapshotListeners) listener(data.snapshot);
     };
@@ -134,6 +149,10 @@ export async function connectFeed(): Promise<FeedConnection> {
         onConnection(listener) {
             connectionListeners.push(listener);
             if (isConnected !== undefined) listener(isConnected);
+        },
+        onNoDefaultModel(listener) {
+            noticeListeners.push(listener);
+            listener(notice);
         },
         onInstanceSnapshot: (listener) => void snapshotListeners.push(listener),
     };
