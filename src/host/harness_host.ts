@@ -100,7 +100,8 @@ export type HarnessHost = {
 
 export type HarnessHostOptions = {
     databaseFile: string;
-    models: Models;
+    /** The models, or a function the harness calls at each use, so a later request can get a new runtime. */
+    models: Models | (() => Models);
     harnessSettings: HarnessSettingsMapping;
     extensions: readonly Extension[];
     /** Installed but not in the default selection; a conversation selects them with `configure`. */
