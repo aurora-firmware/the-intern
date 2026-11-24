@@ -68,8 +68,8 @@ exceptions in decision 4.
    **First bounded exception: the-intern's own facts about a conversation, and redelivery from them.**
    - The facts are held messages (`held`), awaiting links (`awaiting`), the parked state (`parked`), the abort mark
      (`aborted`), the stop mark (`stopped`), the closed mark (`closed`), the enabled set (`enabledSkills`) and the
-     waiting fact (`waitingForModel`, ADR-014) in the conversation's `intern.conversation` document, and creation keys in `intern.invocations` and `intern.idempotency`,
-     the front desk's fixed key included. Each is written in the commit of the change it describes.
+     waiting fact (`waitingForModel`, ADR-014) in the conversation's `intern.conversation` document, and creation keys
+     in `intern.invocations` and `intern.idempotency`, the front desk's fixed key included. Each is written in the commit of the change it describes.
    - The abort mark records that an invoker is owed an "aborted" report. Only a lone abort of an awaited invoked
      conversation sets it, never a cascade or a job abort (S-001 REQ-019).
    - The stop mark holds the ID of the lead's newest transcript entry when a team member's abort, never a cascade,
