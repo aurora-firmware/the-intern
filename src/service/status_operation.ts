@@ -16,7 +16,11 @@ export type StatusSources = {
     admission(): AdmissionSnapshot;
     /** The mail accounts' status views; a daemon without an account status hub has none. */
     mailAccounts?(): AccountStatusView[];
+    /** `null` until the model runtime opens and while pi agent's settings name a default model. */
+    noDefaultModel?(): { piAgentDir: string } | null;
 };
+
+export type NoDefaultModelStatus = { piAgentDir: string; message: string };
 
 export type MailAccountStatus = {
     name: string;
@@ -32,6 +36,7 @@ export type DaemonStatus = {
     instance: { configDir: string; stateDir: string; dataDir: string; runtimeDir: string };
     workerThreads: { count: number; inUse: number; waiting: { conversationId: string; position: number }[] };
     mailAccounts: MailAccountStatus[];
+    noDefaultModel: NoDefaultModelStatus | null;
 };
 
 export const statusOperation = defineOperation<{ status: StatusSources }, Record<string, never>, DaemonStatus>({
@@ -53,6 +58,7 @@ export const statusOperation = defineOperation<{ status: StatusSources }, Record
                 waiting: admission.waiting,
             },
             mailAccounts: (status.mailAccounts?.() ?? []).map(mailAccountStatusOf),
+            noDefaultModel: noDefaultModelStatusOf(status.noDefaultModel?.() ?? null),
         };
     },
 });
@@ -63,5 +69,16 @@ function mailAccountStatusOf({ name, status, lastError, lastCheck }: AccountStat
         status,
         ...(lastError && { lastError: { message: lastError.message, at: lastError.at.toISOString() } }),
         ...(lastCheck && { lastCheck: lastCheck.toISOString() }),
+    };
+}
+
+function noDefaultModelStatusOf(missing: { piAgentDir: string } | null): NoDefaultModelStatus | null {
+    if (!missing) return null;
+    const { piAgentDir } = missing;
+    return {
+        piAgentDir,
+        message:
+            `pi agent names no default model in ${piAgentDir}. Run \`pi\`, sign in with /login, and choose a default ` +
+            "model with /model when pi asks. Roles that have their own model still run.",
     };
 }
