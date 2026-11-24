@@ -94,9 +94,9 @@ const FAILED_REPORT: StartupReport = {
     failedStep: 4,
     failedStepName: "open database",
     reason: "broken",
+    unreadableDatabase: false,
     ready: false,
     noDefaultModel: false,
-    ready: false,
 };
 
 describe("the ready wait", () => {
