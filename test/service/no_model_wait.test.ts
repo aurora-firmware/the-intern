@@ -8,16 +8,18 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Models } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, type Models } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
+import { AssistantEntry } from "@earendil-works/pi-durable";
 import { createLogger } from "../../src/daemon/logger.ts";
 import { requireConversation, submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
-import { type HarnessHost, type HostEntry, openHarnessHost } from "../../src/host/harness_host.ts";
+import { toConversationId } from "../../src/host/conversation_id.ts";
+import { type HarnessHost, type HostEntry, internalHarness, openHarnessHost } from "../../src/host/harness_host.ts";
 import { createInvokedConversations } from "../../src/host/invocation.ts";
-import { NOTICE_KIND } from "../../src/host/model_wait.ts";
+import { handleNoModelEnd, NOTICE_KIND } from "../../src/host/model_wait.ts";
 import { REPORT_KIND, startReportDelivery } from "../../src/host/reports.ts";
-import { createSeatedConversation, readConversationMeta, type SeatActor } from "../../src/host/seating.ts";
+import { changeSeat, createSeatedConversation, readConversationMeta, type SeatActor } from "../../src/host/seating.ts";
 import type { Seat } from "../../src/roles/role_model.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
@@ -65,7 +67,8 @@ async function until(condition: () => boolean | Promise<boolean>, what: string):
     }
 }
 
-async function fixture() {
+async function fixture(options: { isDelivering?: boolean } = {}) {
+    const { isDelivering = true } = options;
     const env = await createHermeticEnv();
     envs.push(env);
     const requests: string[] = [];
@@ -83,7 +86,9 @@ async function fixture() {
     });
     hosts.push(host);
     host.resume();
-    deliveries.push(await startReportDelivery(host, { logger: createLogger({ stream: { write: () => true } }) }));
+    if (isDelivering) {
+        deliveries.push(await startReportDelivery(host, { logger: createLogger({ stream: { write: () => true } }) }));
+    }
     const modelName = `${fake.getModel().provider}/${fake.getModel().id}`;
     const seatWith = (model: string | null): Seat => ({
         role: "developer",
@@ -159,8 +164,9 @@ describe("a run that ends with no_model", () => {
             ["pi.user", NOTICE_KIND],
         );
         const [notice] = await noticesOf(host, id);
-        assert.equal((notice?.data as { notice: string }).notice, "no_default_model");
-        assert.equal(typeof (notice?.data as { text: string }).text, "string");
+        const data = notice?.data as { notice: string; text: string };
+        assert.equal(data.notice, "no_default_model");
+        assert.equal(typeof data.text, "string");
         assert.equal(requests.includes("first"), false);
         assert.equal((await host.conversationInfo(id))?.busy, false);
     });
@@ -192,12 +198,12 @@ describe("a run that ends with no_model", () => {
         await waitNoModel(host, await send(id, "first"));
         await drainRunEnds();
 
-        const context = await host.readContext(id);
+        const { messages } = await (await requireConversation(host, id)).context(context);
 
         assert.equal((await noticesOf(host, id)).length, 1);
         assert.deepEqual(
-            context.map((entry) => entry.kind),
-            ["pi.user"],
+            messages.map((message) => message.role),
+            ["user"],
         );
     });
 
@@ -212,14 +218,15 @@ describe("a run that ends with no_model", () => {
         assert.equal((await noticesOf(host, id)).length, 0);
     });
 
-    it("starts the continuation at once when the seat has a model by the time the run ends", async () => {
-        const { host, seat, send, modelName, requests } = await fixture();
-        const id = await seat(modelName);
-        const conversation = await requireConversation(host, id);
-        await conversation.configure({ model: null }, context);
-
+    it("starts the continuation at once when the seat has a model by the time the run end is handled", async () => {
+        const { host, seat, send, seatWith, modelName, requests } = await fixture({ isDelivering: false });
+        const id = await seat(null);
         await waitNoModel(host, await send(id, "first"));
+        await changeSeat(host, id, { seat: seatWith(modelName), actor });
 
+        const isHandled = await handleNoModelEnd(host, id);
+
+        assert.equal(isHandled, true);
         await until(async () => (await kindsOf(host, id)).includes("pi.assistant"), "the answer");
         assert.deepEqual(requests, ["first"]);
         assert.equal((await noticesOf(host, id)).length, 0);
@@ -242,16 +249,25 @@ describe("a run that ends with no_model", () => {
     });
 
     it("delivers no report to the invoker, which keeps awaiting the invoked conversation", async () => {
-        const { host, seat, seatWith, modelName, drainRunEnds, actor: someActor } = await fixture();
+        const { host, seat, send, seatWith, modelName, drainRunEnds, actor: someActor } = await fixture();
         const invokerId = await seat(modelName);
-
-        const [invokedId] = await createInvokedConversations(host, {
+        const [invokedId] = (await createInvokedConversations(host, {
             invokingId: invokerId,
             callId: "call-1",
             agents: [{ seat: seatWith(null), contextMode: "clean", jobPrompt: "invoked work" }],
             actor: someActor,
-        });
-        await until(async () => (await noticesOf(host, invokedId as string)).length === 1, "the notice");
+        })) as [string];
+        await until(async () => (await noticesOf(host, invokedId)).length === 1, "the notice");
+        // An earlier answer gives a report something to deliver, so a missing guard shows.
+        await internalHarness(host).commit(
+            (tx) =>
+                tx.appendEntry(AssistantEntry, toConversationId(invokedId), {
+                    model: [fauxAssistantMessage("an earlier answer")],
+                }),
+            context,
+        );
+
+        await waitNoModel(host, await send(invokedId, "more work"));
         await drainRunEnds();
 
         assert.deepEqual((await readConversationMeta(host, invokerId))?.awaiting, [invokedId]);
