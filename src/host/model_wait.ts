@@ -38,7 +38,7 @@ const ENTRY_SCAN_PAGE_SIZE = 50;
 
 // The id of the period's first waiting entry: the oldest entry that carries model messages after the newest assistant
 // entry and the newest notice, found by a descending scan. A table read must come before the commit's first table write.
-async function firstWaitingEntryId(tx: Tx, conversationId: ConversationId): Promise<string | undefined> {
+export async function firstWaitingEntryId(tx: Tx, conversationId: ConversationId): Promise<string | undefined> {
     let first: string | undefined;
     let cursor: Cursor | undefined;
     do {
@@ -54,19 +54,25 @@ async function firstWaitingEntryId(tx: Tx, conversationId: ConversationId): Prom
 
 /**
  * Marks the conversation as waiting for a model in the caller's host commit, with the notice, unless the fact is
- * already set: a waiting period gets one notice. `order` is read from the transcript in the same commit (ADR-014
+ * already set: a waiting period gets one notice. A compaction asked for is kept in the fact, also in one that is
+ * already set, so it is never dropped. `order` is read from the transcript in the same commit (ADR-014
  * decision 2): the id of the first entry the model sees after the newest assistant entry and notice, or the notice's own
- * id when there is none.
+ * id when there is none. A caller that writes before it marks reads that id first with `firstWaitingEntryId`, since a
+ * table read must come before the commit's first table write, and passes it as `scanned`.
  */
 export async function markWaiting(
     tx: Tx,
     conversationId: string,
     compaction?: { instructions?: string },
+    scanned?: { order: string | undefined },
 ): Promise<void> {
     const id = toConversationId(conversationId);
     const meta = (await tx.doc(conversationMetaDoc, id)) as ConversationMeta;
-    if (meta.waitingForModel !== undefined) return;
-    const order = await firstWaitingEntryId(tx, id);
+    if (meta.waitingForModel !== undefined) {
+        if (compaction !== undefined) meta.waitingForModel.compaction = JSON.parse(JSON.stringify(compaction));
+        return;
+    }
+    const order = scanned !== undefined ? scanned.order : await firstWaitingEntryId(tx, id);
     const notice = await tx.appendEntry(noticeEntry, id, {
         data: { notice: "no_default_model", text: NOTICE_TEXT },
     });
@@ -74,6 +80,24 @@ export async function markWaiting(
         order: order ?? String(notice.id),
         ...(compaction !== undefined && { compaction: JSON.parse(JSON.stringify(compaction)) }),
     };
+}
+
+/**
+ * Keeps a compaction for the release when the conversation's seat has no model (ADR-014 decision 3): one host commit
+ * sets the fact with the instructions, and the notice for a new period. Returns `false` and changes nothing when the
+ * seat has a model, so the caller creates the compaction task.
+ */
+export async function waitWithCompaction(
+    host: HarnessHost,
+    conversationId: string,
+    instructions: string | undefined,
+): Promise<boolean> {
+    return internalHarness(host).commit(async (tx) => {
+        const meta = (await tx.doc(conversationMetaDoc, toConversationId(conversationId))) as ConversationMeta;
+        if (meta.seat.model !== null) return false;
+        await markWaiting(tx, conversationId, instructions === undefined ? {} : { instructions });
+        return true;
+    }, context);
 }
 
 type CommittedTask = Extract<CommitChange, { type: "task" }>["value"];
