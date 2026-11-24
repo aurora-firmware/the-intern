@@ -15,7 +15,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { toConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
-import { inOpenConversation } from "./job_section.ts";
+import { inOpenConversation, isConversationClosed } from "./job_section.ts";
 import { type ConversationMeta, conversationMetaDoc, readConversationMeta } from "./seating.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -188,4 +188,25 @@ export async function releaseWaiting(host: HarnessHost, conversationId: string):
             delete meta.waitingForModel;
         }, context),
     );
+}
+
+// Sets the fact and the notice when the open conversation has no model and holds work the model hasn't answered.
+async function recoverIfWorkWaits(tx: Tx, conversationId: string): Promise<void> {
+    const id = toConversationId(conversationId);
+    const meta = (await tx.doc(conversationMetaDoc, id)) as ConversationMeta;
+    if (meta.seat.model !== null || meta.waitingForModel !== undefined) return;
+    if ((await firstWaitingEntryId(tx, id)) === undefined) return;
+    await markWaiting(tx, conversationId);
+}
+
+/**
+ * Repairs the crash between pi-durable's `no_model` commit and the commit of the fact (ADR-014 decision 7): each open
+ * conversation with no model, no fact and an input or a handoff's tool result after its newest assistant entry gets
+ * the fact and its notice, one commit each. It is a repair of startup step 7, so it runs before work resumes.
+ */
+export async function recoverWaiting(host: HarnessHost): Promise<void> {
+    for (const { id } of await host.listConversations()) {
+        if (await isConversationClosed(host, id)) continue;
+        await internalHarness(host).commit((tx) => recoverIfWorkWaits(tx, id), context);
+    }
 }

@@ -208,11 +208,12 @@ async function firstInputSettlement(env: HermeticEnv, jobId: string, leadId: str
     });
 }
 
-// Marks the conversation as waiting for a model, as a `no_model` run end leaves it.
+// Leaves the conversation as a `no_model` run end does: its seat has no model and it waits for one.
 async function markLeadWaiting(env: HermeticEnv, leadId: string): Promise<void> {
     await withStoppedInstance(env, (host) =>
         internalHarness(host).commit(async (tx) => {
             const meta = await tx.doc(conversationMetaDoc, toConversationId(leadId));
+            meta.seat.model = null;
             meta.waitingForModel = { order: "1" };
         }, BACKGROUND_CONTEXT),
     );
