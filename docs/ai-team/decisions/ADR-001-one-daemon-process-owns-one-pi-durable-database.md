@@ -82,8 +82,7 @@ exceptions in decision 4.
      `unanswered`. Every operation and tool that would change a closed conversation refuses it, input included (S-001
      REQ-026, S-008 REQ-006), and no redelivery path submits input to one.
    - The enabled set holds the skills the agent has enabled. Every seat write resets it to the role's defaults in the
-     same commit (S-008 REQ-006), except the daemon's seat write that takes up pi agent's default model, which keeps it
-     (ADR-014 decision 5). One upgrade write at startup step 7 gives the documents written before S-008 their
+     same commit (S-008 REQ-006). One upgrade write at startup step 7 gives the documents written before S-008 their
      set, once; it is a conversion, not a recovery.
    - An abort's own commit, just before pi-durable's abort, sets its marks and withdraws the conversation's held
      messages, awaiting links and a park that waits for reports (S-001 REQ-008). A park that waits for an answer stays

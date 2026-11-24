@@ -1657,12 +1657,12 @@ records the design, and ADR-001 decision 4 lists its fact and its release.
 - **The model runtime watches by reading.** `src/models/model_runtime.ts` keeps the current pi `ModelRuntime` and the
   default it read. A 10-second timer reads `settings.json` and the size and modification time of `auth.json` and
   `models.json`. When any of them changed, it opens a new `ModelRuntime`, with pi's own credential store once
-  `auth.json` exists and the no-login store before, and re-reads the default. A default counts once the model
-  registry resolves it. A named default that doesn't resolve leaves the state at no default and logs a warning once.
-  The harness is opened with `models: () => current`, so later requests use the new runtime and requests already
-  streaming keep the old one. `defaultChoice`, `checkModelChoice` and `listModels` read the current runtime too. When
-  the default goes from none to a model, the runtime calls the agents component's take-up (below). The timer stops
-  with the daemon's stop hooks.
+  `auth.json` exists and the no-login store before, and re-reads the default. A named default counts even when the
+  registry doesn't resolve it: as at startup, that is a model error, not "no model" (S-001 Definitions). The harness
+  is opened with `models: () => current`, so later requests use the new runtime and requests already streaming keep
+  the old one. `defaultChoice`, `checkModelChoice` and `listModels` read the current runtime too. When the default
+  goes from none to a model, the runtime calls the agents component's take-up (below). The timer stops with the
+  daemon's stop hooks.
 - **Status.** `daemon.status` carries `noDefaultModel`: `null` while a default exists, otherwise
   `{ piAgentDir, message }`. The message names the folder and says to run `pi`, sign in with `/login`, and choose a
   model with `/model` when pi asks. `bob status` prints the message, and the Status page and the banner on every page
@@ -1672,11 +1672,13 @@ records the design, and ADR-001 decision 4 lists its fact and its release.
   in `prepare` with `no_model`, before the admission hook, so no worker thread is taken and S-004's start is never
   written. The run's submissions settle `unanswered` with reason `no_model`.
 - **The run-end queue.** The agents component's serial run-end queue, where report delivery and the turn-end check
-  already run, sees a generation that failed with `detail.reason: "no_model"` first. If the seat has a model by now,
-  it releases the conversation at once. Otherwise it commits `waitingForModel` and an `intern.notice` entry in one
-  commit, unless the fact is already set. A `no_model` end delivers no report, and the turn-end check counts a set
-  fact as something to wait for. The fact is `{ order, compaction? }`: `order` is the smallest input submission id of
-  the failed run, or the notice's entry id when the run had none, and `compaction` is `{ instructions? }`.
+  already run, sees a generation that failed with `detail.reason: "no_model"` first. If the seat has a model by now
+  that the registry resolves, it releases the conversation at once. If the seat names a model the registry doesn't
+  resolve, the run stays failed as before. If the seat model is `null`, it commits `waitingForModel` and an
+  `intern.notice` entry in one commit, unless the fact is already set. A `no_model` end delivers no report, and the
+  turn-end check counts a set fact as something to wait for. The fact is `{ order, compaction? }`: `order` is the
+  smallest input submission id of the failed run, or the notice's entry id when the run had none, and `compaction` is
+  `{ instructions? }`.
 - **Compaction with no model.** `compactConversation` (team member) and the Compact mode of a handoff
   (`compactWithNote`) or an invocation check the seat first. With no model they set the fact with `compaction`, and
   the notice for a new period, in their own host commit. They create no compaction task. An invocation then submits
@@ -1687,8 +1689,9 @@ records the design, and ADR-001 decision 4 lists its fact and its release.
   to `{ taskId, inputs: [] }`, and clears the fact. When a run is already active, it only clears the fact, because that
   run reads the same transcript. It runs inside `inOpenConversation`, so a closed conversation is never released.
 - **Taking up the default.** `takeUpDefaultModel` in the agents component lists open conversations whose seat model is
-  `null`: waiting ones in `order`, then the rest. For each it commits a seat write with the default model, the seat's
-  thinking level or pi agent's default one, the daemon as actor, and the enabled set kept. Then it releases the
+  `null`: waiting ones in `order`, then the rest. For each it commits an ordinary seat write (`changeSeat`) with the
+  same role and workspace, the default model, the seat's thinking level or pi agent's default one, and the daemon as
+  actor, so the enabled set resets to the role's defaults (S-008 REQ-006). Then it releases the
   waiting ones one at a time, starting the next once the admission lists the previous one as active or waiting, or its
   run has ended. A team member's `conversations.seat` or reset with a new seat that gives a waiting conversation a
   model releases it after the seat commit.
@@ -1696,8 +1699,8 @@ records the design, and ADR-001 decision 4 lists its fact and its release.
   in the transcript, and its submission is already settled. After Ctrl-C, `bob chat` names each line it submitted that
   is still unanswered, `no_model` included, as dropped (S-005 REQ-009).
 - **Startup.** At step 7, before `host.resume()`, the agents component's repair hook sets the fact and the notice for
-  each open conversation with no model whose newest input entry is newer than its newest assistant entry and that has
-  no fact. It then runs the take-up when the folder names a default. Its `afterResume` releases each conversation with a
+  each open conversation with no model and no fact that has an entry the model sees (an input, or a handoff's tool
+  result) after its newest assistant entry. It then runs the take-up when the folder names a default. Its `afterResume` releases each conversation with a
   fact whose seat has a model, in `order`. Job repair rule 1 already finds the `lead:<jobId>` submission of a waiting
   lead.
 - **The notice entry.** `intern.notice`, data `{ notice: "no_default_model", text }`, display-only, so the model never

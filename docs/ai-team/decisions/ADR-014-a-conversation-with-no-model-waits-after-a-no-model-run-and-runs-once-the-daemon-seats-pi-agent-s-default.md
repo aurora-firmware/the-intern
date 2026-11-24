@@ -35,14 +35,16 @@ gives every seat with no model pi agent's default by an ordinary seat write when
    model ends the conversation's run the same way, at its next model turn. Queued input that `afterFailedRun:
    "continue"` places after that ends the same way.
 2. **The waiting fact.** A run that ends with `no_model` is handled in the run-end serial queue, before report delivery
-   and S-004's turn-end check. If the seat has a model by then, the daemon starts the continuation at once (decision
-   4). Otherwise one host commit writes `waitingForModel` into the conversation's `intern.conversation` document and
-   appends the no-model notice. When the fact is already set, the commit changes nothing, so the notice is written once
-   per waiting period. The fact holds `order`: the id of the period's first waiting input submission, or of the notice
-   when the period began without one. pi-durable mints every id from one sequence, so `order` follows acceptance across
-   conversations. It may also hold `compaction`, a compaction the conversation needs, with its instructions. A run end
-   with `no_model` is not the end of an agent's work: it sends no report (S-001 REQ-019) and is no turn end for S-004
-   REQ-008, and a conversation with the fact set has something to wait for.
+   and S-004's turn-end check. If the seat has a model by then that the model registry resolves, the daemon starts the
+   continuation at once (decision 4). A seat that names a model the registry doesn't resolve is not "no model" (S-001
+   Definitions): its run stays failed as before, with no fact. Otherwise one host commit writes `waitingForModel` into
+   the conversation's `intern.conversation` document and appends the no-model notice. When the fact is already set, the
+   commit changes nothing, so the notice is written once per waiting period. The fact holds `order`: the id of the
+   period's first waiting input submission, or of the notice when the period began without one. pi-durable mints every
+   id from one sequence, so `order` follows acceptance across conversations. It may also hold `compaction`, a compaction
+   the conversation needs, with its instructions. A run end with `no_model` is not the end of an agent's work: it sends
+   no report (S-001 REQ-019) and is no turn end for S-004 REQ-008, and a conversation with the fact set has something to
+   wait for.
 3. **Compaction waits.** A team member's compaction, or the Compact context mode of a handoff or an invocation whose
    seat has no model, creates no compaction task. It sets the fact with `compaction` (and the notice, for a new
    period). The handoff tool then reports success, and the run ends as decision 1 says. Automatic compaction only runs
@@ -55,13 +57,13 @@ gives every seat with no model pi agent's default by an ordinary seat write when
    the inputs and the handoff. When the default appears, the daemon releases the waiting conversations in `order`, one
    at a time. It starts the next once the admission lists the previous one as active or waiting, or its run has ended,
    so the worker threads go in acceptance order.
-5. **Taking up pi agent's default.** When pi agent's settings come to name a default model that the model registry
-   resolves, the daemon gives every open conversation whose seat has no model that model. It uses pi agent's default
-   thinking level when the seat names none. It does this with a seat write whose seat record names the daemon as actor
-   and changes only the model and thinking level. That write keeps the agent's enabled set. Waiting conversations are
-   reseated first, in `order`, and then released. A seat that took up the default keeps it, like any seat value
-   (S-001 AC-003.7). When the default disappears, only seats resolved afterwards have no model. A run already started
-   goes on with its seat's model.
+5. **Taking up pi agent's default.** When pi agent's settings come to name a default model, the daemon gives every open
+   conversation whose seat has no model that model. It uses pi agent's default thinking level when the seat names none.
+   It does this with an ordinary seat write: the role and workspace stay, the seat record names the daemon as actor, and
+   the enabled set resets to the role's defaults as on any seat change (S-008 REQ-006). Waiting conversations are
+   reseated first, in `order`, and then released. A seat that took up the default keeps it, like any seat value (S-001
+   AC-003.7). When the default disappears, only seats resolved afterwards have no model. A run already started goes on
+   with its seat's model.
 6. **Noticing the pi agent folder.** Every 10 seconds the model runtime reads `settings.json` and the size and
    modification time of `auth.json` and `models.json`. Nothing is watched. When any of them changed, it opens a new pi
    `ModelRuntime` on the folder, with pi's own credential store once `auth.json` exists. The Harness's `models` function
@@ -69,7 +71,8 @@ gives every seat with no model pi agent's default by an ordinary seat write when
    default. The daemon reads the folder only, and its state changes at most 10 seconds after the files do, within S-001
    REQ-027's 30 seconds. `daemon.status` reports `noDefaultModel` from this state.
 7. **Recovery.** A crash between pi-durable's `no_model` commit and the fact's commit leaves an open conversation with
-   no model and unanswered input, which is input after its newest assistant entry. At startup step 7, before
+   no model and work the model hasn't answered: an entry the model sees, an input or a handoff's tool result, after
+   its newest assistant entry. At startup step 7, before
    `host.resume()`, the daemon sets the missing fact with its notice for each such conversation. It then runs decision
    5 for the default the folder names. After `host.resume()`, it releases every conversation with a fact whose seat
    now has a model. An abort's commit clears the fact, so the abort withdraws the waiting input from any release. The
@@ -89,8 +92,8 @@ gives every seat with no model pi agent's default by an ordinary seat write when
 - The release copies pi-durable's run start, and the host depends on the `pi.live.run` shape and the `pi.generation`
   task's creation. Each pi-durable upgrade rechecks this, as with ADR-003. When pi-durable offers a run start
   without input, the host switches to it.
-- The daemon's seat write when it takes up the default is the one seat write that keeps the enabled set (S-008 REQ-006
-  names the exception).
+- Taking up the default is an ordinary seat change. It shows in the transcript, and it resets an enabled set that a
+  team member changed while the conversation waited.
 - The folder is read every 10 seconds, a small fixed cost. A default that disappears stops nothing that already has a
   model.
 
