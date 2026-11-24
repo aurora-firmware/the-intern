@@ -86,7 +86,7 @@ const waitForCount = (page: Page, selector: string, count: number) =>
 
 const openPage = async (page: Page, port: number, hash: string) => {
     await page.goto(pageUrl(port, `/ui/${hash}`));
-    await page.waitForSelector("main h2.page-heading");
+    await waitForCount(page, "main h2.page-heading", 1);
 };
 
 describe("the no-model banner in chrome", () => {
