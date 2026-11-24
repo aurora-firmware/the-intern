@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { toConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
+import { inOpenConversation } from "./job_section.ts";
 import { type ConversationMeta, conversationMetaDoc, readConversationMeta } from "./seating.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -134,13 +135,48 @@ export async function startRunWithoutInput(host: HarnessHost, conversationId: st
     const id = toConversationId(conversationId);
     return internalHarness(host).commit(async (tx) => {
         const live = await tx.doc(LiveDoc, id);
-        if (live.run !== undefined) return false;
-        const taskId = await tx.createTask(
-            GenerationTask,
-            {},
-            { ownership: { kind: "conversation" }, conversationId: id },
-        );
-        live.run = { taskId, inputs: [] };
-        return true;
+        return startRunWhenIdle(tx, id, live);
     }, context);
+}
+
+// The caller read `live` before any table write. Creates the run unless one is active.
+async function startRunWhenIdle(tx: Tx, id: ConversationId, live: { run?: unknown }): Promise<boolean> {
+    if (live.run !== undefined) return false;
+    const taskId = await tx.createTask(GenerationTask, {}, { ownership: { kind: "conversation" }, conversationId: id });
+    live.run = { taskId, inputs: [] };
+    return true;
+}
+
+// Runs the compaction a waiting conversation needs, and waits for it. The task is created in the job section and
+// awaited outside it, as a team member's compaction is, so the wait never holds the section.
+async function runPendingCompaction(host: HarnessHost, conversationId: string): Promise<void> {
+    const taskId = await inOpenConversation(host, conversationId, async () => {
+        const meta = await readConversationMeta(host, conversationId);
+        const compaction = meta?.waitingForModel?.compaction;
+        if (meta === undefined || meta.seat.model === null || compaction === undefined) return undefined;
+        const conversation = await internalHarness(host).conversation(toConversationId(conversationId), context);
+        return conversation?.compact(compaction.instructions, context);
+    });
+    if (taskId !== undefined) await internalHarness(host).waitForTask(taskId, context);
+}
+
+/**
+ * Releases a conversation that waited for a model (ADR-014 decision 4). It does nothing unless the conversation has the
+ * waiting fact and its seat has a model. It runs a pending compaction and waits for it, then one host commit starts the
+ * run with no input and clears the fact. When a run is already active, that run reads the same transcript, so the
+ * commit only clears the fact. It runs inside `inOpenConversation`, so a closed conversation is never released: that
+ * throws `ConversationClosedError`.
+ */
+export async function releaseWaiting(host: HarnessHost, conversationId: string): Promise<void> {
+    await runPendingCompaction(host, conversationId);
+    const id = toConversationId(conversationId);
+    await inOpenConversation(host, conversationId, () =>
+        internalHarness(host).commit(async (tx) => {
+            const live = await tx.doc(LiveDoc, id);
+            const meta = (await tx.doc(conversationMetaDoc, id)) as ConversationMeta;
+            if (meta.waitingForModel === undefined || meta.seat.model === null) return;
+            await startRunWhenIdle(tx, id, live);
+            delete meta.waitingForModel;
+        }, context),
+    );
 }
