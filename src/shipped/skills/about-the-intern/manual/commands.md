@@ -306,13 +306,13 @@ The command refuses in three cases, each with exit 1 and nothing sent:
 ### `bob jobs follow <job>`
 
 Print the job's current status, then its status changes, edits and worklog entries, and the activity of each of its
-conversations. A line of a conversation starts with the conversation's ID in brackets. A conversation that waits for a default model shows a
-`notice: <text>` line. It exits 0 when the job is Done,
-after printing its resolution, or when you press Ctrl-C. A job that is already Done prints its resolution and exits 0.
-If the daemon restarts, it prints a notice on standard error and goes on, and it prints the entries the job's
-conversations wrote while the daemon was away. Worklog entries, edits and status changes made meanwhile are not
-replayed, so they are not printed afterwards; a job that was completed meanwhile prints its resolution and exits. If a
-feed lags, it goes on without a notice.
+conversations. A line of a conversation starts with the conversation's ID in brackets. It prints each notice entry in
+a conversation as `notice: <text>`, such as the no-model notice while the conversation waits for a model. It exits 0
+when the job is Done, after printing its resolution, or when you press Ctrl-C. A job that is already Done prints its
+resolution and exits 0. If the daemon restarts, it prints a notice on standard error and goes on, and it prints the
+entries the job's conversations wrote while the daemon was away. Worklog entries, edits and status changes made
+meanwhile are not replayed, so they are not printed afterwards; a job that was completed meanwhile prints its
+resolution and exits. If a feed lags, it goes on without a notice.
 
 With `--json` it prints the job first. A job that is already Done ends there. Otherwise it goes on with the snapshot
 and each delta of the instance feed that concern the job, and the snapshot and each delta of the feed of each of its
