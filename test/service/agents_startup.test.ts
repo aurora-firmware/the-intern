@@ -204,16 +204,4 @@ describe("the agents component at startup", () => {
         const info = await stat(join(env.dataDir, "workspaces", "bob"));
         assert.equal(info.mode & 0o777, OWNER_ONLY_MODE);
     });
-
-    it("stops at step 6 naming the desk role and its model when the pi agent folder has no default model", async () => {
-        const env = await hermetic();
-        const serving = serve(env);
-
-        const status = await serving.exit;
-
-        assert.notEqual(status, 0);
-        assert.match(serving.stderr(), /startup failed step=6/);
-        assert.match(serving.stderr(), /desk/);
-        assert.match(serving.stderr(), /model/);
-    });
 });

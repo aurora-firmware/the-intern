@@ -37,7 +37,7 @@ const BUSY_TIMEOUT_MS = 5_000;
 const WAL_AUTOCHECKPOINT_PAGES = 1_000;
 const context = BACKGROUND_CONTEXT;
 
-export type AgentChoice = { model: string; thinkingLevel?: string; cwd?: string; instructions?: string };
+export type AgentChoice = { model: string | null; thinkingLevel?: string; cwd?: string; instructions?: string };
 export type HostEntry = { id: string; kind: string; data: unknown };
 export type ConversationInfo = { id: string; busy: boolean };
 
@@ -230,7 +230,7 @@ function toModelRef(model: string): { provider: string; modelId: string } {
 /** The pi-durable agent of a new conversation. Shared with `idempotency.ts`, which creates conversations too. */
 export function toAgentSpec(agent: AgentChoice) {
     return {
-        model: toModelRef(agent.model),
+        model: agent.model === null ? null : toModelRef(agent.model),
         ...(agent.thinkingLevel !== undefined && { thinkingLevel: agent.thinkingLevel as never }),
         ...(agent.cwd !== undefined && { cwd: agent.cwd }),
         ...(agent.instructions !== undefined && { instructions: agent.instructions }),

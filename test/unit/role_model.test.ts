@@ -76,11 +76,11 @@ describe("resolveSeat", () => {
         assert.equal(seat.thinkingLevel, undefined);
     });
 
-    it("throws RoleInvalidError with field model when no model is available", () => {
-        assert.throws(
-            () => resolveSeat(role(), { workspace: "/w" }),
-            (error) => error instanceof RoleInvalidError && error.field === "model" && error.role === "writer",
-        );
+    it("returns a seat with a null model when no override, role or defaults name one", () => {
+        const seat = resolveSeat(role(), { workspace: "/w" });
+        assert.equal(seat.model, null);
+        assert.equal(seat.role, "writer");
+        assert.equal(seat.workspace, "/w");
     });
 
     it("includes every coordination and job tool for a role with an empty tool set", () => {

@@ -397,10 +397,9 @@ describe("createRoleCatalog", () => {
         assert.deepEqual([workspace.field, workspace.value], ["workspace", join(root, "elsewhere")]);
     });
 
-    it("refuses a seatFor when no model can be resolved", () => {
+    it("seats a role with a null model when no model can be resolved", () => {
         defaultChoice = undefined;
-        const error = refusal(() => catalog.seatFor("bob"));
-        assert.deepEqual([error.kind, error.field], ["invalid", "model"]);
+        assert.equal(catalog.seatFor("bob").model, null);
     });
 
     it("seats a role without defaults on pi agent's default model, thinking level and its per-role default workspace", async () => {

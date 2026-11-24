@@ -32,7 +32,8 @@ export type RoleChange = Partial<Omit<RoleDefinition, "name">>;
 
 export type Seat = {
     role: string;
-    model: string;
+    /** `null` when nothing names a model: the seat can hold a conversation but not run a model turn (S-001 REQ-003). */
+    model: string | null;
     thinkingLevel?: string;
     workspace: string;
     /** Only a document written before S-008 holds it; the prompt reads the role's file by name and no reader uses this. */
@@ -106,13 +107,9 @@ export const resolveSeat = (
     overrides: SeatOverrides = {},
     place: SeatPlace = "job",
 ): Seat => {
-    const model = overrides.model ?? role.model ?? defaults.model;
-    if (model === undefined) {
-        throw new RoleInvalidError(role.name, "model", "no override, role default or pi agent default names a model");
-    }
     return {
         role: role.name,
-        model,
+        model: overrides.model ?? role.model ?? defaults.model ?? null,
         thinkingLevel: overrides.thinkingLevel ?? role.thinkingLevel ?? defaults.thinkingLevel,
         workspace: overrides.workspace ?? role.workspace ?? defaults.workspace,
         tools: [...new Set([...expandRoleTools(role.tools, place), ...placeTools(place)])],
