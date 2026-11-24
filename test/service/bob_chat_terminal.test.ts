@@ -538,4 +538,24 @@ describe("bob chat on a terminal when the front desk has no model", { skip }, ()
         assert.equal(await exitStatus(session), 0, session.stderr());
         assert.equal(session.stderr().includes("Dropped"), false, session.stderr());
     });
+
+    it("names no line as dropped on Ctrl-C when one answer follows both lines that waited for a model", async () => {
+        const fixture = await noModelDaemon();
+        const session = chat(fixture);
+        await session.waitFor("output", PROMPT);
+        session.write(`${FIRST}\r`);
+        await untilNoticeEntry(fixture.daemon);
+        session.write(`${SECOND}\r`);
+        await until(async () => JSON.stringify(await entriesOf(fixture.daemon)).includes(SECOND), "the second line");
+        await writeFile(join(fixture.env.piAgentDir, "settings.json"), LOOPBACK_DEFAULT);
+        await session.waitFor("output", `echo: ${SECOND}`);
+
+        session.write(CTRL_C);
+        session.write(`${THIRD}\r`);
+        await session.waitFor("output", `echo: ${THIRD}`);
+        session.write(CTRL_D);
+
+        assert.equal(await exitStatus(session), 0, session.stderr());
+        assert.equal(session.stderr().includes("Dropped"), false, session.stderr());
+    });
 });

@@ -29,7 +29,9 @@ export type TerminalChatOptions = { reset: boolean; json: boolean };
 
 type EntryPage = { entries: AttributedEntryLike[]; next?: string };
 type SubmitAnswer = { submissionId: string } | { held: true };
-type SentLine = { submissionId: string; line: string; answersBefore: number };
+type SentLine = { submissionId: string; line: string };
+/** What the chat knows of a transcript entry: its kind, and the text of a typed line. */
+type SeenEntry = { kind: string; content?: string };
 /** A typed line; its request id is fixed when it is typed, so every attempt to submit it is the same submission. */
 type TypedLine = { line: string; requestId: string };
 
@@ -68,6 +70,20 @@ async function waitUntilSettled(client: Client, submissionId: string): Promise<v
         };
         if (state === "done" || state === "unanswered") return;
     }
+}
+
+function seenEntry(entry: AttributedEntryLike): SeenEntry {
+    const { content } = (entry.data ?? {}) as { content?: unknown };
+    return {
+        kind: entry.kind as string,
+        ...(entry.kind === "intern.steer" && typeof content === "string" && { content }),
+    };
+}
+
+/** Whether an answer follows the newest typed line with this text in the transcript read so far. */
+function isAnsweredLater(seen: readonly SeenEntry[], line: string): boolean {
+    const steer = seen.findLastIndex((entry) => entry.kind === "intern.steer" && entry.content === line);
+    return steer >= 0 && seen.slice(steer + 1).some((entry) => entry.kind === "pi.assistant");
 }
 
 /** The notice the daemon reports for a missing default model, on standard error; the chat stays open. */
@@ -111,8 +127,8 @@ export async function runTerminalChat(
     // Aborted by Ctrl-D: from then on a call that meets an outage gives up, so a gone daemon doesn't trap the team member.
     const leaving = new AbortController();
     const sent: SentLine[] = [];
-    // How many answers the feed has brought; a line settled `no_model` is answered by one that comes after it was sent.
-    let answerCount = 0;
+    // The transcript entries the chat has read, in order: a line settled `no_model` is answered once an answer follows it.
+    const seen: SeenEntry[] = history.map(seenEntry);
     // Lines typed and not yet admitted by the service, in the order they were typed.
     const unadmitted: TypedLine[] = [];
     // One notice per outage, whether the feed or a call meets it first.
@@ -167,7 +183,7 @@ export async function runTerminalChat(
             if (isReconnectable(error)) return;
             throw error;
         }
-        answerCount += missed.filter((entry) => entry.kind === "pi.assistant").length;
+        seen.push(...missed.map(seenEntry));
         const shown = missed.filter((entry) => entry.kind === "pi.assistant" || entry.kind === "intern.notice");
         if (shown.every((entry) => entry.kind === "pi.assistant" && assistantText(entry) === "")) return;
         for (const entry of shown) {
@@ -233,7 +249,7 @@ export async function runTerminalChat(
         }
         unadmitted.splice(unadmitted.indexOf(typed), 1);
         if ("held" in answer) warn(`The front desk held the line until it continues: ${typed.line}`);
-        else sent.push({ submissionId: answer.submissionId, line: typed.line, answersBefore: answerCount });
+        else sent.push({ submissionId: answer.submissionId, line: typed.line });
     }
 
     /** Stops the turn, then names each submitted line the abort left unanswered. */
@@ -245,7 +261,7 @@ export async function runTerminalChat(
                     submissionId: entry.submissionId,
                 })) as { state: string; reason?: string };
                 // A line settled `no_model` keeps that state after the model answers it from the transcript.
-                const isAnswered = reason === "no_model" && answerCount > entry.answersBefore;
+                const isAnswered = reason === "no_model" && isAnsweredLater(seen, entry.line);
                 if (state === "unanswered" && !isAnswered) warn(`Dropped, not answered: ${entry.line}`);
                 if (state === "unanswered" || state === "done") sent.splice(sent.indexOf(entry), 1);
             }
