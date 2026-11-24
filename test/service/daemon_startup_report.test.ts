@@ -149,9 +149,23 @@ describe("the daemon's startup report", () => {
             reason: null,
             unreadableDatabase: false,
             ready: true,
+            noDefaultModel: true,
         });
         const info = await stat(join(fixture.env.stateDir, STARTUP_REPORT_FILE));
         assert.equal(info.mode & 0o777, 0o600);
+    });
+
+    it("holds noDefaultModel false when the settings name a default model", async () => {
+        const fixture = await createFixture();
+        await writeFile(
+            join(fixture.env.piAgentDir, "settings.json"),
+            JSON.stringify({ defaultProvider: "faux", defaultModel: "faux-1" }),
+        );
+
+        const daemon = fixture.start();
+        await until(() => daemon.phase() === "ready", "the daemon to be ready");
+
+        assert.equal((await reportOf(fixture)).noDefaultModel, false);
     });
 
     it("holds a null label when the environment names no service", async () => {
