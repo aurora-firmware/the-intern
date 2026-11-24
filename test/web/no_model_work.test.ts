@@ -3,6 +3,7 @@
  * `intern.notice` entry shows where the transcript holds it and stays after a model is available, and a seat change to
  * no model names no model. The daemon's isolated pi agent folder names no default model at first.
  */
+import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -73,40 +74,38 @@ async function nameDefaultModel(rig: Rig): Promise<void> {
     }
 }
 
-const waitFor = <Arg>(page: Page, predicate: (arg: Arg) => boolean, arg: Arg) =>
-    page.waitForFunction(predicate, arg, { timeout: WAIT_MS, polling: POLL_MS });
+const waitOptions = { timeout: WAIT_MS, polling: POLL_MS };
 
 /** Waits until the entries on the page read as `kinds`, in order. */
 const waitForKinds = (page: Page, kinds: string[]) =>
-    waitFor(
-        page,
-        ([selector, wanted]: [string, string[]]) => {
+    page.waitForFunction(
+        ([selector, wanted]) => {
             const shown = [...document.querySelectorAll(selector)].map((node) => node.getAttribute("data-kind"));
             return shown.length === wanted.length && shown.every((kind, index) => kind === wanted[index]);
         },
         [ENTRY, kinds] as [string, string[]],
+        waitOptions,
     );
 
 const waitForPage = (page: Page) =>
-    waitFor(page, (selector: string) => document.querySelector(selector) !== null, "main h2.page-heading");
+    page.waitForFunction((selector) => document.querySelector(selector) !== null, "main h2.page-heading", waitOptions);
 
 const waitForText = (page: Page, selector: string, text: string) =>
-    waitFor(
-        page,
-        ([sel, wanted]: [string, string]) =>
-            [...document.querySelectorAll(sel)].some((node) => node.textContent?.includes(wanted)),
+    page.waitForFunction(
+        ([sel, wanted]) => [...document.querySelectorAll(sel)].some((node) => node.textContent?.includes(wanted)),
         [selector, text] as [string, string],
+        waitOptions,
     );
 
 async function openDesk(page: Page, port: number): Promise<void> {
     await page.goto(pageUrl(port, "/ui/#/desk"));
-    await waitFor(
-        page,
-        (selector: string) => {
+    await page.waitForFunction(
+        (selector) => {
             const button = document.querySelector(selector) as HTMLButtonElement | null;
             return button !== null && !button.disabled && document.querySelector("main details.activity") !== null;
         },
         SEND,
+        waitOptions,
     );
 }
 
@@ -125,7 +124,7 @@ describe("the Front desk page with no model", () => {
 
         await waitForKinds(page, [STEER_KIND, NOTICE_KIND]);
         await waitForText(page, `${ENTRY}[data-kind='${STEER_KIND}']`, "hello desk");
-        t.assert.equal(await page.locator("main .desk-dropped, main .error").count(), 0);
+        assert.equal(await page.locator("main .desk-dropped, main .error").count(), 0);
 
         await nameDefaultModel(rig);
         await waitForKinds(page, [STEER_KIND, NOTICE_KIND, "intern.seat", "pi.assistant"]);
@@ -149,13 +148,13 @@ describe("a Job page with no model", () => {
         const page = await browser.newPage();
 
         await page.goto(pageUrl(rig.port, "/ui/#/"));
-        await waitFor(
-            page,
-            (number: string) =>
+        await page.waitForFunction(
+            (number) =>
                 [...document.querySelectorAll("main .board-column[data-status='to_do'] .board-card")].some((card) =>
                     card.textContent?.includes(number),
                 ),
             job.number,
+            waitOptions,
         );
         await page.goto(pageUrl(rig.port, `/ui/#/jobs/${job.number}`));
         await waitForPage(page);
@@ -165,7 +164,7 @@ describe("a Job page with no model", () => {
         await rig.daemon.invoke("conversations.seat", { conversationId: job.leadConversation, role: "idle" });
         await waitForText(page, ".activity-seat", "idle");
         const seat = (await page.locator(".activity-seat").last().textContent()) ?? "";
-        t.assert.ok(seat.includes("no model"), seat);
-        t.assert.ok(!seat.includes("null"), seat);
+        assert.ok(seat.includes("no model"), seat);
+        assert.ok(!seat.includes("null"), seat);
     });
 });
