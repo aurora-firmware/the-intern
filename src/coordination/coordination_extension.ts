@@ -20,10 +20,11 @@ import {
 import type { AgentsRuntime } from "../agents/agents_component.ts";
 import { readFrontDeskId } from "../desk/front_desk.ts";
 import { HostNotFoundError } from "../host/conversation_control.ts";
+import { toConversationId } from "../host/conversation_id.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { createInvokedConversations, InvocationDepthError, type InvocationRequest } from "../host/invocation.ts";
 import { ConversationClosedError, inOpenConversation, isConversationClosed } from "../host/job_section.ts";
-import { waitWithCompaction } from "../host/model_wait.ts";
+import { firstWaitingEntryId, markWaiting } from "../host/model_wait.ts";
 import {
     type ContextMode,
     type ParkedState,
@@ -136,10 +137,22 @@ async function compactWithNote(
     context: never,
 ): Promise<string | undefined> {
     const conversationId = String(api.conversationId);
-    const taskId = await inOpenConversation(host, conversationId, async () => {
-        const created = await api.commit(async (tx) => {
+    // One commit writes the seat change and, with no model, the fact that keeps the compaction (ADR-014 decision 3): a
+    // crash never leaves the seat without the compaction. The entry scan for the fact's order comes before the first
+    // table write. With no model there is no compaction task: the release runs it, and the run ends `no_model`.
+    const taskId = await inOpenConversation(host, conversationId, () =>
+        api.commit(async (tx) => {
+            const scanned = { order: await firstWaitingEntryId(tx, toConversationId(conversationId)) };
             await seatWrites(tx, conversationId, change);
-            if (change.seat.model === null) return undefined;
+            if (change.seat.model === null) {
+                await markWaiting(
+                    tx,
+                    conversationId,
+                    change.note === undefined ? {} : { instructions: change.note },
+                    scanned,
+                );
+                return undefined;
+            }
             const input: CompactionInput = {
                 reason: "manual",
                 ...(change.note !== undefined && { instructions: change.note }),
@@ -148,11 +161,8 @@ async function compactWithNote(
                 ownership: { kind: "task", taskId: api.taskId },
                 abandonOnRestart: true,
             });
-        }, context);
-        // With no model there is no compaction task: the release runs it, and the run ends `no_model` (ADR-014).
-        if (created === undefined) await waitWithCompaction(host, conversationId, change.note);
-        return created;
-    });
+        }, context),
+    );
     if (taskId === undefined) return undefined;
     const settled = await api.waitForTask(taskId, context);
     const { outcome } = settled.state;
