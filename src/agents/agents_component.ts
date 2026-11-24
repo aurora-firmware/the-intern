@@ -10,7 +10,7 @@ import type { Logger } from "../daemon/logger.ts";
 import type { HarnessHost } from "../host/harness_host.ts";
 import { watchInstance } from "../host/host_observation.ts";
 import { ConversationClosedError, inOpenConversation, isConversationClosed } from "../host/job_section.ts";
-import { releaseWaiting } from "../host/model_wait.ts";
+import { recoverWaiting, releaseWaiting } from "../host/model_wait.ts";
 import { startReportDelivery } from "../host/reports.ts";
 import { changeSeat, readConversationMeta } from "../host/seating.ts";
 import { createRolePromptExtension } from "../prompt/role_prompt_extension.ts";
@@ -178,12 +178,30 @@ export async function createAgentsComponent(options: {
         return [...waiting.map(({ id }) => id), ...others];
     };
 
-    const takeUp = async (ctx: ServiceContext): Promise<void> => {
+    // Seats the default in every open conversation with no model; the ids of those that wait for a model, in order.
+    const seatAll = async (ctx: ServiceContext): Promise<string[]> => {
         const seatedAndWaiting: string[] = [];
         for (const id of await listWithNoModel(ctx)) {
             if (await seatDefault(ctx, id)) seatedAndWaiting.push(id);
         }
-        for (const id of seatedAndWaiting) await (await startsRelease(ctx, id))();
+        return seatedAndWaiting;
+    };
+
+    const takeUp = async (ctx: ServiceContext): Promise<void> => {
+        for (const id of await seatAll(ctx)) await (await startsRelease(ctx, id))();
+    };
+
+    // The conversations that have the waiting fact and a seat with a model, in `order`: a seat written before the stop
+    // or the crash that the release did not follow.
+    const listReleasable = async (ctx: ServiceContext): Promise<string[]> => {
+        const waiting: { id: string; order: number }[] = [];
+        for (const { id } of await ctx.host.listConversations()) {
+            const meta = await readConversationMeta(ctx.host, id);
+            if (meta?.waitingForModel === undefined || meta.seat.model === null) continue;
+            if (await isConversationClosed(ctx.host, id)) continue;
+            waiting.push({ id, order: Number(meta.waitingForModel.order) });
+        }
+        return waiting.sort((a, b) => a.order - b.order).map(({ id }) => id);
     };
 
     const component: DaemonComponent = {
@@ -221,9 +239,13 @@ export async function createAgentsComponent(options: {
         },
         async repair(ctx) {
             await skills.component.repair?.(ctx);
+            // Work has not resumed: the fact and the default's seat are set here, and the release follows in `afterResume`.
+            await recoverWaiting(ctx.host);
+            await seatAll(ctx);
         },
         async afterResume(ctx) {
             await skills.component.afterResume?.(ctx);
+            for (const id of await listReleasable(ctx)) await (await startsRelease(ctx, id))();
         },
         async start(ctx) {
             await skills.component.start?.(ctx);

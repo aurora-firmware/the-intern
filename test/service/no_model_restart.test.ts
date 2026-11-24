@@ -17,6 +17,7 @@ import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
 import { type DaemonComponent, type RunningDaemon, runDaemon, type ServiceContext } from "../../src/daemon/daemon.ts";
 import { createLogger } from "../../src/daemon/logger.ts";
+import type { Storage } from "../../src/host/harness_host.ts";
 import { submitInput, waitForSubmission } from "../../src/host/conversation_control.ts";
 import { NOTICE_KIND } from "../../src/host/model_wait.ts";
 import { createSeatedConversation, readConversationMeta } from "../../src/host/seating.ts";
@@ -174,7 +175,7 @@ describe("conversations that wait for a model when the daemon restarts", () => {
 });
 
 // Passes every commit through except the one that records the notice, which never reaches the storage.
-function refusingTheFact(storage: ConstructorParameters<typeof Proxy>[0]) {
+function refusingTheFact(storage: Storage): Storage {
     const isFactCommit = (writes: readonly StorageWrite[]) =>
         writes.some((write) => write.type === "entry" && write.value.kind === NOTICE_KIND);
     return new Proxy(storage, {
