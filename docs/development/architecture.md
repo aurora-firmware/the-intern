@@ -1700,9 +1700,9 @@ records the design, and ADR-001 decision 4 lists its fact and its release.
   is still unanswered, `no_model` included, as dropped (S-005 REQ-009).
 - **Startup.** At step 7, before `host.resume()`, the agents component's repair hook sets the fact and the notice for
   each open conversation with no model and no fact that has an entry the model sees (an input, or a handoff's tool
-  result) after its newest assistant entry. It then runs the take-up when the folder names a default. Its `afterResume` releases each conversation with a
-  fact whose seat has a model, in `order`. Job repair rule 1 already finds the `lead:<jobId>` submission of a waiting
-  lead.
+  result) after its newest assistant entry. It then runs the take-up when the folder names a default. Its
+  `afterResume` releases each conversation with a fact whose seat has a model, in `order`. Job repair rule 1 already
+  finds the `lead:<jobId>` submission of a waiting lead.
 - **The notice entry.** `intern.notice`, data `{ notice: "no_default_model", text }`, display-only, so the model never
   sees it. `conversations.entries`, the conversation feed (ADR-008), `bob chat`, `bob follow`, the Front desk page
   and the Job page show its text like the other the-intern entries.
