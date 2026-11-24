@@ -29,7 +29,7 @@ export type TerminalChatOptions = { reset: boolean; json: boolean };
 
 type EntryPage = { entries: AttributedEntryLike[]; next?: string };
 type SubmitAnswer = { submissionId: string } | { held: true };
-type SentLine = { submissionId: string; line: string };
+type SentLine = { submissionId: string; line: string; answersBefore: number };
 /** A typed line; its request id is fixed when it is typed, so every attempt to submit it is the same submission. */
 type TypedLine = { line: string; requestId: string };
 
@@ -70,6 +70,12 @@ async function waitUntilSettled(client: Client, submissionId: string): Promise<v
     }
 }
 
+/** The notice the daemon reports for a missing default model, on standard error; the chat stays open. */
+async function printNoModelNotice(client: Client, io: CommandIo): Promise<void> {
+    const status = (await client.invoke("daemon.status")) as { noDefaultModel: { message: string } | null };
+    if (status.noDefaultModel !== null) writeError(io, status.noDefaultModel.message);
+}
+
 export async function runTerminalChat(
     connect: () => Client,
     io: CommandIo,
@@ -80,7 +86,7 @@ export async function runTerminalChat(
     // A daemon that is absent at the start ends the command (S-005 AC-002.2); one that is starting or stopping, or lost
     // later, is waited for (REQ-015).
     const starting = patientClient(client, { onNotice: (text) => writeError(io, text), isAbsentFatalAtStart: true });
-    const desk = (await starting.invoke("desk.get")) as { conversationId: string };
+    const desk = (await starting.invoke("desk.get")) as { conversationId: string; seat?: { model: string | null } };
     const { conversationId } = desk;
     if (json) writeJson(io, desk);
     if (options.reset) await starting.invoke("conversations.reset", { conversationId });
@@ -88,6 +94,7 @@ export async function runTerminalChat(
     const tracker = createEntryTracker(conversationId);
     const history = await readHistory(starting, conversationId, io, json);
     for (const entry of history) tracker.markPrinted(entry.id);
+    if (!json && desk.seat?.model === null) await printNoModelNotice(starting, io);
     if (!json) {
         const lines = history.flatMap((entry) => historyText(entry) ?? []).flatMap((l) => l.split("\n"));
         for (const line of lines.slice(-HISTORY_LINES)) writeLine(io, line);
@@ -104,6 +111,8 @@ export async function runTerminalChat(
     // Aborted by Ctrl-D: from then on a call that meets an outage gives up, so a gone daemon doesn't trap the team member.
     const leaving = new AbortController();
     const sent: SentLine[] = [];
+    // How many answers the feed has brought; a line settled `no_model` is answered by one that comes after it was sent.
+    let answerCount = 0;
     // Lines typed and not yet admitted by the service, in the order they were typed.
     const unadmitted: TypedLine[] = [];
     // One notice per outage, whether the feed or a call meets it first.
@@ -158,9 +167,13 @@ export async function runTerminalChat(
             if (isReconnectable(error)) return;
             throw error;
         }
-        const answers = missed.filter((entry) => entry.kind === "pi.assistant");
-        if (answers.every((entry) => assistantText(entry) === "")) return;
-        for (const entry of answers) screen.showAnswer(assistantText(entry), responseTimestamps(entry));
+        answerCount += missed.filter((entry) => entry.kind === "pi.assistant").length;
+        const shown = missed.filter((entry) => entry.kind === "pi.assistant" || entry.kind === "intern.notice");
+        if (shown.every((entry) => entry.kind === "pi.assistant" && assistantText(entry) === "")) return;
+        for (const entry of shown) {
+            if (entry.kind === "intern.notice") screen.notice(() => writeLine(io, conversationEntryLine(entry) ?? ""));
+            else screen.showAnswer(assistantText(entry), responseTimestamps(entry));
+        }
     }
 
     /** Shows the response in flight, in order with the answers printed from the entries. */
@@ -220,7 +233,7 @@ export async function runTerminalChat(
         }
         unadmitted.splice(unadmitted.indexOf(typed), 1);
         if ("held" in answer) warn(`The front desk held the line until it continues: ${typed.line}`);
-        else sent.push({ submissionId: answer.submissionId, line: typed.line });
+        else sent.push({ submissionId: answer.submissionId, line: typed.line, answersBefore: answerCount });
     }
 
     /** Stops the turn, then names each submitted line the abort left unanswered. */
@@ -228,10 +241,12 @@ export async function runTerminalChat(
         try {
             await patient.invoke("conversations.abort", { conversationId });
             for (const entry of [...sent]) {
-                const { state } = (await patient.invoke("submissions.get", { submissionId: entry.submissionId })) as {
-                    state: string;
-                };
-                if (state === "unanswered") warn(`Dropped, not answered: ${entry.line}`);
+                const { state, reason } = (await patient.invoke("submissions.get", {
+                    submissionId: entry.submissionId,
+                })) as { state: string; reason?: string };
+                // A line settled `no_model` keeps that state after the model answers it from the transcript.
+                const isAnswered = reason === "no_model" && answerCount > entry.answersBefore;
+                if (state === "unanswered" && !isAnswered) warn(`Dropped, not answered: ${entry.line}`);
                 if (state === "unanswered" || state === "done") sent.splice(sent.indexOf(entry), 1);
             }
         } catch (error) {
