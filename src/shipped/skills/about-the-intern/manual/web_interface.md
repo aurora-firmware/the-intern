@@ -105,6 +105,15 @@ A job that came by email shows an **Email** section on its Job page. Any other j
 The page offers no download of an attachment, and it sends none to the browser. Only the job's agents read attachments,
 as files. The section stays current without a reload.
 
+### Work sent with no default model
+
+While pi's settings name no default model, a role without a model of its own doesn't run. Work you send to such an
+agent, such as an answer or a redirect, is accepted and waits. The conversation shows a **Notice**
+entry: "There is no default model: pi agent's settings name none. This conversation waits and runs once a model is
+available." The agent answers once a model is available, and you send nothing again. A conversation seated with no
+model shows "no model" in the **Seat changed** entry, in place of "on" and the model. See
+[Models and the pi login](running_the_intern.md#models-and-the-pi-login).
+
 ### Follow an agent
 
 Below the record the page shows the live activity of the job's lead conversation and of every conversation its agents
@@ -148,6 +157,12 @@ Under Stop and Redirect, each conversation has a collapsed **Settings** area wit
 
 The Front desk page shows the recent conversation with the [front desk](front_desk.md) and lets you send it messages.
 Its answers appear as it writes them. A message you send while it is busy waits its turn.
+
+While pi's settings name no default model, the front desk can't answer, unless you set a `model` for the `desk` role
+in `config.toml`. Then it keeps running. With no model, a message you send is accepted and waits, and the chat shows a
+**Notice** entry: "There is no default model: pi agent's settings name none. This conversation waits and runs once a
+model is available." The front desk answers once a model is available, and you send nothing again. The
+[no-model banner](#the-no-model-banner) is shown above the chat.
 
 **Stop** ends the front desk's current answer, with no confirmation, because it ends only a chat turn. Messages still
 queued are dropped, and the page lists the ones you sent from this page. Under the chat, **Create a job** gives a job
@@ -309,6 +324,11 @@ message and changes nothing.
 The Status page shows the daemon's state (its phase, versions, directories and worker threads), the usage in total and
 for each conversation, and the available models and thinking levels. It stays current without a reload.
 
+While pi's settings name no default model, a **No default model** notice at the top of the page gives the daemon's
+full message: where pi agent's folder is, and that you run `pi`, sign in with `/login` and choose a default model with
+`/model` when pi asks. A role that has its own model still runs. The notice goes away once a model is named, without a
+reload. See [Models and the pi login](running_the_intern.md#models-and-the-pi-login).
+
 ### Download a copy of the database
 
 Select **Download a copy** to download the export. A dialog states what the file holds: every conversation and the whole
@@ -333,6 +353,14 @@ When a page can't reach the service, for example while it restarts, it shows a b
 Trying to connect again; what you type is kept." The page disables its buttons and keeps any text you were typing. It
 reconnects on its own. When it does, it loads fresh data, removes the banner and enables the buttons, and you can send
 your kept text. You don't reload.
+
+## The no-model banner
+
+While pi's settings name no default model, every page of the sidebar and the Job page shows a banner: "There is no
+default model. Work you send is accepted and waits until a team member signs in to pi and chooses one." The banner
+disables no button; you can go on giving jobs and sending messages, and they wait. After you sign in to pi and choose
+a model, the service notices within 30 seconds, and the page removes the banner on its own. You don't reload. The
+[Status](#status) page gives the full message.
 
 ## What the web interface does not have
 
