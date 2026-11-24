@@ -1,4 +1,5 @@
 import { type ComponentChildren, Fragment, h } from "preact";
+import { NoModelBanner } from "./no_model_banner.ts";
 
 export type ShellPage = "board" | "desk" | "roles" | "workspaces" | "status" | "schedules" | "mail" | "job";
 
@@ -38,5 +39,5 @@ export const shell = ({ active, children }: ShellProps) =>
                 h("a", { href: link.href, "aria-current": link.page === active ? "page" : undefined }, link.label),
             ),
         ),
-        h("main", null, children),
+        h("main", null, h(NoModelBanner, null), children),
     );

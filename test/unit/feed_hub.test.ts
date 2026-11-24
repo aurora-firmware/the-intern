@@ -4,6 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { WorkerMessage } from "../../web/ui/feed_hub.ts";
 import { connections, delta, flush, type Step, setup, snapshot } from "../support/fake_feed_hub.ts";
 
 describe("createFeedHub streams", () => {
@@ -215,6 +216,34 @@ describe("createFeedHub status check", () => {
         await timers.advance(0);
         assert.equal(status.calls, 1);
         assert.deepEqual(connections(a.messages), [false]);
+    });
+});
+
+describe("createFeedHub no default model", () => {
+    const NOTICE = { piAgentDir: "/pi", message: "pi agent names no default model in /pi." };
+    const statuses = (messages: WorkerMessage[]) =>
+        messages.flatMap((message) => (message.type === "status" ? [message.noDefaultModel] : []));
+
+    it("tells_every_tab_the_no_default_model_notice_of_each_healthy_status_check_and_null_when_it_is_gone", async () => {
+        const { timers, status, tab } = setup();
+        const [a, b] = [tab(), tab()];
+        a.send({ type: "instance" });
+        b.send({ type: "follow", conversationIds: [] });
+        status.answer = () => Promise.resolve({ phase: "ready", noDefaultModel: NOTICE });
+        await timers.advance(10_000);
+        status.answer = () => Promise.resolve({ phase: "ready", noDefaultModel: null });
+        await timers.advance(10_000);
+        assert.deepEqual(statuses(a.messages), [NOTICE, null]);
+        assert.deepEqual(statuses(b.messages), [NOTICE, null]);
+    });
+
+    it("tells_no_tab_the_notice_when_the_status_check_is_unhealthy", async () => {
+        const { timers, status, tab } = setup();
+        const a = tab();
+        a.send({ type: "instance" });
+        status.answer = () => Promise.resolve({ phase: "stopping", noDefaultModel: NOTICE });
+        await timers.advance(10_000);
+        assert.deepEqual(statuses(a.messages), []);
     });
 });
 
