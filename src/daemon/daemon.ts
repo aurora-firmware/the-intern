@@ -290,12 +290,15 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         gateAdmission: Admission;
         jobStore: JobStore;
     }> {
-        const models = await createModelRuntime({ piAgentDir: resolvePiAgentDir(options.env) });
+        const models = await createModelRuntime({
+            piAgentDir: resolvePiAgentDir(options.env),
+            onReadError: (error) => logger.error("could not read the pi agent folder again", { cause: error.message }),
+        });
         undoStack.push(() => models.close());
         const gate = createAdmissionGate();
         const host = await openHarnessHost({
             databaseFile: dirs.databaseFile,
-            models: options.prepareModels?.(models) ?? models.models,
+            models: options.prepareModels?.(models) ?? (() => models.current()),
             harnessSettings: models.harnessSettings,
             extensions: [gate.extension, ...components.flatMap((component) => component.extensions ?? [])],
             optInExtensions: components.flatMap((component) => component.optInExtensions ?? []),
