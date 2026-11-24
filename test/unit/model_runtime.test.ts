@@ -30,6 +30,27 @@ const SETTINGS_JSON = {
 
 const AUTH_JSON = { fixture: { type: "api_key", key: "stored-key" } };
 
+/** A timer the test fires by hand: it records the period and whether it was stopped. */
+function createManualTimer() {
+    let tick: (() => Promise<void>) | undefined;
+    const timer = {
+        periodMs: undefined as number | undefined,
+        stopped: false,
+        schedule: (callback: () => Promise<void>, periodMs: number) => {
+            tick = callback;
+            timer.periodMs = periodMs;
+            return () => {
+                timer.stopped = true;
+            };
+        },
+        fire: async () => {
+            if (!tick) throw new Error("No timer was scheduled");
+            await tick();
+        },
+    };
+    return timer;
+}
+
 async function snapshotFolder(dir: string): Promise<Record<string, string>> {
     const snapshot: Record<string, string> = {};
     for (const name of (await readdir(dir)).sort()) {
@@ -138,6 +159,154 @@ describe("model runtime", () => {
         await runtime.close();
         runtime = undefined;
         assert.deepEqual(await snapshotFolder(hermetic.piAgentDir), before);
+    });
+});
+
+describe("model runtime re-read", () => {
+    let hermetic: HermeticEnv;
+    let runtime: InternModels | undefined;
+    let timer: ReturnType<typeof createManualTimer>;
+    let errors: Error[];
+
+    async function open(): Promise<InternModels> {
+        runtime = await createModelRuntime({
+            piAgentDir: hermetic.piAgentDir,
+            schedule: timer.schedule,
+            onReadError: (error) => errors.push(error),
+        });
+        return runtime;
+    }
+
+    const writeSettings = (settings: object) =>
+        writeFile(join(hermetic.piAgentDir, "settings.json"), JSON.stringify(settings));
+
+    beforeEach(async () => {
+        hermetic = await createHermeticEnv();
+        timer = createManualTimer();
+        errors = [];
+        await writeFile(join(hermetic.piAgentDir, "models.json"), JSON.stringify(MODELS_JSON));
+        await writeFile(join(hermetic.piAgentDir, "settings.json"), JSON.stringify({}));
+    });
+
+    afterEach(async () => {
+        await runtime?.close();
+        runtime = undefined;
+        await hermetic.dispose();
+    });
+
+    it("reads_the_folder_every_10_seconds", async () => {
+        await open();
+        assert.equal(timer.periodMs, 10_000);
+    });
+
+    it("reports_no_default_model_while_the_settings_name_none", async () => {
+        const models = await open();
+        assert.equal(models.noDefaultModel(), true);
+        assert.equal(models.defaultChoice(), undefined);
+    });
+
+    it("notices_a_default_that_appears_and_calls_each_listener_once", async () => {
+        const models = await open();
+        let first = 0;
+        let second = 0;
+        models.onDefaultAppeared(() => first++);
+        models.onDefaultAppeared(() => second++);
+        await writeSettings(SETTINGS_JSON);
+        assert.equal(models.noDefaultModel(), true, "nothing is read before the timer fires");
+        await timer.fire();
+        assert.equal(models.noDefaultModel(), false);
+        assert.deepEqual(models.defaultChoice(), { model: "fixture/thinking-model", thinkingLevel: "high" });
+        await timer.fire();
+        assert.deepEqual([first, second], [1, 1]);
+    });
+
+    it("counts_a_named_default_the_registry_does_not_resolve", async () => {
+        const models = await open();
+        await writeSettings({ defaultProvider: "fixture", defaultModel: "unknown-model" });
+        await timer.fire();
+        assert.equal(models.noDefaultModel(), false);
+    });
+
+    it("stops_calling_a_listener_that_was_removed", async () => {
+        const models = await open();
+        let calls = 0;
+        const remove = models.onDefaultAppeared(() => calls++);
+        remove();
+        await writeSettings(SETTINGS_JSON);
+        await timer.fire();
+        assert.equal(calls, 0);
+    });
+
+    it("notices_a_default_that_disappears", async () => {
+        await writeSettings(SETTINGS_JSON);
+        const models = await open();
+        assert.equal(models.noDefaultModel(), false);
+        await writeSettings({});
+        await timer.fire();
+        assert.equal(models.noDefaultModel(), true);
+        assert.equal(models.defaultChoice(), undefined);
+    });
+
+    it("keeps_the_runtime_while_no_file_changed", async () => {
+        const models = await open();
+        const before = models.current();
+        await timer.fire();
+        assert.equal(models.current(), before);
+    });
+
+    it("opens_a_new_runtime_with_the_logins_when_auth_json_is_created", async () => {
+        const models = await open();
+        const before = models.current();
+        assert.equal(await before.checkAuth("fixture").then((auth) => auth.configured), false);
+        await writeFile(join(hermetic.piAgentDir, "auth.json"), JSON.stringify(AUTH_JSON), { mode: 0o600 });
+        await timer.fire();
+        assert.notEqual(models.current(), before);
+        assert.equal(models.models, models.current());
+    });
+
+    it("opens_a_new_runtime_when_models_json_changes_size", async () => {
+        const models = await open();
+        const before = models.current();
+        const changed = { providers: { fixture: { ...MODELS_JSON.providers.fixture, models: [{ id: "only-model" }] } } };
+        await writeFile(join(hermetic.piAgentDir, "models.json"), JSON.stringify(changed));
+        await timer.fire();
+        assert.notEqual(models.current(), before);
+        assert.deepEqual(
+            models.listModels().map((entry) => entry.model),
+            ["fixture/only-model"],
+        );
+    });
+
+    it("keeps_the_state_and_reports_when_the_settings_cannot_be_read", async () => {
+        await writeSettings(SETTINGS_JSON);
+        const models = await open();
+        await writeFile(join(hermetic.piAgentDir, "settings.json"), "{not json");
+        await timer.fire();
+        assert.equal(models.noDefaultModel(), false);
+        assert.equal(errors.length, 1);
+        assert.ok(errors[0]?.message.includes("not valid JSON"));
+    });
+
+    it("writes_nothing_into_the_pi_agent_folder_when_it_reads", async () => {
+        await writeSettings(SETTINGS_JSON);
+        const models = await open();
+        const before = await snapshotFolder(hermetic.piAgentDir);
+        await timer.fire();
+        await timer.fire();
+        assert.equal(models.noDefaultModel(), false);
+        assert.deepEqual(await snapshotFolder(hermetic.piAgentDir), before);
+    });
+
+    it("stops_the_timer_on_close_and_reads_nothing_afterwards", async () => {
+        const models = await open();
+        let calls = 0;
+        models.onDefaultAppeared(() => calls++);
+        await models.close();
+        assert.equal(timer.stopped, true);
+        await writeSettings(SETTINGS_JSON);
+        await timer.fire();
+        assert.equal(models.noDefaultModel(), true);
+        assert.equal(calls, 0);
     });
 });
 
