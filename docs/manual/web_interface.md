@@ -158,10 +158,11 @@ Under Stop and Redirect, each conversation has a collapsed **Settings** area wit
 The Front desk page shows the recent conversation with the [front desk](front_desk.md) and lets you send it messages.
 Its answers appear as it writes them. A message you send while it is busy waits its turn.
 
-While pi's settings name no default model, the front desk can't answer. A message you send is accepted and waits, and
-the chat shows a **Notice** entry: "There is no default model: pi agent's settings name none. This conversation waits
-and runs once a model is available." The front desk answers once a model is available, and you send nothing again. A
-role with a model of its own keeps running. The [no-model banner](#the-no-model-banner) is shown above the chat.
+While pi's settings name no default model, the front desk can't answer, unless you set a `model` for the `desk` role
+in `config.toml`. Then it keeps running. With no model, a message you send is accepted and waits, and the chat shows a
+**Notice** entry: "There is no default model: pi agent's settings name none. This conversation waits and runs once a
+model is available." The front desk answers once a model is available, and you send nothing again. The
+[no-model banner](#the-no-model-banner) is shown above the chat.
 
 **Stop** ends the front desk's current answer, with no confirmation, because it ends only a chat turn. Messages still
 queued are dropped, and the page lists the ones you sent from this page. Under the chat, **Create a job** gives a job
