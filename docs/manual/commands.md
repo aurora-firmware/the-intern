@@ -677,8 +677,9 @@ prints that file. A name that is neither `common` nor a shipped role exits 1.
 ## Install, upgrade and remove
 
 These commands set up and maintain the installation. They call no operation of the service, except that
-`bob service status` reads the running version from the daemon. They act on the instance directories and the pi login
-folder that the service registration holds, not on those of your shell. Notices, questions and errors go to standard
+`bob service status` reads the running version from the daemon, and `bob service install`, `bob upgrade` and
+`bob rollback` read the daemon's state while they wait for it to be ready. They act on the instance directories and
+the pi login folder that the service registration holds, not on those of your shell. Notices, questions and errors go to standard
 error, and each command takes `--help`. A usage error exits 2. See [Installing and upgrading](installing.md) for what
 each command does step by step.
 
