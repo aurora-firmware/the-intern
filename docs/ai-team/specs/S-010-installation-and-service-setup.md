@@ -677,15 +677,23 @@ without admin rights, on Linux and on macOS. The install script SHALL never ask 
 
 The ready wait in REQ-004, REQ-006, REQ-007 and REQ-008 SHALL be 60 seconds, after which the version counts as not
 ready. Each compressed bundle, linux-x64 and darwin-arm64, SHALL be at most 150 MB. This spec sets no time for the
-installation commands or the release workflow to finish: the project has no reference machine to measure them on.
+installation commands or the release workflow to finish.
 
-#### AC-015.1 — Bundle size
+#### AC-015.1 — Over the limit fails the build
+
+- **Given:** a bundle archive over 150 MB
+- **When:** the bundle build writes it
+- **Then:** the build fails, naming the file and its size
+
+**Verification:** test — the bundle build's size check.
+
+#### AC-015.2 — Published bundles within the limit
 
 - **Given:** a release built by CI
-- **When:** its bundles are built
-- **Then:** the build fails for a bundle over 150 MB, and each bundle's size on the release page is at most 150 MB
+- **When:** it is published
+- **Then:** each bundle's size on the release page is at most 150 MB
 
-**Verification:** test — the bundle build's size check; and inspection of the release page.
+**Verification:** demonstration — the release run, with the sizes on the release page recorded as evidence.
 
 ### REQ-016 — Documentation
 
@@ -836,4 +844,4 @@ No setting is added to `config.toml`.
 | 2026-11-24 | v0.2. The daemon starts and stays reachable without a pi login (CR-002). REQ-004, Interfaces (the `bob service install` row) and Workflow: a daemon that is ready with no pi login is ready; `bob service install` exits 0 and prints a notice that no model is available, pointing at signing in to pi. AC-004.3: "no pi login" leaves the cases that exit 1. New AC-004.5: no pi login exits 0 with the notice, and the service answers. REQ-016: the manual says the service runs without a pi login and what waits until a team member signs in. Open Questions: how `bob service install` learns that no model is available, for CR-002's Feature Architecture. No identifier retired. | CR-002, approved by the product owner on 2026-11-24. Gate 5 of this spec isn't signed off yet, so this reopens AC-004.3's acceptance. | CR-002's tasks; T-503 to T-505 are unaffected unless they cover the no-login case |
 | 2026-11-24 | v0.2, same version, revised on the planning branch after the Architect's consistency review (corrections C11, C13) and CR-002's settled details of the same day. REQ-004, AC-004.5, Interfaces (the `bob service install` row), Workflow and Open Questions: the notice says there is no default model. REQ-016: the manual says that only agents of roles without their own model wait, that only fires with no model are skipped, and that signing in includes choosing a default model with `/model` when pi asks. Implementation Order: new phase 5. No identifier added or retired. | Architect's consistency review of 2026-11-24; product owner, CR-002 settled details, 2026-11-24. | CR-002's tasks |
 | 2026-11-24 | v0.2, same version, revised on the planning branch with CR-002's Feature Architecture (Spec finding SF8). REQ-004 and Open Questions: `bob service install` learns that there is no default model from the `noDefaultModel` field of the ready startup report (ADR-013 decision 6); the question is resolved. No identifier added or retired. | CR-002 Feature Architecture, ADR-013 decision 6 amendment, 2026-11-24. | CR-002's tasks |
-| 2026-11-26 | v0.3. REQ-015 renamed "Ready wait and bundle size": the four time thresholds (`bob service install` to ready, `bob upgrade` downtime, a switch back after a failed upgrade, the release workflow) are removed, and the spec now says it sets no time for the installation commands or the release workflow. The 60-second ready wait and the 150 MB bundle limit stay. AC-015.1 now checks only the bundle size. Success Criteria 3 no longer checks REQ-015 timings. No identifier added or retired. | Product owner, 2026-11-26: the thresholds were not based on measurements, and the project has no reference machine for the test benches or the release runner, so a release time can't be met or tested meaningfully. | T-503 (AC-2 keeps the size check only), T-504 (AC-4 removed) |
+| 2026-11-26 | v0.3. REQ-015 renamed "Ready wait and bundle size": the four time thresholds (`bob service install` to ready, `bob upgrade` downtime, a switch back after a failed upgrade, the release workflow) are removed, and the spec now says it sets no time for the installation commands or the release workflow. The 60-second ready wait and the 150 MB bundle limit stay. AC-015.1 now checks that a bundle over 150 MB fails the build (test), and new AC-015.2 checks the published bundle sizes (demonstration). Success Criteria 3 no longer checks REQ-015 timings. AC-015.2 added; no identifier retired. | Product owner, 2026-11-26: the thresholds were not based on measurements, and the project has no reference machine for the test benches or the release runner, so a release time can't be met or tested meaningfully. | T-503 (AC-2 keeps the size check only), T-504 (AC-4 removed) |
