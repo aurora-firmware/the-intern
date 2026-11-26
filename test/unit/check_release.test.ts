@@ -63,8 +63,8 @@ describe("release check of the tag", () => {
         const root = mkdtempSync(join(tmpdir(), "check-release-"));
         after(() => rmSync(root, { recursive: true, force: true }));
 
-        function runScript(cwd: string) {
-            return spawnSync(process.execPath, [SCRIPT, `v${PACKAGE_VERSION}`], {
+        function runScript(cwd: string, tag = `v${PACKAGE_VERSION}`) {
+            return spawnSync(process.execPath, [SCRIPT, tag], {
                 cwd,
                 encoding: "utf8",
                 timeout: scaled(30_000),
@@ -79,6 +79,16 @@ describe("release check of the tag", () => {
             assert.equal(run.status, 1);
             assert.match(run.stderr, /not a git repository/);
             assert.doesNotMatch(run.stderr, /is not on main/);
+        });
+
+        it("refuses a mismatched tag for its version without asking git", () => {
+            const folder = join(root, "not-a-repository-for-a-wrong-tag");
+            mkdirSync(folder);
+            const run = runScript(folder, "vnext");
+            assert.equal(run.status, 1);
+            assert.match(run.stderr, /vnext/);
+            assert.match(run.stderr, new RegExp(PACKAGE_VERSION.replaceAll(".", "\\.")));
+            assert.doesNotMatch(run.stderr, /git/);
         });
 
         it("still refuses a commit that is not an ancestor of origin/main", () => {
