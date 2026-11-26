@@ -251,9 +251,8 @@ export function createRoleCatalog(options: RoleCatalogOptions): RoleCatalog {
         async restore(name) {
             const role = requireRole(name);
             if (!role.shipped) throw new RoleRefusedError("conflict", name, "it is a team role, not a shipped role");
-            const { [name]: _dropped, ...remaining } = current().shippedChanges;
-            const { [name]: _older, ...olderRemaining } = current().older;
-            await config.change(rolesSection, { ...current(), shippedChanges: remaining, older: olderRemaining });
+            // The file comes first: dropping the table's entry is what shows the role as not changed, so a reader
+            // that sees it not changed finds the shipped text stored. A failure between them leaves it changed.
             await restoreShippedFile({
                 dataDir,
                 shippedRoot,
@@ -261,6 +260,9 @@ export function createRoleCatalog(options: RoleCatalogOptions): RoleCatalog {
                 relativePath: `instructions/roles/${name}.md`,
                 announce: "role",
             });
+            const { [name]: _dropped, ...remaining } = current().shippedChanges;
+            const { [name]: _older, ...olderRemaining } = current().older;
+            await config.change(rolesSection, { ...current(), shippedChanges: remaining, older: olderRemaining });
             return requireRole(name);
         },
         async remove(name) {
