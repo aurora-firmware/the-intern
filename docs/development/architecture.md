@@ -1702,14 +1702,17 @@ records the design, and ADR-001 decision 4 lists its fact and its release.
   model releases it after the seat commit.
 - **Abort and close.** An abort's commit and the closed-mark commit clear `waitingForModel`. The waiting input stays
   in the transcript, and its submission is already settled. After Ctrl-C, `bob chat` names each line it submitted that
-  is still unanswered, `no_model` included, as dropped (S-005 REQ-009).
+  is still unanswered, `no_model` included, as dropped (S-005 REQ-009). A `no_model` submission keeps that state after
+  its release answers it, so `bob chat` counts such a line as answered once the transcript it has read holds an
+  assistant entry after the line's `intern.steer` entry, and doesn't name it.
 - **Startup.** At step 7, before `host.resume()`, the agents component's repair hook sets the fact and the notice for
   each open conversation with no model and no fact that has an entry the model sees (an input, or a handoff's tool
-  result) after its newest assistant entry. It then runs the take-up when the folder names a default. Its
-  `afterResume` releases each conversation with a fact whose seat has a model, in `order`. Job repair rule 1 already
-  finds the `lead:<jobId>` submission of a waiting lead.
+  result) after its newest assistant entry and its newest `intern.notice` entry (`firstWaitingEntryId` in
+  `src/host/model_wait.ts`), so input whose wait an abort ended is not set waiting again. It then runs the take-up when
+  the folder names a default. Its `afterResume` releases each conversation with a fact whose seat has a model, in
+  `order`. Job repair rule 1 already finds the `lead:<jobId>` submission of a waiting lead.
 - **The notice entry.** `intern.notice`, data `{ notice: "no_default_model", text }`, display-only, so the model never
-  sees it. `conversations.entries`, the conversation feed (ADR-008), `bob chat`, `bob follow`, the Front desk page
+  sees it. `conversations.entries`, the conversation feed (ADR-008), `bob chat`, `bob jobs follow`, the Front desk page
   and the Job page show its text like the other the-intern entries.
 - **`bob chat`.** It reads `desk.get` when it opens. A seat with model `null` means the front desk has no model. Without
   a terminal it then submits every line without waiting, prints the notice from `daemon.status`'s `noDefaultModel`
