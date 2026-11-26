@@ -1,7 +1,7 @@
 ---
 id: S-010
 title: Installation and service setup
-version: '0.3'
+version: '0.4'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-22'
 author: planner
@@ -167,7 +167,8 @@ These are the installation commands: the `service` group and the top-level `upgr
 (S-000 Command line, Boundary, and S-005, as amended on this branch). Like every `bob` command they take `--help` at
 every level and exit 2 on a usage error (S-005 REQ-001). They aren't S-005 data commands: this spec owns their output
 and exit codes, as the table states. Notices, questions and errors go to standard error. They call no operation of the
-Intern service, except that `bob service status` reads the running version with `daemon.status` (S-002 REQ-012). Every
+Intern service, except `daemon.status` (S-002 REQ-012): `bob service status` reads the running version with it, and the
+ready wait of `bob service install`, `bob upgrade` and `bob rollback` reads the phase and the version with it. Every
 command after `bob service install` acts on the instance directories and the pi agent folder the service registration
 holds (REQ-004), not on those of its own environment.
 
@@ -233,6 +234,7 @@ bob service install                                                             
 bob upgrade [version]                                                                                    REQ-006
   → no service / another daemon owns the instance / another upgrade runs → refuse
   → same version → "already on X.Y.Z", exit 0; older → refuse, point to bob rollback
+  → no terminal and no --yes → refuse
   → download and check → confirm → stop service → take pre-upgrade copy → switch → start → ready → done
     → not ready, any other cause → switch back, restore config and internal folder
         (and the database from the copy if the new version opened it), start previous → exit 1   REQ-007
@@ -444,7 +446,8 @@ is copied, switched, set aside or restored; REQ-007 to REQ-009 hold it the same 
 pre-upgrade copy only after the upgrade succeeds, and never a copy kept by REQ-008's "no" (REQ-012). It SHALL print each
 step as it runs. It SHALL refuse, changing nothing, when the service isn't registered, when a daemon the service didn't
 start owns the instance, when another upgrade or rollback is running, and when `<version>` is older than the current
-version, pointing to `bob rollback`. When the current version is the one asked for, it SHALL say so and exit 0.
+version, pointing to `bob rollback`. When the current version is the one asked for, it SHALL say so and exit 0. Past
+these checks, it SHALL also refuse, changing nothing, when standard input isn't a terminal and `--yes` isn't given.
 
 #### AC-006.1 — An upgrade with work running
 
@@ -845,3 +848,5 @@ No setting is added to `config.toml`.
 | 2026-11-24 | v0.2, same version, revised on the planning branch after the Architect's consistency review (corrections C11, C13) and CR-002's settled details of the same day. REQ-004, AC-004.5, Interfaces (the `bob service install` row), Workflow and Open Questions: the notice says there is no default model. REQ-016: the manual says that only agents of roles without their own model wait, that only fires with no model are skipped, and that signing in includes choosing a default model with `/model` when pi asks. Implementation Order: new phase 5. No identifier added or retired. | Architect's consistency review of 2026-11-24; product owner, CR-002 settled details, 2026-11-24. | CR-002's tasks |
 | 2026-11-24 | v0.2, same version, revised on the planning branch with CR-002's Feature Architecture (Spec finding SF8). REQ-004 and Open Questions: `bob service install` learns that there is no default model from the `noDefaultModel` field of the ready startup report (ADR-013 decision 6); the question is resolved. No identifier added or retired. | CR-002 Feature Architecture, ADR-013 decision 6 amendment, 2026-11-24. | CR-002's tasks |
 | 2026-11-26 | v0.3. REQ-015 renamed "Ready wait and bundle size": the four time thresholds (`bob service install` to ready, `bob upgrade` downtime, a switch back after a failed upgrade, the release workflow) are removed, and the spec now says it sets no time for the installation commands or the release workflow. The 60-second ready wait and the 150 MB bundle limit stay. AC-015.1 now checks that a bundle over 150 MB fails the build (test), and new AC-015.2 checks the published bundle sizes (demonstration). Success Criteria 3 no longer checks REQ-015 timings. AC-015.2 added; no identifier retired. | Product owner, 2026-11-26: the thresholds were not based on measurements, and the project has no reference machine for the test benches or the release runner, so a release time can't be met or tested meaningfully. | T-503 (AC-2 keeps the size check only), T-504 (AC-4 removed) |
+| 2026-11-26 | v0.4. Interfaces, Commands: the exception for `daemon.status` also covers the ready wait of `bob service install`, `bob upgrade` and `bob rollback`, which reads the phase and the version with it. REQ-006 and Workflow: past the version checks, `bob upgrade` refuses, changing nothing, when standard input isn't a terminal and `--yes` isn't given. Cross-spec: S-005 v0.12, the installation commands' row of the Interfaces command table. No identifier added or retired. | Spec-truth reconciliation, 2026-11-26 (findings F2 and F3): the built work was right and the spec was out of date. Approved by the loop acting as product owner while the team member is away. | none (built as amended) |
+| 2026-11-26 | Reconciliation record: spec-truth reconciliation — FAIL. S-010 v0.3 checked against T-464 to T-505, T-511, T-525, T-526, T-530 to T-532 and B-056 to B-063: running `bob service install` again replaces the record's `PATH`, against REQ-004 (follow-up task); Interfaces and S-005 said only `bob service status` calls `daemon.status`, but the ready wait does too, and REQ-006 omitted the no-terminal refusal (v0.4). Success Criteria 3 met through the product owner's substitute (a privileged systemd container, 2026-11-26); Success Criteria 5 pending. | Completion mode of the architecture consistency review | the follow-up task for REQ-004's `PATH` |
