@@ -19,7 +19,9 @@ permissions:
 # official node:24.22.0-bookworm image as root, so files left in the shared runner
 # workspace always have the same owner. The Installation Cycle job is the exception:
 # it starts the privileged systemd rig with Docker, so it runs on the runner's host
-# without a job container.
+# without a job container. The container jobs leave root-owned files in the shared
+# workspace, which the runner's account cannot delete, so the job first hands the
+# workspace back to that account with a container, before it checks out.
 jobs:
   format:
     name: Format
@@ -111,6 +113,11 @@ jobs:
     name: Installation Cycle
     runs-on: self-hosted
     steps:
+      - name: Hand the workspace back to the runner's account
+        run: >-
+          docker run --rm -v "$GITHUB_WORKSPACE:/w" node:24.22.0-bookworm
+          chown -R "$(id -u):$(id -g)" /w
+
       - name: Checkout
         uses: actions/checkout@v6
 
