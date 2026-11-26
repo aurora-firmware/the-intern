@@ -558,4 +558,70 @@ describe("bob chat on a terminal when the front desk has no model", { skip }, ()
         assert.equal(await exitStatus(session), 0, session.stderr());
         assert.equal(session.stderr().includes("Dropped"), false, session.stderr());
     });
+
+    it("exits 0 on Ctrl-D while a submitted line waits for a model", async () => {
+        const fixture = await noModelDaemon();
+        const session = chat(fixture);
+        await session.waitFor("output", PROMPT);
+        session.write(`${FIRST}\r`);
+        await untilNoticeEntry(fixture.daemon);
+
+        session.write(CTRL_D);
+
+        assert.equal(await exitStatus(session), 0, session.stderr());
+    });
+});
+
+describe("bob chat --json on a terminal when the front desk has no model", { skip }, () => {
+    it("prints the notice on standard error, only JSON on standard output, and stays open", async () => {
+        const fixture = await noModelDaemon();
+        const status = (await fixture.daemon.invoke("daemon.status", {})) as DaemonStatus;
+        assert.notEqual(status.noDefaultModel, null);
+        const message = status.noDefaultModel?.message ?? "";
+        const session = chat(fixture, ["--json"]);
+
+        await session.waitFor("stderr", message);
+        await session.waitFor("output", '"inbox"');
+
+        const lines = session
+            .output()
+            .split(/\r?\n/)
+            .filter((line) => line.trim() !== "");
+        for (const line of lines) assert.doesNotThrow(() => JSON.parse(line), `not JSON: ${line}`);
+        assert.equal(session.output().includes(message), false, session.output());
+        session.write(CTRL_D);
+        assert.equal(await exitStatus(session), 0, session.stderr());
+    });
+
+    it("names a line waiting for a model as dropped on Ctrl-C and stays open", async () => {
+        const fixture = await noModelDaemon();
+        const session = chat(fixture, ["--json"]);
+        await session.waitFor("stderr", PROMPT);
+        session.write(`${FIRST}\r`);
+        await untilNoticeEntry(fixture.daemon);
+
+        session.write(CTRL_C);
+        await session.waitFor("stderr", `Dropped, not answered: ${FIRST}`);
+        session.write(CTRL_D);
+
+        assert.equal(await exitStatus(session), 0, session.stderr());
+    });
+
+    it("does not name a line as dropped on Ctrl-C once the model answered it", async () => {
+        const fixture = await noModelDaemon();
+        const session = chat(fixture, ["--json"]);
+        await session.waitFor("stderr", PROMPT);
+        session.write(`${FIRST}\r`);
+        await untilNoticeEntry(fixture.daemon);
+        await writeFile(join(fixture.env.piAgentDir, "settings.json"), LOOPBACK_DEFAULT);
+        await session.waitFor("output", `echo: ${FIRST}`);
+
+        session.write(CTRL_C);
+        session.write(`${THIRD}\r`);
+        await session.waitFor("output", `echo: ${THIRD}`);
+        session.write(CTRL_D);
+
+        assert.equal(await exitStatus(session), 0, session.stderr());
+        assert.equal(session.stderr().includes("Dropped"), false, session.stderr());
+    });
 });
