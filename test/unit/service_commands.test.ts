@@ -72,17 +72,24 @@ function capture() {
     return { io, out: () => out, err: () => err };
 }
 
-type FakeManager = ServiceManager & { calls: string[]; setState(state: ServiceState): void; failRegister?: string };
+type FakeManager = ServiceManager & {
+    calls: string[];
+    registered: ServiceRecord[];
+    setState(state: ServiceState): void;
+    failRegister?: string;
+};
 
 function fakeManager(): FakeManager {
     let state: ServiceState = { registered: false, startsAtBoot: false };
     const manager: FakeManager = {
         calls: [],
+        registered: [],
         setState(next) {
             state = next;
         },
         async register(record) {
             manager.calls.push("register");
+            manager.registered.push({ ...record });
             if (manager.failRegister !== undefined) throw new ServiceRefusedError(manager.failRegister);
             record.lingerTurnedOn = true;
             state = { registered: true, startsAtBoot: true };
@@ -558,6 +565,18 @@ describe("bob service install", () => {
         assert.equal(record?.dataDir, "/r/data");
         assert.equal(record?.runtimeDir, "/r/run");
         assert.equal(record?.piAgentDir, "/r/pi");
+    });
+
+    it("keeps the first install's PATH in the record and the registration when run again from another PATH", async () => {
+        const { context, manager } = setup();
+        context.io.env.PATH = "/second/shell/bin";
+        await writeServiceRecord(layout, recordOf({ path: "/first/shell/bin" }));
+
+        const status = await runServiceInstall(context);
+
+        assert.equal(status, 0);
+        assert.equal((await readServiceRecord(layout))?.path, "/first/shell/bin");
+        assert.equal(manager.registered[0]?.path, "/first/shell/bin");
     });
 
     it("keeps that it turned lingering on when a repeated registration finds it already on", async () => {
