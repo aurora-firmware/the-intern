@@ -87,11 +87,15 @@ tar -C "$bundles" -c . | docker exec -i -u tester "$container" tar -x -C /home/t
 tar -C "$repo" -c package.json test/install test/support | docker exec -i -u tester "$container" \
     tar -x -C /home/tester/work || fail "copying the tests in failed"
 
+# The files share one account, its program folder, its one service and its ports, so they run one at a time. A test or
+# a hook that never settles fails after 15 minutes instead of holding the runner for hours; that is well above the
+# slowest suite (about 70 seconds).
 # The runner is not on the PATH the commands get.
 docker exec -u tester -w /home/tester/work \
     -e "XDG_RUNTIME_DIR=$runtime_dir" \
     -e "DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime_dir/bus" \
     -e "PATH=/usr/local/bin:/usr/bin:/bin" \
     -e "INSTALL_BUNDLES=/home/tester/bundles" \
-    "$container" "$runner_dir/node" --test --test-reporter=spec "$@" 2>&1 | tee "$log"
+    "$container" "$runner_dir/node" --test --test-concurrency=1 --test-timeout=900000 --test-reporter=spec "$@" \
+    2>&1 | tee "$log"
 exit "${PIPESTATUS[0]}"
