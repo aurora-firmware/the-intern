@@ -97,7 +97,6 @@ describe("renderUnit", () => {
         for (const line of [
             "Restart=on-failure",
             "RestartSec=5",
-            "StartLimitIntervalSec=0",
             "KillMode=mixed",
             "TimeoutStopSec=20",
             `ConditionPathExists=!${layout.holdFile}`,
@@ -105,6 +104,16 @@ describe("renderUnit", () => {
         ]) {
             assert.ok(unit.split("\n").includes(line), `missing ${line}`);
         }
+    });
+
+    it("puts the start limit in the Unit section, where systemd reads it", () => {
+        const unit = renderUnit(newRecord(), programLayout("/home/ada"));
+        const sectionOf = (section: string) => {
+            const body = unit.split(`[${section}]\n`)[1] ?? "";
+            return body.split(/^\[/m)[0].split("\n");
+        };
+        assert.ok(sectionOf("Unit").includes("StartLimitIntervalSec=0"));
+        assert.ok(!sectionOf("Service").includes("StartLimitIntervalSec=0"));
     });
 });
 
