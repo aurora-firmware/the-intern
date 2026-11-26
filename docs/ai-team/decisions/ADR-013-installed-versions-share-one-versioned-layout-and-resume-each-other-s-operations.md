@@ -84,7 +84,8 @@ folder layout, each file carrying a format number, and each step of an operation
 - The first release that carries this layout can be the previous version of every later one; nothing before it was
   installed this way.
 - A switch-back after the new version opened the database takes a restore, so it is slower than one after a crash
-  before step 4 (S-010 REQ-015's 60 seconds covers both).
+  before step 4. S-010 sets no time for either (v0.3); the 60-second ready wait (S-010 REQ-015) starts only once the
+  previous version is started, so the restore doesn't count against it.
 - A team member who deletes `operation.json` by hand takes the recovery on themselves; the manual says to leave it.
 
 ## Alternatives Considered
