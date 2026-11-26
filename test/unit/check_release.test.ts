@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { describe, it } from "node:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, describe, it } from "node:test";
 import { checkReleaseTag } from "../../release/check_release.ts";
 import { scaled } from "../support/time_scale.ts";
 
+const PACKAGE_VERSION = (
+    JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string }
+).version;
 const SCRIPT = new URL("../../release/check_release.ts", import.meta.url).pathname;
 
 describe("release check of the tag", () => {
@@ -51,5 +57,45 @@ describe("release check of the tag", () => {
         assert.equal(run.status, 1);
         assert.match(run.stderr, /vnext/);
         assert.equal(run.stdout, "");
+    });
+
+    describe("in a folder that git rejects or a repository without origin/main", () => {
+        const root = mkdtempSync(join(tmpdir(), "check-release-"));
+        after(() => rmSync(root, { recursive: true, force: true }));
+
+        function runScript(cwd: string) {
+            return spawnSync(process.execPath, [SCRIPT, `v${PACKAGE_VERSION}`], {
+                cwd,
+                encoding: "utf8",
+                timeout: scaled(30_000),
+                env: { ...process.env, GIT_CEILING_DIRECTORIES: root },
+            });
+        }
+
+        it("reports git's own error, not 'not on main', when git fails for another reason", () => {
+            const folder = join(root, "not-a-repository");
+            mkdirSync(folder);
+            const run = runScript(folder);
+            assert.equal(run.status, 1);
+            assert.match(run.stderr, /not a git repository/);
+            assert.doesNotMatch(run.stderr, /is not on main/);
+        });
+
+        it("still refuses a commit that is not an ancestor of origin/main", () => {
+            const folder = join(root, "diverged");
+            mkdirSync(folder);
+            const git = (...args: string[]) =>
+                spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
+                    cwd: folder,
+                    encoding: "utf8",
+                });
+            git("init", "-q");
+            git("commit", "-q", "--allow-empty", "-m", "main");
+            git("update-ref", "refs/remotes/origin/main", "HEAD");
+            git("commit", "-q", "--allow-empty", "-m", "ahead of main");
+            const run = runScript(folder);
+            assert.equal(run.status, 1);
+            assert.match(run.stderr, /is not on main/);
+        });
     });
 });
