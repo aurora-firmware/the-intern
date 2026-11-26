@@ -42,18 +42,23 @@ function main(): void {
         process.stderr.write("Usage: node release/check_release.ts <tag>\n");
         process.exit(1);
     }
+    const packageVersion = readPackageVersion();
+    // Git is asked only when the version matches, so a wrong tag never depends on git or on who owns the checkout.
+    const versionResult = checkReleaseTag({ tag, packageVersion, isOnMain: true });
+    if (!versionResult.ok) fail(versionResult.reason);
     let isOnMain: boolean;
     try {
         isOnMain = isHeadOnMain();
     } catch (error) {
-        process.stderr.write(`${(error as Error).message}\n`);
-        process.exit(1);
+        fail((error as Error).message);
     }
-    const result = checkReleaseTag({ tag, packageVersion: readPackageVersion(), isOnMain });
-    if (!result.ok) {
-        process.stderr.write(`${result.reason}\n`);
-        process.exit(1);
-    }
+    const result = checkReleaseTag({ tag, packageVersion, isOnMain });
+    if (!result.ok) fail(result.reason);
+}
+
+function fail(message: string): never {
+    process.stderr.write(`${message}\n`);
+    process.exit(1);
 }
 
 if (import.meta.main) main();
