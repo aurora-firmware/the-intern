@@ -41,6 +41,7 @@ describe("createRoleCatalog", () => {
     let defaultChoice: ModelChoice | undefined;
     let events: string[];
     let store: FileStore;
+    let beforeQueuedJob: (() => void) | undefined;
 
     const instructionFile = (role: string): string => roleInstructionPath(dataDir, role);
     const instructionText = (role: string): Promise<string> => readFile(instructionFile(role), "utf8");
@@ -87,6 +88,10 @@ describe("createRoleCatalog", () => {
             write: (path, text, options) => {
                 events.push(`file:write ${path}`);
                 return plainStore.write(path, text, options);
+            },
+            enqueue: (job) => {
+                beforeQueuedJob?.();
+                return plainStore.enqueue(job);
             },
             remove: (path, options) => {
                 events.push(`file:remove ${path}`);
@@ -279,6 +284,18 @@ describe("createRoleCatalog", () => {
         events = [];
         await catalog.restore("gp");
         assert.deepEqual(events, ["table"]);
+        assert.equal(await instructionText("gp"), SHIPPED_TEXT.gp);
+        assert.equal(catalog.get("gp")?.changed, false);
+    });
+
+    it("keeps a restored shipped role listed as changed until its shipped text is stored", async () => {
+        await catalog.change("gp", { model: "p/m" }, { instructions: "Edited." });
+        const seenAtFileRestore: boolean[] = [];
+        beforeQueuedJob = () => {
+            seenAtFileRestore.push(catalog.get("gp")?.changed === true);
+        };
+        await catalog.restore("gp");
+        assert.deepEqual(seenAtFileRestore, [true]);
         assert.equal(await instructionText("gp"), SHIPPED_TEXT.gp);
         assert.equal(catalog.get("gp")?.changed, false);
     });
