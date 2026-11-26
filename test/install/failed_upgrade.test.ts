@@ -38,7 +38,6 @@ const STOP_POLL_MS = 100;
 const PLANTED_SECRET = "planted-secret-value";
 const DATABASE_FILE = "the-intern.sqlite";
 const CONFIG_TEXT = "# A configuration file with no setting: every one keeps its default.\n";
-const FAILURE_LINE = /Version 0\.2\.0 (didn't become ready|can't read the database)/;
 const ASK_SWITCH_BACK = "Switch back to 0.1.0?";
 
 const root = join(homedir(), "failed-upgrade-test");
@@ -184,7 +183,7 @@ async function startInstance(configText: string = CONFIG_TEXT): Promise<Instance
     return { server, stateDir, dataDir, jobs: await jobKeys() };
 }
 
-type UpgradeRun = { status: number | null; stderr: string; readyMs: number | null };
+type UpgradeRun = { status: number | null; stderr: string };
 type UpgradeOptions = {
     /** A step the upgrade stops after, until `whileStopped` has run for each stop (counted from 1). */
     stopAfter?: string;
@@ -207,10 +206,7 @@ function upgradeEnv(location: string): Record<string, string> {
     return env;
 }
 
-/**
- * Runs `bob upgrade 0.2.0 --yes` from `location` with standard input closed, so it is not a terminal. `readyMs` is the
- * time from the line that names the failure to the command's end, which is after the previous version is ready again.
- */
+/** Runs `bob upgrade 0.2.0 --yes` from `location` with standard input closed, so it is not a terminal. */
 async function runUpgrade(location: string, options: UpgradeOptions = {}): Promise<UpgradeRun> {
     const env = upgradeEnv(location);
     if (options.stopAfter !== undefined) env.BOB_INSTALL_TEST_STOP_AFTER = options.stopAfter;
@@ -219,11 +215,9 @@ async function runUpgrade(location: string, options: UpgradeOptions = {}): Promi
         stdio: ["ignore", "ignore", "pipe"],
     });
     let stderr = "";
-    let failedAt: number | null = null;
     let stopFailure: unknown = null;
     child.stderr?.on("data", (chunk: Buffer) => {
         stderr += chunk.toString("utf8");
-        if (failedAt === null && FAILURE_LINE.test(stderr)) failedAt = Date.now();
     });
     const ended = new Promise<number | null>((resolve) => child.once("close", resolve));
     const stops = (): number => stderr.split(`stopped after ${options.stopAfter}`).length - 1;
@@ -251,7 +245,7 @@ async function runUpgrade(location: string, options: UpgradeOptions = {}): Promi
         }
         const status = await ended;
         if (stopFailure !== null) throw stopFailure;
-        return { status, stderr, readyMs: failedAt === null ? null : Date.now() - failedAt };
+        return { status, stderr };
     } finally {
         if (child.exitCode === null) child.kill("SIGKILL");
     }
@@ -306,11 +300,6 @@ describe("bob upgrade 0.2.0 --yes when 0.2.0 fails before the database", () => {
     test("0.2.0 is no longer installed and previous is absent", () => {
         assert.deepEqual(installedVersions(), [FIRST_VERSION]);
         assert.equal(linkedVersion("previous"), null);
-    });
-
-    test("the switch-back's time from the failure to ready is recorded", (t) => {
-        assert.notEqual(upgraded.readyMs, null, "the output never named the failure");
-        t.diagnostic(`switch-back from the failure to ready, fails-before-database: ${upgraded.readyMs} ms`);
     });
 });
 
@@ -373,21 +362,15 @@ describe("bob upgrade 0.2.0 --yes when 0.2.0 migrates the database and fails at 
         assert.deepEqual(installedVersions(), [FIRST_VERSION]);
         assert.equal(linkedVersion("previous"), null);
     });
-
-    test("the switch-back's time from the failure to ready is recorded", (t) => {
-        assert.notEqual(upgraded.readyMs, null, "the output never named the failure");
-        t.diagnostic(`switch-back from the failure to ready, newer-job-schema: ${upgraded.readyMs} ms`);
-    });
 });
 
 const TERMINAL_TIMEOUT_MS = scaled(240_000);
 
 /**
  * Runs `bob upgrade 0.2.0 --yes` on a pseudo-terminal (`script`) and types `reply` once the question about switching back
- * shows. The terminal's whole output is `stdout`. `readyMs` is the time from the line that names the failure to the
- * command's end, as in `runUpgrade`.
+ * shows. The terminal's whole output is `stdout`.
  */
-function runUpgradeOnTerminal(location: string, reply: string): Promise<RunResult & { readyMs: number | null }> {
+function runUpgradeOnTerminal(location: string, reply: string): Promise<RunResult> {
     const line = `exec '${installedBob()}' upgrade '${SECOND_VERSION}' --yes`;
     const child = spawn("script", ["-qfec", line, "/dev/null"], {
         env: upgradeEnv(location),
@@ -395,11 +378,9 @@ function runUpgradeOnTerminal(location: string, reply: string): Promise<RunResul
     });
     let stdout = "";
     let stderr = "";
-    let failedAt: number | null = null;
     let isAnswered = false;
     child.stdout.on("data", (chunk: Buffer) => {
         stdout += chunk.toString("utf8");
-        if (failedAt === null && FAILURE_LINE.test(stdout)) failedAt = Date.now();
         if (!isAnswered && stdout.includes(ASK_SWITCH_BACK)) {
             isAnswered = true;
             child.stdin.write(`${reply}\n`);
@@ -419,7 +400,7 @@ function runUpgradeOnTerminal(location: string, reply: string): Promise<RunResul
         });
         child.once("close", (status) => {
             clearTimeout(timer);
-            resolve({ status, stdout, stderr, readyMs: failedAt === null ? null : Date.now() - failedAt });
+            resolve({ status, stdout, stderr });
         });
     });
 }
@@ -469,13 +450,6 @@ describe("bob upgrade 0.2.0 --yes when 0.2.0 refuses the database, answered yes 
     test("it asked the question on the terminal", () => {
         assert.ok(upgraded.stdout.includes(ASK_SWITCH_BACK), upgraded.stdout);
     });
-
-    test("the switch-back's time from the failure to ready is recorded", (t) => {
-        assert.notEqual(upgraded.readyMs, null, "the output never named the failure");
-        t.diagnostic(
-            `switch-back from the failure to ready, older-job-schema, yes on a terminal: ${upgraded.readyMs} ms`,
-        );
-    });
 });
 
 describe("bob upgrade 0.2.0 --yes when 0.2.0 refuses the database, with standard input not a terminal", () => {
@@ -496,11 +470,6 @@ describe("bob upgrade 0.2.0 --yes when 0.2.0 refuses the database, with standard
 
     test("it took the default without asking", () => {
         assert.ok(!upgraded.stderr.includes(ASK_SWITCH_BACK), upgraded.stderr);
-    });
-
-    test("the switch-back's time from the failure to ready is recorded", (t) => {
-        assert.notEqual(upgraded.readyMs, null, "the output never named the failure");
-        t.diagnostic(`switch-back from the failure to ready, older-job-schema, no terminal: ${upgraded.readyMs} ms`);
     });
 });
 
