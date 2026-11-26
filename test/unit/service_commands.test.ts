@@ -413,23 +413,20 @@ describe("bob service status", () => {
         });
     }
 
-    it("exits 0 with the contract's object and warnings when the program folder can't be searched (EACCES on every read)", async () => {
-        const { context, io } = setup();
-        await writeServiceRecord(layout, recordOf());
-        await chmod(layout.root, 0o600);
-        try {
-            const jsonStatus = await runServiceStatus(context, { json: true });
-            const textStatus = await runServiceStatus(context, { json: false });
+    it("exits 0 with the contract's object and warnings when every read in the program folder fails", async () => {
+        const looped = join(home, "looped");
+        await symlink(looped, looped);
+        const { context, io } = setup({ layout: programLayout(looped) });
 
-            assert.equal(jsonStatus, 0);
-            assert.equal(textStatus, 0);
-            assert.equal(JSON.parse(io.out().split("\n")[0] ?? "").registered, false);
-            assert.match(io.out(), /Current version: unreadable/);
-            assert.match(io.out(), /Previous version: unreadable/);
-            assert.match(io.err(), /EACCES/);
-        } finally {
-            await chmod(layout.root, 0o700);
-        }
+        const jsonStatus = await runServiceStatus(context, { json: true });
+        const textStatus = await runServiceStatus(context, { json: false });
+
+        assert.equal(jsonStatus, 0);
+        assert.equal(textStatus, 0);
+        assert.equal(JSON.parse(io.out().split("\n")[0] ?? "").registered, false);
+        assert.match(io.out(), /Current version: unreadable/);
+        assert.match(io.out(), /Previous version: unreadable/);
+        assert.match(io.err(), /ELOOP/);
     });
 
     it("takes no lock and changes nothing, even while another command holds the lock", async () => {
