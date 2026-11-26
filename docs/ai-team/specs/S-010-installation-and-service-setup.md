@@ -1,7 +1,7 @@
 ---
 id: S-010
 title: Installation and service setup
-version: '0.2'
+version: '0.3'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-22'
 author: planner
@@ -673,29 +673,19 @@ without admin rights, on Linux and on macOS. The install script SHALL never ask 
 
 **Verification:** test — the installation cycle test, run as an account that can't use sudo after setup.
 
-### REQ-015 — Timings and size
-
-On the reference Linux machine (`docs/development/local_runs.md`), measured from the command's start:
-
-| Measure | Threshold |
-|---|---|
-| `bob service install`, after admin rights are given, to ready | under 60 seconds |
-| `bob upgrade` downtime, from the service stopping to the new version ready, not counting the download and the copy | under 60 seconds |
-| A switch back after a failed upgrade, from the failure to the previous version ready | under 60 seconds |
-| Each compressed bundle, linux-x64 and darwin-arm64 | at most 150 MB |
-| Release workflow, from tag push to published release | under 30 minutes on the project's runner |
+### REQ-015 — Ready wait and bundle size
 
 The ready wait in REQ-004, REQ-006, REQ-007 and REQ-008 SHALL be 60 seconds, after which the version counts as not
-ready.
+ready. Each compressed bundle, linux-x64 and darwin-arm64, SHALL be at most 150 MB. This spec sets no time for the
+installation commands or the release workflow to finish: the project has no reference machine to measure them on.
 
-#### AC-015.1 — Within the thresholds
+#### AC-015.1 — Bundle size
 
 - **Given:** a release built by CI
-- **When:** the live check runs on the reference machine and the release workflow runs
-- **Then:** each measure is within its threshold, and each bundle's size on the release page is at most 150 MB
+- **When:** its bundles are built
+- **Then:** the build fails for a bundle over 150 MB, and each bundle's size on the release page is at most 150 MB
 
-**Verification:** demonstration — the live check (Success Criteria 3) and the release run's timings, recorded as
-evidence.
+**Verification:** test — the bundle build's size check; and inspection of the release page.
 
 ### REQ-016 — Documentation
 
@@ -808,8 +798,8 @@ No setting is added to `config.toml`.
    rollback, the cut-off cases and uninstall (REQ-002 to REQ-014, REQ-017). Observed in the CI run.
 3. Live check on a real Linux x64 machine: install from the published release, `bob service install`, reboot with
    nobody logged in, `bob status` answers over SSH; `kill -9` of the daemon gets it restarted and a running job resumes;
-   an upgrade and a rollback between two releases keep every job. Each REQ-015 timing is within its threshold
-   (REQ-004, REQ-006, REQ-009, REQ-015). Recorded by hand as evidence.
+   an upgrade and a rollback between two releases keep every job (REQ-004, REQ-006, REQ-009). Recorded by hand as
+   evidence.
 4. The manual's "Installing and upgrading" page covers REQ-016's list, and `npm run docs:build` passes (REQ-016).
 5. Live check on a real Apple silicon Mac: the same steps as criterion 3, with the Mac restarted and nobody logged in
    (REQ-002 to REQ-004, REQ-014). Pending until a Mac is available; until then the release notes and the manual say
@@ -846,3 +836,4 @@ No setting is added to `config.toml`.
 | 2026-11-24 | v0.2. The daemon starts and stays reachable without a pi login (CR-002). REQ-004, Interfaces (the `bob service install` row) and Workflow: a daemon that is ready with no pi login is ready; `bob service install` exits 0 and prints a notice that no model is available, pointing at signing in to pi. AC-004.3: "no pi login" leaves the cases that exit 1. New AC-004.5: no pi login exits 0 with the notice, and the service answers. REQ-016: the manual says the service runs without a pi login and what waits until a team member signs in. Open Questions: how `bob service install` learns that no model is available, for CR-002's Feature Architecture. No identifier retired. | CR-002, approved by the product owner on 2026-11-24. Gate 5 of this spec isn't signed off yet, so this reopens AC-004.3's acceptance. | CR-002's tasks; T-503 to T-505 are unaffected unless they cover the no-login case |
 | 2026-11-24 | v0.2, same version, revised on the planning branch after the Architect's consistency review (corrections C11, C13) and CR-002's settled details of the same day. REQ-004, AC-004.5, Interfaces (the `bob service install` row), Workflow and Open Questions: the notice says there is no default model. REQ-016: the manual says that only agents of roles without their own model wait, that only fires with no model are skipped, and that signing in includes choosing a default model with `/model` when pi asks. Implementation Order: new phase 5. No identifier added or retired. | Architect's consistency review of 2026-11-24; product owner, CR-002 settled details, 2026-11-24. | CR-002's tasks |
 | 2026-11-24 | v0.2, same version, revised on the planning branch with CR-002's Feature Architecture (Spec finding SF8). REQ-004 and Open Questions: `bob service install` learns that there is no default model from the `noDefaultModel` field of the ready startup report (ADR-013 decision 6); the question is resolved. No identifier added or retired. | CR-002 Feature Architecture, ADR-013 decision 6 amendment, 2026-11-24. | CR-002's tasks |
+| 2026-11-26 | v0.3. REQ-015 renamed "Ready wait and bundle size": the four time thresholds (`bob service install` to ready, `bob upgrade` downtime, a switch back after a failed upgrade, the release workflow) are removed, and the spec now says it sets no time for the installation commands or the release workflow. The 60-second ready wait and the 150 MB bundle limit stay. AC-015.1 now checks only the bundle size. Success Criteria 3 no longer checks REQ-015 timings. No identifier added or retired. | Product owner, 2026-11-26: the thresholds were not based on measurements, and the project has no reference machine for the test benches or the release runner, so a release time can't be met or tested meaningfully. | T-503 (AC-2 keeps the size check only), T-504 (AC-4 removed) |
