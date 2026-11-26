@@ -30,7 +30,10 @@ function readPackageVersion(): string {
 
 function isHeadOnMain(): boolean {
     const result = spawnSync("git", ["merge-base", "--is-ancestor", "HEAD", "origin/main"], { encoding: "utf8" });
-    return result.status === 0;
+    if (result.status === 0) return true;
+    if (result.status === 1) return false;
+    const detail = result.error?.message ?? result.stderr.trim();
+    throw new Error(`git could not tell whether the tagged commit is on main (status ${result.status}): ${detail}`);
 }
 
 function main(): void {
@@ -39,7 +42,14 @@ function main(): void {
         process.stderr.write("Usage: node release/check_release.ts <tag>\n");
         process.exit(1);
     }
-    const result = checkReleaseTag({ tag, packageVersion: readPackageVersion(), isOnMain: isHeadOnMain() });
+    let isOnMain: boolean;
+    try {
+        isOnMain = isHeadOnMain();
+    } catch (error) {
+        process.stderr.write(`${(error as Error).message}\n`);
+        process.exit(1);
+    }
+    const result = checkReleaseTag({ tag, packageVersion: readPackageVersion(), isOnMain });
     if (!result.ok) {
         process.stderr.write(`${result.reason}\n`);
         process.exit(1);
