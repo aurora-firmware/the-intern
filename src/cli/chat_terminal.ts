@@ -110,7 +110,7 @@ export async function runTerminalChat(
     const tracker = createEntryTracker(conversationId);
     const history = await readHistory(starting, conversationId, io, json);
     for (const entry of history) tracker.markPrinted(entry.id);
-    if (!json && desk.seat?.model === null) await printNoModelNotice(starting, io);
+    if (desk.seat?.model === null) await printNoModelNotice(starting, io);
     if (!json) {
         const lines = history.flatMap((entry) => historyText(entry) ?? []).flatMap((l) => l.split("\n"));
         for (const line of lines.slice(-HISTORY_LINES)) writeLine(io, line);
@@ -184,6 +184,8 @@ export async function runTerminalChat(
             throw error;
         }
         seen.push(...missed.map(seenEntry));
+        // With --json the feed's own JSON is the output; the entries are read only to know which lines are answered.
+        if (json) return;
         const shown = missed.filter((entry) => entry.kind === "pi.assistant" || entry.kind === "intern.notice");
         if (shown.every((entry) => entry.kind === "pi.assistant" && assistantText(entry) === "")) return;
         for (const entry of shown) {
@@ -217,6 +219,7 @@ export async function runTerminalChat(
             feedClient = from;
             if (json) {
                 writeJson(io, snapshot);
+                await catchUp(from);
                 return;
             }
             await catchUp(from);
@@ -225,6 +228,7 @@ export async function runTerminalChat(
         async onDelta(delta) {
             if (json) {
                 writeJson(io, delta);
+                await catchUp();
                 return;
             }
             await showLive((delta as { view?: { live?: unknown } }).view?.live);
