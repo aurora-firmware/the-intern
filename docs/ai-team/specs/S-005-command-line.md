@@ -1,7 +1,7 @@
 ---
 id: S-005
 title: Command line
-version: '0.11'
+version: '0.12'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-03'
 author: planner
@@ -141,7 +141,7 @@ resolved by the service, S-004 REQ-002):
 | `bob export <file>` | `jobs.export`, with the file made absolute against the current directory (S-004 REQ-016) | REQ-013 |
 | `bob import <file>` | none: S-004's import step, in-process (S-004 REQ-017) | REQ-013 |
 | `bob serve` | none: runs the daemon (S-002 Interfaces, the `bob serve` command) | REQ-014 |
-| `bob service install`, `remove`, `status`; `bob upgrade`, `bob rollback`, `bob uninstall` | none, apart from the version `bob service status` reads with `daemon.status`: S-010 Interfaces and REQ-004 to REQ-011 own them | S-010 |
+| `bob service install`, `remove`, `status`; `bob upgrade`, `bob rollback`, `bob uninstall` | none, apart from `daemon.status`, which `bob service status` reads the version with and the ready wait of `bob service install`, `bob upgrade` and `bob rollback` reads the phase and the version with: S-010 Interfaces and REQ-004 to REQ-011 own them | S-010 |
 
 The names of the options other than `--json`, `--runtime-dir` and `--help`, and the layout of text output, are not
 contract; the tasks fix them and the manual's command reference records them (REQ-017). Every option a command takes
@@ -837,3 +837,4 @@ whose seat's model is `null` (Interfaces, the `bob chat` row).
 | 2026-11-24 | v0.10, same version, revised on the planning branch after the Architect's consistency review (corrections C1, C2, C5, C13) and CR-002's settled details of the same day. REQ-008 and AC-008.2: `bob status` says there is no default model, and the notice is gone 30 seconds after a default model appears. REQ-009: Ctrl-C withdraws lines waiting for a model and `bob` names those it drops. AC-010.4: the transcript holds one no-model notice, after the first line. Implementation Order: new phase 6. No identifier added or retired. | Architect's consistency review of 2026-11-24; product owner, CR-002 settled details, 2026-11-24. | CR-002's tasks |
 | 2026-11-24 | v0.10, same version, revised on the planning branch with CR-002's Feature Architecture (ADR-014; Spec findings SF4, SF7). REQ-009: after Ctrl-C, `bob chat` names as dropped every submitted line still unanswered, including those settled `no_model` that waited for a model. Interfaces, the `bob chat` row: `desk.get` tells it the front desk has no model, its seat's model being `null`. Open Questions: resolved. No identifier added or retired. | CR-002 Feature Architecture, ADR-014, 2026-11-24. | CR-002's tasks |
 | 2026-11-26 | v0.11. REQ-009, the Ctrl-C bullet: `bob` reads each unanswered line's state with `submissions.get`, and a line settled `no_model` counts as answered once the front desk's transcript holds an answer after it, since its submission keeps that state after a model answers it. Interfaces, the `bob chat` row: `bob chat` also reads `daemon.status`, for the no-model notice's text. Both state the behaviour as built. No identifier added, changed or retired. | CR-002 completion reconciliation (spec-truth reconciliation) of 2026-11-26: S-005 REQ-009 and the `bob chat` Interfaces row stale. | CR-002's tasks (T-521, T-522) |
+| 2026-11-26 | v0.12. Interfaces command table, the installation commands' row: `daemon.status` is also read by the ready wait of `bob service install`, `bob upgrade` and `bob rollback`, for the phase and the version. | S-010 v0.4, from the spec-truth reconciliation of 2026-11-26 (finding F2); the built work was right. | none |
