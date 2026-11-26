@@ -316,8 +316,8 @@ describe("stop and start", () => {
 
         assert.equal(await exists(layout.holdFile), true);
         assert.equal(await exists(join(stateDir, "owner.lock")), false);
-        assert.equal(child.signalCode ?? child.exitCode, 0);
         await exited;
+        assert.equal(child.signalCode ?? child.exitCode, 0);
     });
 
     it("removes the hold file without sudo on start", async () => {
