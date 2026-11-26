@@ -146,7 +146,7 @@ function newRecord(context: ServiceCommandContext, platform: Platform): ServiceR
     };
 }
 
-/** The record the registration uses: the earlier one's directories and pi folder when there is one. */
+/** The record the registration uses: the earlier one's directories, pi folder and PATH when there is one. */
 function registrationRecord(
     context: ServiceCommandContext,
     platform: Platform,
@@ -154,7 +154,7 @@ function registrationRecord(
 ): ServiceRecord {
     const fresh = newRecord(context, platform);
     if (earlier === null) return fresh;
-    return { ...earlier, platform, label: fresh.label, path: fresh.path };
+    return { ...earlier, platform, label: fresh.label };
 }
 
 function notReadyReason(result: Extract<ReadyWaitResult, { ready: false }>): string {
