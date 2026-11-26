@@ -141,7 +141,7 @@ resolved by the service, S-004 REQ-002):
 | `bob export <file>` | `jobs.export`, with the file made absolute against the current directory (S-004 REQ-016) | REQ-013 |
 | `bob import <file>` | none: S-004's import step, in-process (S-004 REQ-017) | REQ-013 |
 | `bob serve` | none: runs the daemon (S-002 Interfaces, the `bob serve` command) | REQ-014 |
-| `bob service install`, `remove`, `status`; `bob upgrade`, `bob rollback`, `bob uninstall` | none, apart from `daemon.status`, which `bob service status` reads the version with and the ready wait of `bob service install`, `bob upgrade` and `bob rollback` reads the phase and the version with: S-010 Interfaces and REQ-004 to REQ-011 own them | S-010 |
+| `bob service install`, `remove`, `status`; `bob upgrade`, `bob rollback`, `bob uninstall` | none, apart from `daemon.status`: `bob service status` reads the running version with it, and the ready wait of `bob service install`, `bob upgrade` and `bob rollback` reads the phase and the version with it. S-010 Interfaces and REQ-004 to REQ-011 own them | S-010 |
 
 The names of the options other than `--json`, `--runtime-dir` and `--help`, and the layout of text output, are not
 contract; the tasks fix them and the manual's command reference records them (REQ-017). Every option a command takes
