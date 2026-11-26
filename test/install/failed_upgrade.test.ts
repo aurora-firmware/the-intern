@@ -342,7 +342,7 @@ describe("bob upgrade 0.2.0 --yes when 0.2.0 migrates the database and fails at 
     });
 
     after(async () => {
-        await new Promise<void>((resolve) => holder?.close(() => resolve()));
+        if (holder?.listening) await new Promise<void>((resolve) => holder.close(() => resolve()));
         await instance?.server.close();
         await cleanUpInstall([root]);
     });

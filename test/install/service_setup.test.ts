@@ -206,7 +206,7 @@ describe("bob service install that can't get the daemon ready", () => {
         });
 
         after(async () => {
-            await new Promise<void>((resolve) => holder?.close(() => resolve()));
+            if (holder?.listening) await new Promise<void>((resolve) => holder.close(() => resolve()));
             await cleanUpInstall([root]);
         });
 
