@@ -10,7 +10,7 @@ and see which pi agent settings take effect.
 
 ## Installing and upgrading
 
-See [Installing and upgrading](installing.md): the install script, the pi login prerequisite, registering the
+See [Installing and upgrading](installing.md): the install script, signing in to pi, registering the
 service, upgrading, rolling back, uninstalling and the upgrades folder.
 
 ## Giving The Intern access and accounts

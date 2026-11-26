@@ -96,6 +96,7 @@ const FAILED_REPORT: StartupReport = {
     reason: "broken",
     unreadableDatabase: false,
     ready: false,
+    noDefaultModel: false,
 };
 
 describe("the ready wait", () => {
@@ -109,7 +110,7 @@ describe("the ready wait", () => {
 
         const result = await waitForReady(world.record, { timeoutMs: READY_TIMEOUT_MS });
 
-        assert.deepEqual(result, { ready: true, version: runningVersions().intern });
+        assert.deepEqual(result, { ready: true, version: runningVersions().intern, noDefaultModel: true });
     });
 
     it("keeps trying while no daemon answers and returns ready once a daemon started late is ready", async () => {
@@ -118,7 +119,7 @@ describe("the ready wait", () => {
         await new Promise((resolve) => setTimeout(resolve, LATE_START_DELAY_MS));
         world.start();
 
-        assert.deepEqual(await waiting, { ready: true, version: runningVersions().intern });
+        assert.deepEqual(await waiting, { ready: true, version: runningVersions().intern, noDefaultModel: true });
     });
 
     it("keeps trying through failed probes and a daemon that is not ready yet", async () => {
@@ -131,8 +132,20 @@ describe("the ready wait", () => {
             probe: async () => answers[calls++] ?? null,
         });
 
-        assert.deepEqual(result, { ready: true, version: "1.0.0" });
+        assert.deepEqual(result, { ready: true, version: "1.0.0", noDefaultModel: false });
         assert.equal(calls, answers.length);
+    });
+
+    it("returns the ready startup report's noDefaultModel with the ready result", async () => {
+        const world = await createWorld();
+        await writeStartupReport(world.record.stateDir, { ...FAILED_REPORT, ready: true, noDefaultModel: true });
+
+        const result = await waitForReady(world.record, {
+            timeoutMs: READY_TIMEOUT_MS,
+            probe: async () => ({ phase: "ready", version: "1.0.0" }),
+        });
+
+        assert.deepEqual(result, { ready: true, version: "1.0.0", noDefaultModel: true });
     });
 
     it("returns not ready at the timeout when a status call never answers", async () => {

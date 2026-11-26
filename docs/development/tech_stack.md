@@ -5,8 +5,8 @@ This file records the answers to the "Decisions needed" of the development infra
 one section per component, and each answer sits under the question it settles. A question that is still open says so
 and names where it is decided.
 
-Control endpoint, Web interface, Schedules, Skills and instructions and Email aren't among those components: they
-record the technology choices of S-003, S-006, S-007, S-008 and S-009.
+Control endpoint, Web interface, Schedules, Skills and instructions, Email and Work without a model aren't among those
+components: they record the technology choices of S-003, S-006, S-007, S-008, S-009 and CR-002.
 
 ## Development environment
 
@@ -347,6 +347,29 @@ variable carries a secret (S-009 REQ-017).
   and leaves them untrusted where a certificate must fail to verify (S-009 REQ-001).
 - The mail component takes a test-only clock, as the schedules component does, so retries and check intervals run
   under test time (AC-005.1, AC-023.1).
+
+## Work without a model
+
+These answers settle CR-002's design questions. The design is in [architecture.md](architecture.md), Work without a
+model, and ADR-014 records it.
+
+**How does the daemon notice a default model that appears or disappears?** It reads the pi agent folder every 10
+seconds with `node:fs/promises`: `settings.json` whole, and the size and modification time of `auth.json` and
+`models.json` (ADR-014 decision 6). It uses no `fs.watch`, for the reasons ADR-009 gives, and it writes nothing. On a
+change it opens a new `ModelRuntime` from `@earendil-works/pi-coding-agent` 1.4.0, and the harness takes it through
+pi-durable's `models: () => Models` option, which pi-durable calls at each use.
+
+**Where does input wait for a model?** In the transcript, where pi-durable 1.4.0 places it before its generation ends
+with `no_model` (`failNoModel`, before the admission hook). The-intern's `waitingForModel` fact marks the wait, and a
+`pi.generation` the host starts with no input continues it (ADR-014 decisions 1, 2 and 4).
+
+**What does the no-model notice look like in the transcript?** The display-only entry `intern.notice` (ADR-014
+decision 8).
+
+**How does `bob chat` learn that the front desk has no model?** From `desk.get`, whose seat has model `null`.
+
+**How does `bob service install` learn that there is no default model?** From the `noDefaultModel` field of the ready
+startup report (ADR-013 decision 6).
 
 ## Local runs and diagnostics
 

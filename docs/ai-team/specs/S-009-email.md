@@ -1,7 +1,7 @@
 ---
 id: S-009
 title: Email
-version: '0.5'
+version: '0.6'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-17'
 author: planner
@@ -296,6 +296,7 @@ New email in an owned inbox                                                     
   (reply in an open job's thread → input to that job's lead; Blocked → resumes)          REQ-009
   (reply in a Done job's thread → new triage job related to the old one)                 REQ-009
 Message and attachments saved; triage job E-n created with the account's triage role     REQ-007, REQ-008
+  (triage seat has no model → created all the same; its lead waits for a model)          REQ-007
   (crash and restart → still one job for that email)                                     REQ-021
 Triage agent decides                                                                     REQ-008
   discard / information only → completes; nothing is sent                               REQ-008, REQ-015
@@ -550,6 +551,11 @@ attachment as a file, byte for byte. Then it SHALL create the job through `jobs.
 The job's agents SHALL be able to read the saved message and attachments as files. An email without a `Message-ID`
 SHALL still become a job.
 
+Intake SHALL NOT change when the triage role's seat has no model (S-001 REQ-003): the email is saved and the triage
+job is created as above, and its lead waits for a model like a team member's job, with the no-model notice in its
+transcript (S-001 REQ-027; S-004 REQ-023). It runs once a model is available (product owner, 2026-11-24, CR-002). A
+reply that reaches an open job's lead (REQ-009) waits the same way when that lead has no model.
+
 #### AC-007.1 — The saved email
 
 - **Given:** an owned account
@@ -558,6 +564,18 @@ SHALL still become a job.
   account's triage role; and the lead reads the saved message and both attachments, identical to what was sent
 
 **Verification:** test — a service test against the fake mail server.
+
+#### AC-007.2 — A new email with no model
+
+- **Given:** an owned account whose triage role has no configured model, and pi agent settings that name no default
+  model
+- **When:** an email arrives, and later the settings name the fake model as the default while the daemon runs
+- **Then:** the email is saved and the triage job `E-n` is created, To do, with its lead holding the first input
+  followed by the no-model notice and making no model request; after the change, within 30 seconds and without a
+  restart, the lead runs on that input
+
+**Verification:** test — a service test against the fake mail server on the fake model, changing the isolated pi agent
+folder while the daemon runs.
 
 ### REQ-008 — The triage job
 
@@ -1124,6 +1142,7 @@ The command reference SHALL match `bob mail --help`.
 | 3 | Intake: saving mail, the triage job, the shipped `triage` role, the request mark, job threads, exactly-once intake | Phase 2 |
 | 4 | Sending: the allowlist, the notice address, the blocked question, the result reply, the send tool, at most once, no internals | Phase 3 |
 | 5 | The Mail page and the Job page's email section, saved mail in the export, the manual, the live check | Phase 4 |
+| 6 | A triage job whose lead has no model waits for a model, as does a reply to an open job whose lead has none (CR-002) | Phase 5, S-001 phase 8 |
 
 ## Open Questions
 
@@ -1143,3 +1162,5 @@ and the request id of an email follow-up in ADR-004 decisions 3 and 5.
 | 2026-11-22 | spec-truth reconciliation — PASS | Corrects the row above: openai-codex/gpt-6-sol is the top tier, not a low-cost model (light = luna, workhorse = terra, top = sol; the base name decides, not the version). The low-cost evidence for AC-008.2, AC-016.2 and Success Criterion 7 is one live run of `npm run test:live:mail` on openai-codex/gpt-6-luna at 49944bc1, which exited 0 with "PASS triage decisions, one reply, and mail without internals". The sol runs remain supporting evidence | Product owner correction, 2026-11-22 | none |
 | 2026-11-22 | Gate 5 sign-off | S-009 v0.4 signed off by the product owner: T-396 to T-463 completed, B-049 to B-054 resolved, the spec-truth reconciliation passed, and the live check passed on the low-cost model (gpt-6-luna) | Product owner decision, 2026-11-22 | none |
 | 2026-11-22 | v0.5. REQ-021 and REQ-022: "exactly once" and "at most once" hold within one database's history; a rollback (S-010 REQ-009) or an import of an older copy (S-004 REQ-017) can take in or send mail again. No behaviour changes and no identifier added or retired. | S-010 architecture consistency review, finding M4; product owner decision of 2026-11-22: rollback warns about repeated mail, and S-009's guarantees are clarified. | None |
+| 2026-11-24 | v0.6. Work without a model (CR-002). REQ-007 and new AC-007.2: intake doesn't change when the triage role's seat has no model; the email is saved, the triage job is created, and its lead waits for a model with the no-model notice and runs once a model is available; a reply to an open job whose lead has no model waits the same way. Workflow follows. No identifier changed or retired. | CR-002, approved by the product owner on 2026-11-24. | CR-002's tasks |
+| 2026-11-24 | v0.6, same version, revised on the planning branch after the Architect's consistency review (corrections C2, C13). AC-007.2: the lead runs within 30 seconds of the default model appearing. Implementation Order: new phase 6. No identifier added or retired. | Architect's consistency review of 2026-11-24; product owner, CR-002 settled details, 2026-11-24. | CR-002's tasks |

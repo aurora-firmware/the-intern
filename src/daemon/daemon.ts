@@ -192,6 +192,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
     const startedComponents: DaemonComponent[] = [];
     let phase: DaemonPhase = "starting";
     let admission: Admission | undefined;
+    let modelRuntime: InternModels | undefined;
     let isHostClosedByStorageFailure = false;
     const serviceLabel = options.env.BOB_SERVICE_LABEL || null;
     let furthestStep = 0;
@@ -199,6 +200,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
     let reportWrites: Promise<void> = Promise.resolve();
 
     const { dirs, failure: pathFailure } = resolveDirs(options);
+    const piAgentDir = resolvePiAgentDir(options.env);
     const status: StatusSources = {
         phase: () => phase,
         startedAt,
@@ -206,6 +208,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         dirs,
         admission: () => admission?.state() ?? { capacity: workerThreadCount, active: [], waiting: [] },
         mailAccounts: () => options.accountStatus?.list(MAIL_OWNER) ?? [],
+        noDefaultModel: () => (modelRuntime?.noDefaultModel() ? { piAgentDir } : null),
     };
     // The operations are rejected by phase until ready, so the context is complete by the time any of them runs.
     const context = { status, dirs, logger } as ServiceContext;
@@ -224,7 +227,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
 
     /** Writes the startup report after the earlier writes; a write that fails is logged and never stops the startup. */
     function reportStartup(
-        update: Pick<Partial<StartupReport>, "ready" | "unreadableDatabase"> & {
+        update: Pick<Partial<StartupReport>, "ready" | "unreadableDatabase" | "noDefaultModel"> & {
             failure?: StartupFailure;
             reachedStep?: number;
         },
@@ -253,6 +256,7 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
                 reason: update.failure?.message ?? null,
                 unreadableDatabase: update.unreadableDatabase ?? false,
                 ready: update.ready ?? false,
+                ...(update.ready && { noDefaultModel: update.noDefaultModel ?? false }),
             });
         } catch (error) {
             logger.error("could not write the startup report", {
@@ -290,12 +294,16 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
         gateAdmission: Admission;
         jobStore: JobStore;
     }> {
-        const models = await createModelRuntime({ piAgentDir: resolvePiAgentDir(options.env) });
+        const models = await createModelRuntime({
+            piAgentDir,
+            onReadError: (error) => logger.error("could not read the pi agent folder again", { cause: error.message }),
+        });
         undoStack.push(() => models.close());
+        modelRuntime = models;
         const gate = createAdmissionGate();
         const host = await openHarnessHost({
             databaseFile: dirs.databaseFile,
-            models: options.prepareModels?.(models) ?? models.models,
+            models: options.prepareModels?.(models) ?? (() => models.current()),
             harnessSettings: models.harnessSettings,
             extensions: [gate.extension, ...components.flatMap((component) => component.extensions ?? [])],
             optInExtensions: components.flatMap((component) => component.optInExtensions ?? []),
@@ -456,7 +464,11 @@ export function runDaemon(options: DaemonOptions): RunningDaemon {
                 await undoAll();
                 return;
             }
-            await reportStartup({ reachedStep: LAST_STEP, ready: true });
+            await reportStartup({
+                reachedStep: LAST_STEP,
+                ready: true,
+                noDefaultModel: modelRuntime?.noDefaultModel() ?? false,
+            });
             if (shutdownInFlight) {
                 await shutdownInFlight;
                 await undoAll();

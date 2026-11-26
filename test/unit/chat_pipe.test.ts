@@ -24,7 +24,16 @@ function entriesPage(entries: Entry[], after: unknown, pageSize = entries.length
 }
 
 /** A client whose waits answer from the script in order and whose entries grow when a line is submitted. */
-function scriptedClient(options: { waits: string[]; answers: string[]; pageSize?: number; held?: boolean }) {
+function scriptedClient(options: {
+    waits: string[];
+    answers: string[];
+    pageSize?: number;
+    held?: boolean;
+    /** The front desk's seat model; `null` is no model. Absent: the seat is left out of `desk.get`. */
+    deskModel?: string | null;
+    /** The `noDefaultModel` field `daemon.status` answers with. */
+    noDefaultModel?: { piAgentDir: string; message: string } | null;
+}) {
     const calls: Call[] = [];
     const entries: Entry[] = [];
     const preexisting = options.pageSize === undefined ? [] : [assistant("old 1", "o1"), assistant("old 2", "o2")];
@@ -39,7 +48,13 @@ function scriptedClient(options: { waits: string[]; answers: string[]; pageSize?
         async invoke(name, input) {
             const record = (input ?? {}) as Record<string, unknown>;
             calls.push({ name, input: record });
-            if (name === "desk.get") return { conversationId: DESK_ID };
+            if (name === "desk.get") {
+                return {
+                    conversationId: DESK_ID,
+                    ...(options.deskModel !== undefined && { seat: { model: options.deskModel } }),
+                };
+            }
+            if (name === "daemon.status") return { noDefaultModel: options.noDefaultModel ?? null };
             if (name === "conversations.submit") {
                 if (options.held === true) return { held: true };
                 submitted += 1;
@@ -200,5 +215,52 @@ describe("runPipedChat", () => {
         assert.equal(requestIds.length, 3, "two refused attempts and the one that got through");
         assert.equal(new Set(requestIds).size, 1, `one request id for every attempt: ${requestIds}`);
         assert.equal(typeof requestIds[0], "string");
+    });
+
+    describe("when the front desk has no model", () => {
+        const MISSING = { piAgentDir: "/pi", message: "pi agent names no default model in /pi." };
+
+        async function runWithNoModel(lines: string[], noDefaultModel: typeof MISSING | null, json = false) {
+            const scripted = scriptedClient({ waits: [], answers: [], deskModel: null, noDefaultModel });
+            const piped = pipedIo(lines);
+            let notices = "";
+            piped.io.stderr.on("data", (chunk) => {
+                notices += chunk;
+            });
+            const status = await runPipedChat(scripted.client, piped.io, json);
+            return { ...scripted, status, stdout: piped.stdout(), notices };
+        }
+
+        it("submits every line without waiting, prints the status notice once on stderr and nothing on stdout, and exits 1", async () => {
+            const { status, calls, stdout, notices } = await runWithNoModel(["first", "second"], MISSING);
+            assert.equal(status, 1);
+            assert.equal(stdout, "");
+            assert.equal(notices, `${MISSING.message}\n`);
+            assert.deepEqual(
+                calls.filter((call) => call.name === "conversations.submit").map((call) => call.input.content),
+                ["first", "second"],
+            );
+            assert.equal(calls.filter((call) => call.name === "submissions.wait").length, 0);
+        });
+
+        it("prints nothing on stdout in json mode", async () => {
+            const { status, stdout } = await runWithNoModel(["first"], MISSING, true);
+            assert.equal(status, 1);
+            assert.equal(stdout, "");
+        });
+
+        it("prints a fixed notice once when daemon.status names no missing default", async () => {
+            const { status, notices } = await runWithNoModel(["first", "second"], null);
+            assert.equal(status, 1);
+            assert.match(notices, /^There is no default model.*\n$/);
+            assert.equal(notices.trimEnd().split("\n").length, 1);
+        });
+
+        it("reads no daemon.status while the front desk has a model", async () => {
+            const { client, calls } = scriptedClient({ waits: ["done"], answers: ["hi"], deskModel: "faux/faux-1" });
+            const status = await runPipedChat(client, pipedIo(["hello"]).io, false);
+            assert.equal(status, 0);
+            assert.ok(!calls.some((call) => call.name === "daemon.status"));
+        });
     });
 });

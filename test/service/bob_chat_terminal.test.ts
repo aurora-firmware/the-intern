@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { createClient } from "../../src/client/client.ts";
 import { nodeTransport } from "../../src/client/node_transport.ts";
 import { localSocketPath } from "../../src/daemon/state_layout.ts";
+import { NOTICE_KIND } from "../../src/host/model_wait.ts";
+import type { DaemonStatus } from "../../src/service/status_operation.ts";
+import { type FakeModelServer, MODEL_ID, startFakeModelServer } from "../install/fake_model_server.ts";
 import { runBob } from "../support/bob_process.ts";
 import { type DaemonProcess, type FakeScript, startDaemon } from "../support/daemon_process.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
@@ -29,6 +34,7 @@ type Entry = { kind: string; data: unknown };
 const envs: HermeticEnv[] = [];
 const daemons: DaemonProcess[] = [];
 const sessions: PtySession[] = [];
+const servers: FakeModelServer[] = [];
 
 afterEach(async () => {
     for (const session of sessions.splice(0)) {
@@ -39,6 +45,7 @@ afterEach(async () => {
         daemon.kill9();
         await daemon.exited;
     }
+    for (const server of servers.splice(0)) await server.close();
     for (const env of envs.splice(0)) await env.dispose();
 });
 
@@ -415,5 +422,206 @@ describe("bob chat --reset without a terminal", () => {
         );
         assert.equal(context.includes("before the reset"), false);
         assert.ok(context.includes(FIRST));
+    });
+});
+
+const LOOPBACK_DEFAULT = JSON.stringify({ defaultProvider: "loopback", defaultModel: MODEL_ID });
+const echoLastLine = (transcript: readonly { role: string; text: string }[]) =>
+    `echo: ${transcript.findLast((message) => message.role === "user")?.text}`;
+
+/**
+ * A daemon whose isolated pi agent folder names no default model, so the front desk has none. The fake model is
+ * registered in the daemon's first model runtime only and a changed folder opens a new one, so the model that answers
+ * after the change is the folder's own `models.json` model on a loopback server.
+ */
+async function noModelDaemon(): Promise<Fixture> {
+    const env = await createHermeticEnv();
+    envs.push(env);
+    const server = await startFakeModelServer(echoLastLine);
+    servers.push(server);
+    const models = {
+        providers: {
+            loopback: {
+                baseUrl: server.baseUrl,
+                api: "openai-completions",
+                apiKey: "not-a-real-key",
+                models: [{ id: MODEL_ID, reasoning: false }],
+            },
+        },
+    };
+    await writeFile(join(env.piAgentDir, "models.json"), JSON.stringify(models));
+    await writeFile(join(env.piAgentDir, "settings.json"), "{}");
+    const daemon = startDaemon({ hermetic: env, realModels: true, turnEndRule: false });
+    daemons.push(daemon);
+    await daemon.ready;
+    return { env, daemon };
+}
+
+async function untilNoticeEntry(daemon: DaemonProcess): Promise<void> {
+    await until(async () => (await entriesOf(daemon)).some((entry) => entry.kind === NOTICE_KIND), "the notice entry");
+}
+
+describe("bob chat on a terminal when the front desk has no model", { skip }, () => {
+    it("shows the notice, stays open, records the line with the command line way in, and streams its answer once a model is named (AC-009.4)", async () => {
+        const fixture = await noModelDaemon();
+        const status = (await fixture.daemon.invoke("daemon.status", {})) as DaemonStatus;
+        assert.notEqual(status.noDefaultModel, null);
+        const session = chat(fixture);
+
+        await session.waitFor("stderr", status.noDefaultModel?.message ?? "");
+        await session.waitFor("output", PROMPT);
+        session.write(`${FIRST}\r`);
+        await untilNoticeEntry(fixture.daemon);
+
+        const steer = (await entriesOf(fixture.daemon)).find((entry) => entry.kind === "intern.steer");
+        assert.deepEqual(steer?.data, {
+            actor: { kind: "team_member", wayIn: "command line" },
+            mode: "followUp",
+            content: FIRST,
+        });
+        await writeFile(join(fixture.env.piAgentDir, "settings.json"), LOOPBACK_DEFAULT);
+        await until(
+            async () => ((await fixture.daemon.invoke("daemon.status", {})) as DaemonStatus).noDefaultModel === null,
+            "the daemon to see the default model",
+        );
+        await session.waitFor("output", `echo: ${FIRST}`);
+        session.write(CTRL_D);
+
+        assert.equal(await exitStatus(session), 0, session.stderr());
+        assert.equal(session.stderr().includes("Dropped"), false, session.stderr());
+    });
+
+    it("prints the notice entry the feed brings, once the first line makes the front desk wait", async () => {
+        const fixture = await noModelDaemon();
+        const session = chat(fixture);
+        await session.waitFor("output", PROMPT);
+
+        session.write(`${FIRST}\r`);
+        await untilNoticeEntry(fixture.daemon);
+
+        await session.waitFor("output", "notice: There is no default model");
+        session.write(CTRL_D);
+        assert.equal(await exitStatus(session), 0, session.stderr());
+    });
+
+    it("names every line waiting for a model as dropped on Ctrl-C and stays open", async () => {
+        const fixture = await noModelDaemon();
+        const session = chat(fixture);
+        await session.waitFor("output", PROMPT);
+        session.write(`${FIRST}\r`);
+        await untilNoticeEntry(fixture.daemon);
+        session.write(`${SECOND}\r`);
+        await until(async () => JSON.stringify(await entriesOf(fixture.daemon)).includes(SECOND), "the second line");
+
+        session.write(CTRL_C);
+        await session.waitFor("stderr", `Dropped, not answered: ${SECOND}`);
+        await session.waitFor("stderr", `Dropped, not answered: ${FIRST}`);
+        session.write(CTRL_D);
+
+        assert.equal(await exitStatus(session), 0, session.stderr());
+    });
+
+    it("does not name a line as dropped on Ctrl-C once the model answered it", async () => {
+        const fixture = await noModelDaemon();
+        const session = chat(fixture);
+        await session.waitFor("output", PROMPT);
+        session.write(`${FIRST}\r`);
+        await untilNoticeEntry(fixture.daemon);
+        await writeFile(join(fixture.env.piAgentDir, "settings.json"), LOOPBACK_DEFAULT);
+        await session.waitFor("output", `echo: ${FIRST}`);
+
+        session.write(CTRL_C);
+        session.write(`${THIRD}\r`);
+        await session.waitFor("output", `echo: ${THIRD}`);
+        session.write(CTRL_D);
+
+        assert.equal(await exitStatus(session), 0, session.stderr());
+        assert.equal(session.stderr().includes("Dropped"), false, session.stderr());
+    });
+
+    it("names no line as dropped on Ctrl-C when one answer follows both lines that waited for a model", async () => {
+        const fixture = await noModelDaemon();
+        const session = chat(fixture);
+        await session.waitFor("output", PROMPT);
+        session.write(`${FIRST}\r`);
+        await untilNoticeEntry(fixture.daemon);
+        session.write(`${SECOND}\r`);
+        await until(async () => JSON.stringify(await entriesOf(fixture.daemon)).includes(SECOND), "the second line");
+        await writeFile(join(fixture.env.piAgentDir, "settings.json"), LOOPBACK_DEFAULT);
+        await session.waitFor("output", `echo: ${SECOND}`);
+
+        session.write(CTRL_C);
+        session.write(`${THIRD}\r`);
+        await session.waitFor("output", `echo: ${THIRD}`);
+        session.write(CTRL_D);
+
+        assert.equal(await exitStatus(session), 0, session.stderr());
+        assert.equal(session.stderr().includes("Dropped"), false, session.stderr());
+    });
+
+    it("exits 0 on Ctrl-D while a submitted line waits for a model", async () => {
+        const fixture = await noModelDaemon();
+        const session = chat(fixture);
+        await session.waitFor("output", PROMPT);
+        session.write(`${FIRST}\r`);
+        await untilNoticeEntry(fixture.daemon);
+
+        session.write(CTRL_D);
+
+        assert.equal(await exitStatus(session), 0, session.stderr());
+    });
+});
+
+describe("bob chat --json on a terminal when the front desk has no model", { skip }, () => {
+    it("prints the notice on standard error, only JSON on standard output, and stays open", async () => {
+        const fixture = await noModelDaemon();
+        const status = (await fixture.daemon.invoke("daemon.status", {})) as DaemonStatus;
+        assert.notEqual(status.noDefaultModel, null);
+        const message = status.noDefaultModel?.message ?? "";
+        const session = chat(fixture, ["--json"]);
+
+        await session.waitFor("stderr", message);
+        await session.waitFor("output", '"inbox"');
+
+        const lines = session
+            .output()
+            .split(/\r?\n/)
+            .filter((line) => line.trim() !== "");
+        for (const line of lines) assert.doesNotThrow(() => JSON.parse(line), `not JSON: ${line}`);
+        assert.equal(session.output().includes(message), false, session.output());
+        session.write(CTRL_D);
+        assert.equal(await exitStatus(session), 0, session.stderr());
+    });
+
+    it("names a line waiting for a model as dropped on Ctrl-C and stays open", async () => {
+        const fixture = await noModelDaemon();
+        const session = chat(fixture, ["--json"]);
+        await session.waitFor("stderr", PROMPT);
+        session.write(`${FIRST}\r`);
+        await untilNoticeEntry(fixture.daemon);
+
+        session.write(CTRL_C);
+        await session.waitFor("stderr", `Dropped, not answered: ${FIRST}`);
+        session.write(CTRL_D);
+
+        assert.equal(await exitStatus(session), 0, session.stderr());
+    });
+
+    it("does not name a line as dropped on Ctrl-C once the model answered it", async () => {
+        const fixture = await noModelDaemon();
+        const session = chat(fixture, ["--json"]);
+        await session.waitFor("stderr", PROMPT);
+        session.write(`${FIRST}\r`);
+        await untilNoticeEntry(fixture.daemon);
+        await writeFile(join(fixture.env.piAgentDir, "settings.json"), LOOPBACK_DEFAULT);
+        await session.waitFor("output", `echo: ${FIRST}`);
+
+        session.write(CTRL_C);
+        session.write(`${THIRD}\r`);
+        await session.waitFor("output", `echo: ${THIRD}`);
+        session.write(CTRL_D);
+
+        assert.equal(await exitStatus(session), 0, session.stderr());
+        assert.equal(session.stderr().includes("Dropped"), false, session.stderr());
     });
 });

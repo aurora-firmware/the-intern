@@ -258,8 +258,8 @@ A requirement number with no spec named in this section is S-001's.
 **The conversation's own document.** Each conversation's `intern.conversation` document holds the conversation's parked
 state, the messages held for it while it is parked, the invoked conversations whose reports it awaits, its abort mark,
 which records that its invoker is owed an "aborted" report (REQ-019), its stop mark, which records that a team member's
-abort stopped a job's lead (S-004 REQ-008), its closed mark (REQ-026) and its agent's enabled set (S-008 REQ-006). They
-are facts
+abort stopped a job's lead (S-004 REQ-008), its closed mark (REQ-026), its agent's enabled set (S-008 REQ-006) and
+its waiting fact, which records work waiting for a model (REQ-027, ADR-014). They are facts
 the-intern owns, written in the commit that changes them, and the only recovery from them is redelivery (ADR-001
 decision 4). An abort's facts are written in one commit just before pi-durable's abort; when a job's abort closes the
 conversation, the closed mark and the removal of its queued items are written in that same commit. The document is
@@ -302,18 +302,19 @@ small.
 | Lifecycle | Startup sequence, single-owner lock, readiness, signals, shutdown, exit on a storage failure | Runs in the foreground; the supervisor handles daemonizing and restarts. Offers start and stop hooks so other components (listeners, scheduler) start after readiness and stop before the harness closes |
 | Configuration | Produces one validated configuration from built-in defaults, the configuration file, command-line flags and the environment; refuses to start when it is invalid; persists settings changed through service operations | The file is read at startup and written only by settings operations |
 | State layout | Resolves the instance's directories, creates them owner-only when they are missing, and refuses unsafe existing ones | Gives the paths of the database, the runtime directory (for S-003's socket), the data directory (for S-001's per-role default workspaces) and the configuration file |
-| Model runtime | Resolves models and thinking levels through the pi agent login and model registry; validates model and thinking-level choices for the seat operations; maps pi agent settings into the harness explicitly; closes model connections on shutdown | Reads pi agent's folder only, apart from the login's own token refresh. The fake model replaces it in tests |
+| Model runtime | Resolves models and thinking levels through the pi agent login and model registry; validates model and thinking-level choices for the seat operations; maps pi agent settings into the harness explicitly; reads the folder again every 10 seconds and opens a new pi `ModelRuntime` when it changed; reports whether a default model exists; closes model connections on shutdown | Reads pi agent's folder only, apart from the login's own token refresh (ADR-014 decision 6; see Work without a model). The fake model replaces it in tests |
 | Harness host | Opens the database, installs the-intern's extensions, applies settings, builds the execution environment for each tool call from the seat's workspace, then resumes | The only user of pi-durable outside the-intern's extensions; exposes the narrow host interface the service layer, admission and observation feed use |
 | Admission | Counts worker threads, grants one to each ready agent run, holds the rest in arrival order, and keeps that order across restarts | Implements S-001 REQ-010. pi-durable has no concurrency cap of its own, so admission gates when runs start, including runs that resume after a restart. State kept in the daemon's admission document |
 | Service layer | The catalogue of read and control operations, their validation and their error outcomes | Called by listeners, job sources and agent tools alike |
 | Observation feed | Publishes snapshots and deltas for the instance and for each conversation, never a replay; drops a subscriber that falls too far behind | The source for the command line's and the web interface's live views and for monitoring |
-| Status | Reports whether the daemon is starting, ready or stopping, its versions, start time, instance paths, and worker threads in use and waiting | A read operation and an instance-scope feed entry. The versions that last opened the database are kept in a daemon document, `intern.versions`, in that database, so a copy of the database carries them (S-002 REQ-020) |
+| Status | Reports whether the daemon is starting, ready or stopping, its versions, start time, instance paths, worker threads in use and waiting, and `noDefaultModel` while pi agent names no default model | A read operation and an instance-scope feed entry. The versions that last opened the database are kept in a daemon document, `intern.versions`, in that database, so a copy of the database carries them (S-002 REQ-020) |
 
 - **Durability belongs to the runtime.** Recovery, exactly-once admission of input, queued input and checkpoints come
   from pi-durable. The daemon adds no retry loops, intake tables or recovery code of its own, except three bounded
   exceptions (ADR-001 decision 4). The first: the facts the-intern owns about a conversation (held messages, awaiting
-  links, parked state, the abort mark, the stop mark, the closed mark, the enabled set and creation keys) live in its
-  own documents, and the only recovery is redelivering the input those facts show as undelivered, made safe to repeat by
+  links, parked state, the abort mark, the stop mark, the closed mark, the enabled set, the waiting fact and creation
+  keys) live in its own documents, and the only recovery is redelivering the input those facts show as undelivered,
+  and releasing a conversation that waited for a model (ADR-014), made safe to repeat by
   pi-durable request ids. Each daemon-owned fact is committed in the same atomic commit as the change it describes,
   except for an abort. An abort's facts are written in one commit just before pi-durable's abort, not in pi-durable's
   abort commit. The second: job writes are committed before their pi-durable change, and four startup repair rules are
@@ -1623,6 +1624,107 @@ instance directories `service.json` names (the environment's when there is no re
   before or with `install.lock`, and before the cycle kills and restarts processes. The held-handle exception keeps a
   second acquisition in the same process refused, as the in-process service tests and `readOwnerLock` rely on.
 
+## Work without a model
+
+This is how CR-002 is built: the daemon starts, answers and accepts work when pi agent's settings name no default
+model, and runs that work once they do (S-001 REQ-003, REQ-027; S-002 REQ-002, REQ-003; S-004 REQ-023; S-005
+REQ-008 to REQ-010; S-006 REQ-011, REQ-023; S-007 REQ-006, REQ-008; S-009 REQ-007; S-010 REQ-004).
+[ADR-014](../ai-team/decisions/ADR-014-a-conversation-with-no-model-waits-after-a-no-model-run-and-runs-once-the-daemon-seats-pi-agent-s-default.md)
+records the design, and ADR-001 decision 4 lists its fact and its release.
+
+```
+ pi agent folder ──(read every 10 s)──► model runtime: current ModelRuntime, default model or none
+                                             │ default appears                     │ noDefaultModel
+                                             ▼                                     ▼
+ input ──► Conversation.submit ──► run ──► no model? pi-durable ends it `no_model`   daemon.status, startup report
+                                             │ (input stays in the transcript)
+                                             ▼
+                  run-end queue: seat has a model now? ──yes──► release
+                                             │ no
+                                             ▼
+                  waitingForModel fact + intern.notice (one commit, once per period)
+                                             │ default appears: daemon seats it, in `order`
+                                             ▼                  team member reseats with a model
+                  release: pending compaction, then a pi.generation with no input, in `order`
+```
+
+- **Seats with no model.** `resolveSeat` in `src/roles/role_model.ts` returns `model: null` when no override, role
+  default or pi agent default names one, instead of throwing. `Seat.model` and `SeatSummary.model` are `string | null`,
+  and seating stores `null` in the `intern.conversation` document and `model: null` in the pi-durable agent
+  (`toAgentSpec` takes no model). A configured model that doesn't resolve still fails startup step 5. Step 6 creates
+  the front desk with no model like any seat. A schedule fire checks the resolved seat. A `null` model is the "no
+  model" skip, and a run now creates its job as usual.
+- **The model runtime watches by reading.** `src/models/model_runtime.ts` keeps the current pi `ModelRuntime` and the
+  default it read. A 10-second timer reads `settings.json` and the size and modification time of `auth.json` and
+  `models.json`. When any of them changed, it opens a new `ModelRuntime`, with pi's own credential store once
+  `auth.json` exists and the no-login store before, and re-reads the default. A named default counts even when the
+  registry doesn't resolve it: as at startup, that is a model error, not "no model" (S-001 Definitions). The harness
+  is opened with `models: () => current`, so later requests use the new runtime and requests already streaming keep
+  the old one. `defaultChoice`, `checkModelChoice` and `listModels` read the current runtime too. When the default
+  goes from none to a model, the runtime calls the agents component's take-up (below). The timer stops with the
+  daemon's stop hooks.
+- **Status.** `daemon.status` carries `noDefaultModel`: `null` while a default exists, otherwise
+  `{ piAgentDir, message }`. The message names the folder and says to run `pi`, sign in with `/login`, and choose a
+  model with `/model` when pi asks. `bob status` prints the message, and the Status page and the banner on every page
+  show it. The banner reads it from the `daemon.status` call the shared worker already makes every 10 seconds
+  (ADR-007 decision 6), so it needs no feed delta.
+- **Taking a run's input.** Nothing in the submit paths changes. pi-durable places the input, starts a run, and ends it
+  in `prepare` with `no_model`, before the admission hook, so no worker thread is taken and S-004's start is never
+  written. The run's submissions settle `unanswered` with reason `no_model`.
+- **The run-end queue.** Report delivery's serial run-end queue (`startReportDelivery` in `src/host/reports.ts`) sees a
+  generation that failed with `detail.reason: "no_model"` first. If the seat has a model by now that the registry
+  resolves, it releases the conversation at once. If the seat names a model the registry doesn't resolve, the run stays
+  failed as before. If the seat model is `null`, it commits `waitingForModel` and an `intern.notice` entry in one
+  commit, unless the fact is already set. A `no_model` end delivers no report. The turn-end rule
+  (`src/jobs/turn_end_rule.ts`) hears run ends in a queue of its own, so the fact may not be committed yet when it
+  checks: it skips a run end whose newest generation failed `no_model`, and counts a set fact as something to wait for.
+  A lead stopped by an abort is checked through `leadStopped`, not as a run end, so it still blocks. The fact is
+  `{ order, compaction? }`: `order` is read in the fact's commit by a descending entry scan that stops at the newest
+  `pi.assistant` or `intern.notice` entry: the smallest id among the entries passed that carry model messages (the first
+  waiting input, or a handoff's tool result), or the notice's entry id when there is none. `compaction` is
+  `{ instructions? }`. The run-end queue hears run ends through `watchInstance` only; it reads nothing from the commit
+  that ended the run.
+- **Compaction with no model.** `compactConversation` (team member) and the Compact mode of a handoff
+  (`compactWithNote`) or an invocation check the seat first. With no model they set the fact with `compaction`, and
+  the notice for a new period, in their own host commit. They create no compaction task. An invocation then submits
+  its job prompt as usual.
+- **Release.** `releaseWaiting(conversationId)` in a new host module, `src/host/model_wait.ts`, runs only when the
+  seat has a model. It runs a pending compaction with `Conversation.compact` and waits for it. Then one commit reads
+  `pi.live`, and when no run is active it creates a `GenerationTask` owned by the conversation, sets `pi.live.run`
+  to `{ taskId, inputs: [] }`, and clears the fact. When a run is already active, it only clears the fact, because that
+  run reads the same transcript. It runs inside `inOpenConversation`, so a closed conversation is never released.
+- **Taking up the default.** `takeUpDefaultModel` in the agents component lists open conversations whose seat model is
+  `null`: waiting ones in `order`, then the rest. For each it commits an ordinary seat write (`changeSeat`) with the
+  same role and workspace, the default model, the seat's thinking level or pi agent's default one, and the daemon as
+  actor, so the enabled set resets to the role's defaults (S-008 REQ-006). Then it releases the
+  waiting ones one at a time, starting the next once the admission lists the previous one as active or waiting, or its
+  run has ended. A team member's `conversations.seat` or reset with a new seat that gives a waiting conversation a
+  model releases it after the seat commit.
+- **Abort and close.** An abort's commit and the closed-mark commit clear `waitingForModel`. The waiting input stays
+  in the transcript, and its submission is already settled. After Ctrl-C, `bob chat` names each line it submitted that
+  is still unanswered, `no_model` included, as dropped (S-005 REQ-009). A `no_model` submission keeps that state after
+  its release answers it, so `bob chat` counts such a line as answered once the transcript it has read holds an
+  assistant entry after the line's `intern.steer` entry, and doesn't name it.
+- **Startup.** At step 7, before `host.resume()`, the agents component's repair hook sets the fact and the notice for
+  each open conversation with no model and no fact that has an entry the model sees (an input, or a handoff's tool
+  result) after its newest assistant entry and its newest `intern.notice` entry (`firstWaitingEntryId` in
+  `src/host/model_wait.ts`), so input whose wait an abort ended is not set waiting again. It then runs the take-up when
+  the folder names a default. Its `afterResume` releases each conversation with a fact whose seat has a model, in
+  `order`. Job repair rule 1 already finds the `lead:<jobId>` submission of a waiting lead.
+- **The notice entry.** `intern.notice`, data `{ notice: "no_default_model", text }`, display-only, so the model never
+  sees it. `conversations.entries`, the conversation feed (ADR-008), `bob chat`, `bob jobs follow`, the Front desk page
+  and the Job page show its text like the other the-intern entries.
+- **`bob chat`.** It reads `desk.get` when it opens. A seat with model `null` means the front desk has no model. Without
+  a terminal it then submits every line without waiting, prints the notice from `daemon.status`'s `noDefaultModel`
+  message (or a fixed text when it is `null`) once on standard error, and exits 1. On a terminal it prints the same
+  notice and stays open. A later `intern.notice` entry on the feed prints it again, and the answers stream once the
+  front desk runs. A submission settled `no_model` is shown as waiting, never as an error.
+- **`bob service install`.** It reads `noDefaultModel` from the ready startup report (ADR-013 decision 6) and prints
+  the notice on standard error before exiting 0. It calls no operation for it. The daemon writes the field with its
+  ready write from the model runtime's state.
+- **Web pages.** Every page shows the no-model banner while `daemon.status` has `noDefaultModel`. A submission settled
+  `no_model` is shown as waiting. No action is disabled for it.
+
 ## Rejected approaches
 
 Implementation approaches weighed and rejected. ADR-001, Alternatives Considered, gives the full reasoning for the ones
@@ -1682,6 +1784,10 @@ it records.
   Alternatives Considered.
 - **Prebuilt release tooling such as a third-party release action or a bundler.** Rejected: the GitHub CLI, `tar` and
   a script of our own build and publish the bundles, and the release runs the files the tests run.
+
+- **Holding input for a model outside pi-durable, waiting in the admission hook, or a seat that follows pi agent's
+  default.** See ADR-014, Alternatives Considered.
+- **Watching the pi agent folder.** See ADR-014 and ADR-009, Alternatives Considered.
 
 ## Components and owning specs
 

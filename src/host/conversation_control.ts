@@ -15,6 +15,7 @@ import {
 import { parseConversationId } from "./conversation_id.ts";
 import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { inOpenConversation } from "./job_section.ts";
+import { waitWithCompaction } from "./model_wait.ts";
 import type { ConversationMeta } from "./seating.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -261,6 +262,11 @@ export async function compactConversation(
 ): Promise<void> {
     const conversation = await requireConversation(host, conversationId);
     // Only the admission of the compaction task is in the section: the compaction itself runs after it.
-    const taskId = await inOpenConversation(host, conversationId, () => conversation.compact(instructions, context));
-    await internalHarness(host).waitForTask(taskId, context);
+    // With no model there is no compaction task: the release runs the compaction (ADR-014 decision 3).
+    const taskId = await inOpenConversation(host, conversationId, async () =>
+        (await waitWithCompaction(host, conversationId, instructions))
+            ? undefined
+            : conversation.compact(instructions, context),
+    );
+    if (taskId !== undefined) await internalHarness(host).waitForTask(taskId, context);
 }

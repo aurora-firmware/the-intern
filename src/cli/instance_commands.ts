@@ -15,8 +15,8 @@ import { writeError, writeJson, writeLine } from "./output.ts";
 import { flat } from "./terminal_text.ts";
 
 function statusLines(status: DaemonStatus): string[] {
-    const { instance, versions, workerThreads } = status;
-    return [
+    const { instance, versions, workerThreads, noDefaultModel } = status;
+    const lines = [
         `Phase: ${status.phase}`,
         `Started: ${status.startedAt}`,
         `The Intern: ${versions.intern}`,
@@ -29,6 +29,8 @@ function statusLines(status: DaemonStatus): string[] {
         `Worker threads in use: ${workerThreads.inUse}`,
         `Worker threads waiting: ${workerThreads.waiting.length}`,
     ];
+    if (noDefaultModel !== null) lines.push(noDefaultModel.message);
+    return lines;
 }
 
 function usageLines(heading: string, report: UsageReport): string[] {

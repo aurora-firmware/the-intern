@@ -5,9 +5,10 @@
  * `settings_changed` delta. Each new instance snapshot reads all of them again.
  */
 import { type ComponentChild, h } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useContext, useEffect, useState } from "preact/hooks";
 import { listen } from "../components/activity.ts";
 import { ExportDownload } from "../components/export_download.ts";
+import { noDefaultModel } from "../components/no_model_banner.ts";
 import { RefusalMessage } from "../components/refusal.ts";
 import { type FeedConnection, pageClient } from "../feed_connection.ts";
 import { throttled } from "../model/throttle.ts";
@@ -90,6 +91,9 @@ const StatusSection = ({ status }: { status: Status }) =>
         ),
     );
 
+const NoModelSection = ({ message }: { message: string }) =>
+    h("section", { class: "status-no-model" }, h("h3", null, "No default model"), h("p", null, message));
+
 const usageRows = (kind: "model" | "tool", bucket: Record<string, Totals>) =>
     Object.entries(bucket).map(([name, totals]) =>
         h(
@@ -161,6 +165,7 @@ export const StatusPage = ({ feed }: { feed: FeedConnection | null | undefined }
     const [status, setStatus] = useState<Status | undefined>(undefined);
     const [usage, setUsage] = useState<Usage | undefined>(undefined);
     const [models, setModels] = useState<ModelSummary[] | undefined>(undefined);
+    const notice = useContext(noDefaultModel);
     const [failure, setFailure] = useState<{ error: unknown } | undefined>(undefined);
 
     useEffect(() => {
@@ -203,6 +208,7 @@ export const StatusPage = ({ feed }: { feed: FeedConnection | null | undefined }
 
     const parts: ComponentChild[] = [
         failure !== undefined ? h(RefusalMessage, { error: failure.error }) : null,
+        notice === null ? null : h(NoModelSection, { message: notice.message }),
         status === undefined ? null : h(StatusSection, { status }),
         usage === undefined ? null : h(UsageSection, { usage }),
         models === undefined ? null : h(ModelsSection, { models }),

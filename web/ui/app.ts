@@ -1,7 +1,9 @@
 import { h, render } from "preact";
 import { ConnectionBanner, isConnected } from "./components/connection_banner.ts";
+import { noDefaultModel } from "./components/no_model_banner.ts";
 import { shell } from "./components/shell.ts";
 import { connectFeed, type FeedConnection } from "./feed_connection.ts";
+import type { NoDefaultModelNotice } from "./feed_hub.ts";
 import { parseRoute, type Route } from "./model/routes.ts";
 import { BoardPage } from "./pages/board.ts";
 import { DeskPage } from "./pages/desk.ts";
@@ -45,11 +47,19 @@ const showRoute = (route: Route) => {
 };
 
 let connected = true;
+let notice: NoDefaultModelNotice | null = null;
 /** `undefined` while the tab connects, `null` when it could not. */
 let feed: FeedConnection | null | undefined;
 
 const renderCurrentRoute = () => {
-    render(h(isConnected.Provider, { value: connected }, showRoute(parseRoute(window.location.hash))), document.body);
+    render(
+        h(
+            isConnected.Provider,
+            { value: connected },
+            h(noDefaultModel.Provider, { value: notice }, showRoute(parseRoute(window.location.hash))),
+        ),
+        document.body,
+    );
 };
 
 const setConnected = (value: boolean) => {
@@ -62,6 +72,10 @@ renderCurrentRoute();
 connectFeed().then(
     (connection) => {
         connection.onConnection(setConnected);
+        connection.onNoDefaultModel((value) => {
+            notice = value;
+            renderCurrentRoute();
+        });
         feed = connection;
         renderCurrentRoute();
     },

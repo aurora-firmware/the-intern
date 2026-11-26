@@ -4,7 +4,7 @@ import type { AdmissionSnapshot } from "../../src/admission/admission.ts";
 import { WORKER_THREAD_COUNT } from "../../src/daemon/constants.ts";
 import type { InstanceDirs } from "../../src/daemon/state_layout.ts";
 import { createCatalogue, type DaemonPhase } from "../../src/service/operations.ts";
-import { type StatusSources, statusOperation } from "../../src/service/status_operation.ts";
+import { type DaemonStatus, type StatusSources, statusOperation } from "../../src/service/status_operation.ts";
 
 const DIRS: InstanceDirs = {
     configDir: "/cfg",
@@ -20,8 +20,13 @@ const STARTED_AT = new Date("2026-10-31T08:30:00.000Z");
 const CALLER = { actor: { kind: "team_member" } } as const;
 const silentLogger = { error: () => {}, info: () => {}, debug: () => {} };
 
-function makeStatus(phase: DaemonPhase, admission: AdmissionSnapshot) {
+function makeStatus(
+    phase: DaemonPhase,
+    admission: AdmissionSnapshot,
+    noDefaultModel?: StatusSources["noDefaultModel"],
+) {
     const status: StatusSources = {
+        ...(noDefaultModel && { noDefaultModel }),
         phase: () => phase,
         startedAt: STARTED_AT,
         versions: { intern: "1.2.3", pi: "4.5.6" },
@@ -58,6 +63,7 @@ describe("daemon.status", () => {
             instance: { configDir: "/cfg", stateDir: "/state", dataDir: "/data", runtimeDir: "/run" },
             workerThreads: { count: 32, inUse: 0, waiting: [] },
             mailAccounts: [],
+            noDefaultModel: null,
         });
     });
 
@@ -81,5 +87,39 @@ describe("daemon.status", () => {
             workerThreads: { count: number };
         };
         assert.equal(result.workerThreads.count, 32);
+    });
+
+    describe("noDefaultModel", () => {
+        const invokeNoDefault = async (source?: StatusSources["noDefaultModel"]) =>
+            ((await makeStatus("ready", IDLE, source).invoke("daemon.status", {}, CALLER)) as DaemonStatus)
+                .noDefaultModel;
+
+        it("is null while the source reports a default model", async () => {
+            assert.equal(await invokeNoDefault(() => null), null);
+        });
+
+        it("is null when the daemon has no such source", async () => {
+            assert.equal(await invokeNoDefault(), null);
+        });
+
+        it("names the pi agent folder and how to sign in and choose a default model while there is none", async () => {
+            const result = await invokeNoDefault(() => ({ piAgentDir: "/home/bob/.pi/agent" }));
+            assert.equal(result?.piAgentDir, "/home/bob/.pi/agent");
+            for (const part of ["/home/bob/.pi/agent", "no default model", "`pi`", "/login", "/model"]) {
+                assert.ok(result?.message.includes(part), `the message includes ${part}: ${result?.message}`);
+            }
+        });
+
+        it("reads the source on each call, so the answer follows it", async () => {
+            let current: { piAgentDir: string } | null = null;
+            const catalogue = makeStatus("ready", IDLE, () => current);
+            const read = async () =>
+                ((await catalogue.invoke("daemon.status", {}, CALLER)) as DaemonStatus).noDefaultModel;
+            assert.equal(await read(), null);
+            current = { piAgentDir: "/pi" };
+            assert.equal((await read())?.piAgentDir, "/pi");
+            current = null;
+            assert.equal(await read(), null);
+        });
     });
 });

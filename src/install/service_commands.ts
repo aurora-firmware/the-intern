@@ -164,6 +164,10 @@ function notReadyReason(result: Extract<ReadyWaitResult, { ready: false }>): str
     return "the daemon didn't report ready";
 }
 
+const NO_DEFAULT_MODEL_NOTICE =
+    "The service is running, but there is no default model: pi agent's settings name none. Run `pi`, sign in with " +
+    "/login, and choose a default model with /model when pi asks.";
+
 async function installSteps(context: ServiceCommandContext): Promise<number> {
     const { io, layout } = context;
     const check = checkPlatform(context.facts);
@@ -185,7 +189,10 @@ async function installSteps(context: ServiceCommandContext): Promise<number> {
     }
     await writeServiceRecord(layout, record);
     const result = await context.waitForReady(record);
-    if (result.ready) return 0;
+    if (result.ready) {
+        if (result.noDefaultModel) writeError(io, NO_DEFAULT_MODEL_NOTICE);
+        return 0;
+    }
     writeError(
         io,
         `The service is registered, but the daemon isn't ready: ${notReadyReason(result)}.\n` +

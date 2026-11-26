@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, chmod, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import type { Models } from "@earendil-works/pi-ai";
@@ -7,6 +7,8 @@ import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import { createModels, createProvider } from "@earendil-works/pi-ai/models";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { createAgentsComponent } from "../../src/agents/agents_component.ts";
+import { createClient } from "../../src/client/client.ts";
+import { nodeTransport } from "../../src/client/node_transport.ts";
 import { defineConfigSection } from "../../src/config/config_file.ts";
 import { WORKER_THREAD_COUNT } from "../../src/daemon/constants.ts";
 import {
@@ -21,9 +23,11 @@ import { STARTUP_REPORT_FILE } from "../../src/daemon/startup_report.ts";
 import { openHarnessHost, openHostDatabase, type Storage } from "../../src/host/harness_host.ts";
 import { recordOpenedVersions, runningVersions } from "../../src/host/versions.ts";
 import { JOB_SCHEMA_VERSION } from "../../src/jobs/job_store.ts";
+import { localSocketPath } from "../../src/listeners/socket_path.ts";
 import { ServiceError } from "../../src/service/operations.ts";
 import type { DaemonStatus } from "../../src/service/status_operation.ts";
 import { createSkillsComponent } from "../../src/skills/skills_component.ts";
+import { type DaemonProcess, startDaemon } from "../support/daemon_process.ts";
 import { createFakeModel } from "../support/fake_model.ts";
 import { createHermeticEnv, type HermeticEnv } from "../support/hermetic_env.ts";
 import { scaled } from "../support/time_scale.ts";
@@ -38,8 +42,13 @@ type FakeModel = ReturnType<typeof createFakeModel>;
 const fakes: FakeModel[] = [];
 const envs: HermeticEnv[] = [];
 const daemons: RunningDaemon[] = [];
+const childDaemons: DaemonProcess[] = [];
 
 afterEach(async () => {
+    for (const child of childDaemons.splice(0)) {
+        child.signal("SIGTERM");
+        await child.exited;
+    }
     for (const daemon of daemons.splice(0)) await daemon.stop();
     for (const fake of fakes.splice(0)) fake.unregister();
     for (const env of envs.splice(0)) await env.dispose();
@@ -730,5 +739,59 @@ describe("runDaemon job store", () => {
         assert.ok(conversations?.some((conversation) => conversation.id === conversationId));
         await daemon.stop();
         assert.equal(await readSchemaVersion(databaseFileOf(fixture)), JOB_SCHEMA_VERSION);
+    });
+});
+
+describe("runDaemon with no default model", () => {
+    const NO_MODEL_CASES = [
+        { name: "a missing pi agent folder", prepare: (env: HermeticEnv) => rm(env.piAgentDir, { recursive: true }) },
+        {
+            name: "a settings.json that names no default model",
+            prepare: (env: HermeticEnv) => writeFile(join(env.piAgentDir, "settings.json"), "{}"),
+        },
+    ];
+
+    async function startWithoutDefault(prepare: (env: HermeticEnv) => Promise<void>): Promise<DaemonProcess> {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        await prepare(env);
+        const child = startDaemon({ hermetic: env, realModels: true, networkListener: true });
+        childDaemons.push(child);
+        await child.ready;
+        return child;
+    }
+
+    for (const { name, prepare } of NO_MODEL_CASES) {
+        it(`reaches ready and answers on both listeners with the front desk seated with no model, given ${name}`, async () => {
+            const child = await startWithoutDefault(prepare);
+            const hermeticRoot = envs[envs.length - 1] as HermeticEnv;
+            const transports = [
+                nodeTransport({ socketPath: localSocketPath(hermeticRoot.runtimeDir) }),
+                nodeTransport({ baseUrl: `http://127.0.0.1:${await child.networkPort()}` }),
+            ];
+
+            for (const transport of transports) {
+                const client = createClient(transport);
+                const daemonStatus = (await client.invoke("daemon.status", {})) as DaemonStatus;
+                const desk = (await client.invoke("desk.get", {})) as { seat: { role: string; model: string | null } };
+                assert.equal(daemonStatus.phase, "ready");
+                assert.deepEqual([desk.seat.role, desk.seat.model], ["desk", null]);
+            }
+        });
+    }
+
+    it("exits non-zero naming step 5, the role and the value when a configured model does not resolve", async () => {
+        const env = await createHermeticEnv();
+        envs.push(env);
+        await writeFile(join(env.configDir, "config.toml"), '[roles.gp]\nmodel = "nowhere/missing"\n');
+        const child = startDaemon({ hermetic: env, realModels: true });
+        childDaemons.push(child);
+
+        const { code } = await child.exited;
+
+        assert.notEqual(code, 0);
+        assert.match(child.stderr(), /step=5/);
+        assert.match(child.stderr(), /gp/);
+        assert.match(child.stderr(), /nowhere\/missing/);
     });
 });

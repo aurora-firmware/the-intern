@@ -41,11 +41,22 @@ export PATH="$HOME/.local/bin:$PATH"
 Installing doesn't sign in to pi, create a configuration file or add a mail account. Do these yourself, as the
 service account.
 
-## Sign in to pi first
+## Sign in to pi
 
-The service needs the service account's pi login and a default model before it starts. Sign in with pi as the account
-that runs the service, as [Models and the pi login](running_the_intern.md#models-and-the-pi-login) describes. To add
-mail accounts afterwards, see [Email](email.md).
+The service starts and answers without a pi login, so you can register it first and sign in afterwards. Sign in with
+pi as the account that runs the service, as [Models and the pi login](running_the_intern.md#models-and-the-pi-login)
+describes. Run `pi`, sign in with `/login`, and choose a default model with `/model` when pi asks for one. To add mail
+accounts afterwards, see [Email](email.md).
+
+Until pi's settings name a default model, the service runs with no default model:
+
+- An agent of a role that has no model of its own doesn't run. A message you send and a job you start are accepted and
+  wait, with a notice that there is no default model.
+- A schedule fire with no model is skipped and recorded as a skipped fire.
+- `bob status`, the Status page and a banner on every web page say there is no default model.
+
+The service notices the sign-in within 30 seconds, with no restart. The waiting work then runs in the order the service
+accepted it.
 
 ## Register the service
 
@@ -58,6 +69,10 @@ bob service install
 The command registers The Intern with the operating system, starts it and waits until it is ready. The service starts
 when the machine starts, with nobody logged in, runs as your account and restarts after a failure. On Linux it is a
 systemd user service, and on macOS a launchd service.
+
+When pi's settings name no default model, the service still starts. The command then exits 0 and prints "The service is
+running, but there is no default model: pi agent's settings name none. Run `pi`, sign in with /login, and choose a
+default model with /model when pi asks." Sign in to pi, as the previous section describes.
 
 The command asks for admin rights only for the step the machine needs them for. On Linux, that is turning on
 lingering, which lets your account's service run at boot; if it is on already, nothing is asked. On a Mac, registering

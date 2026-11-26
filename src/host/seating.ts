@@ -47,7 +47,7 @@ export type HeldMessage = {
     requestId: string;
     kind?: "intern.report";
 };
-export type SeatSummary = { role: string; model: string; thinkingLevel?: string; workspace: string };
+export type SeatSummary = { role: string; model: string | null; thinkingLevel?: string; workspace: string };
 export type SeatRecord = {
     previous: SeatSummary | null;
     next: SeatSummary;
@@ -69,6 +69,12 @@ export type ConversationMeta = JobLinks & {
     stopped?: string;
     /** The skill names enabled for the agent; every seat write resets it to the role's defaults. A document written before S-008 has none. */
     enabledSkills?: string[];
+    /**
+     * Set while the conversation waits for a model (ADR-014 decision 2): `order` is the id of the period's first
+     * waiting entry, the oldest entry the model sees after the newest assistant entry and notice, or of the notice
+     * when there is none, and `compaction` is a compaction the conversation needs. A document without it reads as not waiting.
+     */
+    waitingForModel?: { order: string; compaction?: { instructions?: string } };
 };
 export type SeatChange = { seat: Seat; actor: SeatActor; contextMode?: ContextMode; note?: string };
 

@@ -23,6 +23,8 @@ export type StartupReport = {
     reason: string | null;
     unreadableDatabase: boolean;
     ready: boolean;
+    /** Written with the ready write: true when pi agent's settings named no default model then (ADR-014). */
+    noDefaultModel?: boolean;
 };
 
 /** Writes the report owner-only: whole into a file beside it, then renamed over the old one. */
@@ -72,7 +74,8 @@ export async function readStartupReport(stateDir: string): Promise<StartupReport
                 "Use a newer release.",
         );
     }
-    return parsed as StartupReport;
+    // A report from an earlier version has no such field, and reads as false (ADR-013 decision 8).
+    return { ...(parsed as StartupReport), noDefaultModel: (parsed as StartupReport).noDefaultModel ?? false };
 }
 
 export async function removeStartupReport(stateDir: string): Promise<void> {

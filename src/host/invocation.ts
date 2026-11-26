@@ -315,8 +315,8 @@ export async function continueWithHeld(host: HarnessHost, conversationId: string
 }
 
 // One commit per conversation (ADR-001 decision 4): an aborted conversation is left neither parked for reports nor
-// waiting for a report, and its held messages are withdrawn as an abort withdraws queued input. A lead's park for an
-// answer stays: it is the lead of a Blocked job, which the job's abort closes (S-001 REQ-008, REQ-014). The same
+// waiting for a report or a model, and its held messages are withdrawn as an abort withdraws queued input. A lead's
+// park for an answer stays: it is the lead of a Blocked job, which the job's abort closes (S-001 REQ-008, REQ-014). The same
 // commit marks a lone abort of an invoked conversation (`isReportOwed`), so its invoker is owed an "aborted" report.
 async function clearWaiting(
     host: HarnessHost,
@@ -328,13 +328,14 @@ async function clearWaiting(
         if (!(meta.isLead && meta.parked?.waitingFor === "answer")) meta.parked = null;
         meta.awaiting = [];
         meta.held = [];
+        delete meta.waitingForModel;
         if (marks.isReportOwed === true) meta.aborted = true;
         if (marks.stopped != null) meta.stopped = marks.stopped;
     });
 }
 
-// A team member's abort of a lead marks it when the abort stops something: the lead is running, has input queued, is
-// parked or awaits a report, and its job is In progress. The caller reads this before clearing.
+// A team member's abort of a lead marks it when the abort stops something: the lead is running, has input queued or
+// waiting for a model, is parked or awaits a report, and its job is In progress. The caller reads this before clearing.
 async function stopMarkDue(host: HarnessHost, conversationId: string, meta: ConversationMeta | undefined) {
     if (meta === undefined || !meta.isLead || meta.jobId === null) return null;
     if ((await readJobStatus(host, meta.jobId)) !== "in_progress") return null;
@@ -342,7 +343,8 @@ async function stopMarkDue(host: HarnessHost, conversationId: string, meta: Conv
         (await host.conversationInfo(conversationId))?.busy === true ||
         (await hasQueuedUserInput(host, conversationId)) ||
         meta.parked !== null ||
-        meta.awaiting.length > 0;
+        meta.awaiting.length > 0 ||
+        meta.waitingForModel !== undefined;
     return isStopping ? host.readNewestEntryId(conversationId) : null;
 }
 
@@ -440,6 +442,7 @@ async function closeConversation(host: HarnessHost, conversationId: string): Pro
         meta.parked = null;
         meta.awaiting = [];
         meta.held = [];
+        delete meta.waitingForModel;
         const inbox = await tx.doc(InboxDoc, id);
         for (const item of inbox.items) tx.settleSubmission(item.id, { status: "unanswered", reason: "closed" });
         inbox.items = [];

@@ -15,6 +15,7 @@ import { type HarnessHost, internalHarness } from "./harness_host.ts";
 import { watchConversationMeta, watchInstance } from "./host_observation.ts";
 import { continueParked } from "./invocation.ts";
 import { ConversationClosedError, inOpenConversation, isConversationClosed } from "./job_section.ts";
+import { handleNoModelEnd } from "./model_wait.ts";
 import { type ConversationMeta, conversationMetaDoc, readConversationMeta, type SeatActor } from "./seating.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -160,10 +161,12 @@ async function deliverInSection(host: HarnessHost, invokedId: string): Promise<v
 export async function startReportDelivery(host: HarnessHost, options: { logger: Logger }): Promise<{ stop(): void }> {
     let queue: Promise<void> = Promise.resolve();
     let isStopped = false;
-    const enqueue = (invokedId: string): void => {
+    const enqueue = (invokedId: string, isRunEnd = false): void => {
         queue = queue.then(async () => {
             if (isStopped) return;
             try {
+                // A run that ended with no_model is not the end of an agent's work: it sends no report (ADR-014).
+                if (isRunEnd && (await handleNoModelEnd(host, invokedId))) return;
                 await deliver(host, invokedId);
             } catch (error) {
                 options.logger.error("report delivery failed", {
@@ -175,7 +178,7 @@ export async function startReportDelivery(host: HarnessHost, options: { logger: 
     };
 
     const watch = await watchInstance(host, (event) => {
-        if (event.type === "run_finished") enqueue(event.conversationId);
+        if (event.type === "run_finished") enqueue(event.conversationId, true);
     });
     // An aborted idle or parked conversation has no run to end, so the commit that marks it starts its delivery.
     const watchMarks = await watchConversationMeta(host, ({ conversationId, meta }) => {

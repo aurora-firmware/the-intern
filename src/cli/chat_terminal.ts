@@ -30,6 +30,8 @@ export type TerminalChatOptions = { reset: boolean; json: boolean };
 type EntryPage = { entries: AttributedEntryLike[]; next?: string };
 type SubmitAnswer = { submissionId: string } | { held: true };
 type SentLine = { submissionId: string; line: string };
+/** What the chat knows of a transcript entry: its kind, and the text of a typed line. */
+type SeenEntry = { kind: string; content?: string };
 /** A typed line; its request id is fixed when it is typed, so every attempt to submit it is the same submission. */
 type TypedLine = { line: string; requestId: string };
 
@@ -70,6 +72,26 @@ async function waitUntilSettled(client: Client, submissionId: string): Promise<v
     }
 }
 
+function seenEntry(entry: AttributedEntryLike): SeenEntry {
+    const { content } = (entry.data ?? {}) as { content?: unknown };
+    return {
+        kind: entry.kind as string,
+        ...(entry.kind === "intern.steer" && typeof content === "string" && { content }),
+    };
+}
+
+/** Whether an answer follows the newest typed line with this text in the transcript read so far. */
+function isAnsweredLater(seen: readonly SeenEntry[], line: string): boolean {
+    const steer = seen.findLastIndex((entry) => entry.kind === "intern.steer" && entry.content === line);
+    return steer >= 0 && seen.slice(steer + 1).some((entry) => entry.kind === "pi.assistant");
+}
+
+/** The notice the daemon reports for a missing default model, on standard error; the chat stays open. */
+async function printNoModelNotice(client: Client, io: CommandIo): Promise<void> {
+    const status = (await client.invoke("daemon.status")) as { noDefaultModel: { message: string } | null };
+    if (status.noDefaultModel !== null) writeError(io, status.noDefaultModel.message);
+}
+
 export async function runTerminalChat(
     connect: () => Client,
     io: CommandIo,
@@ -80,7 +102,7 @@ export async function runTerminalChat(
     // A daemon that is absent at the start ends the command (S-005 AC-002.2); one that is starting or stopping, or lost
     // later, is waited for (REQ-015).
     const starting = patientClient(client, { onNotice: (text) => writeError(io, text), isAbsentFatalAtStart: true });
-    const desk = (await starting.invoke("desk.get")) as { conversationId: string };
+    const desk = (await starting.invoke("desk.get")) as { conversationId: string; seat?: { model: string | null } };
     const { conversationId } = desk;
     if (json) writeJson(io, desk);
     if (options.reset) await starting.invoke("conversations.reset", { conversationId });
@@ -88,6 +110,7 @@ export async function runTerminalChat(
     const tracker = createEntryTracker(conversationId);
     const history = await readHistory(starting, conversationId, io, json);
     for (const entry of history) tracker.markPrinted(entry.id);
+    if (desk.seat?.model === null) await printNoModelNotice(starting, io);
     if (!json) {
         const lines = history.flatMap((entry) => historyText(entry) ?? []).flatMap((l) => l.split("\n"));
         for (const line of lines.slice(-HISTORY_LINES)) writeLine(io, line);
@@ -104,6 +127,8 @@ export async function runTerminalChat(
     // Aborted by Ctrl-D: from then on a call that meets an outage gives up, so a gone daemon doesn't trap the team member.
     const leaving = new AbortController();
     const sent: SentLine[] = [];
+    // The transcript entries the chat has read, in order: a line settled `no_model` is answered once an answer follows it.
+    const seen: SeenEntry[] = history.map(seenEntry);
     // Lines typed and not yet admitted by the service, in the order they were typed.
     const unadmitted: TypedLine[] = [];
     // One notice per outage, whether the feed or a call meets it first.
@@ -158,9 +183,15 @@ export async function runTerminalChat(
             if (isReconnectable(error)) return;
             throw error;
         }
-        const answers = missed.filter((entry) => entry.kind === "pi.assistant");
-        if (answers.every((entry) => assistantText(entry) === "")) return;
-        for (const entry of answers) screen.showAnswer(assistantText(entry), responseTimestamps(entry));
+        seen.push(...missed.map(seenEntry));
+        // With --json the feed's own JSON is the output; the entries are read only to know which lines are answered.
+        if (json) return;
+        const shown = missed.filter((entry) => entry.kind === "pi.assistant" || entry.kind === "intern.notice");
+        if (shown.every((entry) => entry.kind === "pi.assistant" && assistantText(entry) === "")) return;
+        for (const entry of shown) {
+            if (entry.kind === "intern.notice") screen.notice(() => writeLine(io, conversationEntryLine(entry) ?? ""));
+            else screen.showAnswer(assistantText(entry), responseTimestamps(entry));
+        }
     }
 
     /** Shows the response in flight, in order with the answers printed from the entries. */
@@ -188,6 +219,7 @@ export async function runTerminalChat(
             feedClient = from;
             if (json) {
                 writeJson(io, snapshot);
+                await catchUp(from);
                 return;
             }
             await catchUp(from);
@@ -196,6 +228,7 @@ export async function runTerminalChat(
         async onDelta(delta) {
             if (json) {
                 writeJson(io, delta);
+                await catchUp();
                 return;
             }
             await showLive((delta as { view?: { live?: unknown } }).view?.live);
@@ -228,10 +261,12 @@ export async function runTerminalChat(
         try {
             await patient.invoke("conversations.abort", { conversationId });
             for (const entry of [...sent]) {
-                const { state } = (await patient.invoke("submissions.get", { submissionId: entry.submissionId })) as {
-                    state: string;
-                };
-                if (state === "unanswered") warn(`Dropped, not answered: ${entry.line}`);
+                const { state, reason } = (await patient.invoke("submissions.get", {
+                    submissionId: entry.submissionId,
+                })) as { state: string; reason?: string };
+                // A line settled `no_model` keeps that state after the model answers it from the transcript.
+                const isAnswered = reason === "no_model" && isAnsweredLater(seen, entry.line);
+                if (state === "unanswered" && !isAnswered) warn(`Dropped, not answered: ${entry.line}`);
                 if (state === "unanswered" || state === "done") sent.splice(sent.indexOf(entry), 1);
             }
         } catch (error) {

@@ -1,6 +1,7 @@
 /**
  * `bob chat` (S-005 REQ-010). Without a terminal it reads lines from standard input, submits each to the front desk
- * in turn, waits for the submission to settle and prints the answer: no prompt, no history, no colour. A daemon that
+ * in turn, waits for the submission to settle and prints the answer: no prompt, no history, no colour. A front desk
+ * with no model has every line submitted without waiting, the notice once on standard error, and exit 1. A daemon that
  * goes away while it runs is waited for. Imports the client library types only, never the daemon.
  */
 import { randomUUID } from "node:crypto";
@@ -94,12 +95,41 @@ async function exchange(client: Client, io: CommandIo, conversationId: string, l
     return true;
 }
 
+const FALLBACK_NO_MODEL_NOTICE =
+    "There is no default model: pi agent's settings name none. The lines wait in the front desk and are answered once a model is available.";
+
+/** The notice the daemon reports for a missing default model, or a fixed text when it reports none. */
+async function noModelNotice(client: Client): Promise<string> {
+    const status = (await client.invoke("daemon.status")) as { noDefaultModel: { message: string } | null };
+    return status.noDefaultModel?.message ?? FALLBACK_NO_MODEL_NOTICE;
+}
+
+/** Submits every line without waiting for an answer: each waits in the front desk until a model is available. */
+async function submitWithoutModel(client: Client, io: CommandIo, conversationId: string): Promise<number> {
+    const lines = createInterface({ input: io.stdin, crlfDelay: Number.POSITIVE_INFINITY });
+    for await (const line of lines) {
+        if (line.trim() === "") continue;
+        await client.invoke("conversations.submit", {
+            conversationId,
+            content: line,
+            requestId: randomUUID(),
+            busyMode: "followUp",
+        });
+    }
+    writeError(io, await noModelNotice(client));
+    return EXIT_CODES.refused;
+}
+
 export async function runPipedChat(client: Client, io: CommandIo, json: boolean, reset = false): Promise<number> {
     // A daemon that is absent at the start ends the command (S-005 AC-002.2); one that is starting or stopping, or lost
     // later, is waited for (REQ-015).
     const patient = patientClient(client, { onNotice: (text) => writeError(io, text), isAbsentFatalAtStart: true });
-    const { conversationId } = (await patient.invoke("desk.get")) as { conversationId: string };
+    const { conversationId, seat } = (await patient.invoke("desk.get")) as {
+        conversationId: string;
+        seat?: { model: string | null };
+    };
     if (reset) await patient.invoke("conversations.reset", { conversationId });
+    if (seat?.model === null) return submitWithoutModel(patient, io, conversationId);
     const lines = createInterface({ input: io.stdin, crlfDelay: Number.POSITIVE_INFINITY });
     for await (const line of lines) {
         if (line.trim() === "") continue;

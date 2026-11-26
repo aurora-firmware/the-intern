@@ -413,23 +413,20 @@ describe("bob service status", () => {
         });
     }
 
-    it("exits 0 with the contract's object and warnings when the program folder can't be searched (EACCES on every read)", async () => {
-        const { context, io } = setup();
-        await writeServiceRecord(layout, recordOf());
-        await chmod(layout.root, 0o600);
-        try {
-            const jsonStatus = await runServiceStatus(context, { json: true });
-            const textStatus = await runServiceStatus(context, { json: false });
+    it("exits 0 with the contract's object and warnings when every read in the program folder fails", async () => {
+        const looped = join(home, "looped");
+        await symlink(looped, looped);
+        const { context, io } = setup({ layout: programLayout(looped) });
 
-            assert.equal(jsonStatus, 0);
-            assert.equal(textStatus, 0);
-            assert.equal(JSON.parse(io.out().split("\n")[0] ?? "").registered, false);
-            assert.match(io.out(), /Current version: unreadable/);
-            assert.match(io.out(), /Previous version: unreadable/);
-            assert.match(io.err(), /EACCES/);
-        } finally {
-            await chmod(layout.root, 0o700);
-        }
+        const jsonStatus = await runServiceStatus(context, { json: true });
+        const textStatus = await runServiceStatus(context, { json: false });
+
+        assert.equal(jsonStatus, 0);
+        assert.equal(textStatus, 0);
+        assert.equal(JSON.parse(io.out().split("\n")[0] ?? "").registered, false);
+        assert.match(io.out(), /Current version: unreadable/);
+        assert.match(io.out(), /Previous version: unreadable/);
+        assert.match(io.err(), /ELOOP/);
     });
 
     it("takes no lock and changes nothing, even while another command holds the lock", async () => {
@@ -459,6 +456,39 @@ describe("bob service install", () => {
         assert.equal(record?.platform, "linux-x64");
         assert.equal(record?.lingerTurnedOn, true, "the record keeps what register changed");
         assert.equal(io.out(), "");
+    });
+
+    it("exits 0 and prints the no-default-model notice on standard error when the ready report has noDefaultModel true", async () => {
+        const { context, io } = setup({
+            waitForReady: async () => ({ ready: true, version: "1.2.0", noDefaultModel: true }),
+        });
+
+        const status = await runServiceInstall(context);
+
+        assert.equal(status, 0);
+        assert.match(io.err(), /no default model/i);
+        assert.match(io.err(), /pi/);
+        assert.match(io.err(), /sign in|\/login/i);
+        assert.equal(io.out(), "");
+    });
+
+    it("prints no no-default-model notice when the ready report has noDefaultModel false", async () => {
+        const { context, io } = setup({
+            waitForReady: async () => ({ ready: true, version: "1.2.0", noDefaultModel: false }),
+        });
+
+        const status = await runServiceInstall(context);
+
+        assert.equal(status, 0);
+        assert.doesNotMatch(io.err(), /no default model/i);
+    });
+
+    it("prints no no-default-model notice when the ready result carries no noDefaultModel", async () => {
+        const { context, io } = setup();
+
+        await runServiceInstall(context);
+
+        assert.doesNotMatch(io.err(), /no default model/i);
     });
 
     it("exits 1 naming the startup report's reason and the log command when the daemon isn't ready", async () => {

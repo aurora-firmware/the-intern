@@ -13,13 +13,17 @@ export type TabMessage =
     | { type: "leaving" }
     | { type: "call-failed" };
 
+/** What `daemon.status` reports while no default model is named (S-002 REQ-003): the message says how to sign in. */
+export type NoDefaultModelNotice = { piAgentDir: string; message: string };
+
 /** What the hub tells a tab. An instance snapshot and a conversation's snapshot are different messages. */
 export type WorkerMessage =
     | { type: "instance-snapshot"; snapshot: unknown }
     | { type: "instance-delta"; delta: unknown }
     | { type: "conversation-snapshot"; conversationId: string; snapshot: unknown }
     | { type: "conversation-delta"; conversationId: string; delta: unknown }
-    | { type: "connection"; isConnected: boolean };
+    | { type: "connection"; isConnected: boolean }
+    | { type: "status"; noDefaultModel: NoDefaultModelNotice | null };
 
 export type TabPort = { postMessage(message: WorkerMessage): void };
 
@@ -171,24 +175,29 @@ export function createFeedHub({ client, setTimer }: { client: Client; setTimer: 
         setTimer(reopen, GATHER_MS);
     };
 
-    const statusIsHealthy = async (): Promise<boolean> => {
+    /** The answer of a healthy `daemon.status`, or `undefined` when the call failed, timed out or the daemon stops. */
+    const healthyStatus = async (): Promise<{ noDefaultModel?: NoDefaultModelNotice | null } | undefined> => {
         let cancelBound = () => {};
         const timedOut = new Promise<typeof TIMED_OUT>((resolve) => {
             cancelBound = setTimer(() => resolve(TIMED_OUT), STATUS_BOUND_MS);
         });
         try {
             const status = await Promise.race([client.invoke("daemon.status"), timedOut]);
-            return status !== TIMED_OUT && (status as { phase?: string }).phase !== "stopping";
+            if (status === TIMED_OUT || (status as { phase?: string }).phase === "stopping") return undefined;
+            return status as { noDefaultModel?: NoDefaultModelNotice | null };
         } catch {
-            return false;
+            return undefined;
         } finally {
             cancelBound();
         }
     };
     const checkStatus = (): Promise<void> => {
-        pendingCheck ??= statusIsHealthy()
-            .then((isHealthy) => {
-                if (isHealthy) return;
+        pendingCheck ??= healthyStatus()
+            .then((status) => {
+                if (status !== undefined) {
+                    tellAll({ type: "status", noDefaultModel: status.noDefaultModel ?? null });
+                    return;
+                }
                 setConnected(false);
                 if ([...tabs.values()].some((tab) => tab.wantsInstance)) instanceLoop.restart(RETRY_MS);
                 if (openedIds.size > 0) conversationLoop.restart(RETRY_MS);

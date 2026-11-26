@@ -1,7 +1,7 @@
 ---
 id: S-010
 title: Installation and service setup
-version: '0.1'
+version: '0.2'
 status: approved  # draft | review | approved | superseded
 created: '2026-11-22'
 author: planner
@@ -173,7 +173,7 @@ holds (REQ-004), not on those of its own environment.
 
 | Command | Behaviour | Exit |
 |---|---|---|
-| `bob service install` | Registers and starts the service, asking for admin rights when the machine needs them, and waits for ready (REQ-004). Run again, it points the registration at the current version | 0 ready; 1 not registered or not ready, naming the reason and the command that shows the service's log |
+| `bob service install` | Registers and starts the service, asking for admin rights when the machine needs them, and waits for ready (REQ-004). With no pi login it prints a notice that there is no default model, pointing at signing in to pi. Run again, it points the registration at the current version | 0 ready, with or without a model; 1 not registered or not ready, naming the reason and the command that shows the service's log |
 | `bob service remove` | Stops the service and removes its registration. Program and data stay (REQ-005) | 0; 1 on failure |
 | `bob service status [--json]` | Whether the service is registered, starts at boot and is running, the version it runs, and the directories it runs with (REQ-005) | 0 |
 | `bob upgrade [<version>] [--yes]` | Upgrades to the latest release, or to `<version>` (REQ-006 to REQ-008). Asks before stopping the service unless `--yes` | 0 upgraded, or upgraded with a fresh database by the team member's choice, or already on that version; 1 failed and switched back, refused, or declined |
@@ -228,6 +228,7 @@ bob service install                                                             
   → admin rights needed and refused → stop, nothing registered
   → register (start at boot, no login, restart on non-zero exit, as the service account) → start → ready?
   → not ready in time → exit 1 naming the reason and the log command
+  → ready with no pi login → notice: no default model, sign in to pi → exit 0
 
 bob upgrade [version]                                                                                    REQ-006
   → no service / another daemon owns the instance / another upgrade runs → refuse
@@ -343,8 +344,11 @@ it after a non-zero exit (S-002 REQ-004), using systemd on Linux and launchd on 
 only for the steps the machine requires them for, and stop with nothing registered when they are refused or the machine
 doesn't allow the service account's own service to run at boot. It SHALL start the service and wait until the daemon
 reports ready. When it isn't ready within the bound of REQ-015, it SHALL exit 1 naming the reason the daemon logged and
-the command that shows the service's log. Run again, it SHALL point the registration at the current version and leave
-everything else as it was.
+the command that shows the service's log. A missing pi login is not such a reason: the daemon reaches ready without one
+(S-002 REQ-002), and `bob service install` SHALL then exit 0 and print, on standard error, a notice that there is no
+default model, pointing at signing in to pi (product owner, 2026-11-24, CR-002 and its settled details). It learns
+that there is no default model from the daemon's ready startup report (ADR-013 decision 6). Run again, it SHALL point
+the registration at the current version and leave everything else as it was.
 
 The registration SHALL fix the instance directories and the pi agent folder that `bob service install` resolves from
 its environment (S-002 REQ-006; S-002 Configuration Requirements, `PI_CODING_AGENT_DIR`), so the service runs with them
@@ -372,13 +376,13 @@ half of S-002 live acceptance test 3; the same on a real Mac (Success Criteria 5
 
 #### AC-004.3 — Not ready, or not allowed
 
-- **Given:** no pi login; the web port already in use; admin rights refused; a machine that doesn't let the service
-  account's own service run at boot
+- **Given:** the web port already in use; admin rights refused; a machine that doesn't let the service account's own
+  service run at boot
 - **When:** `bob service install` runs
-- **Then:** for the first two it exits 1 naming the daemon's reason and the log command; for the last two it exits 1
+- **Then:** for the first it exits 1 naming the daemon's reason and the log command; for the last two it exits 1
   naming the reason, with no registration left
 
-**Verification:** test — the installation cycle test for the first two; unit tests of the refusal paths for the last
+**Verification:** test — the installation cycle test for the first; unit tests of the refusal paths for the last
 two, on both platforms' registration.
 
 #### AC-004.4 — The registration fixes the instance and the pi login
@@ -389,6 +393,16 @@ two, on both platforms' registration.
   shell where neither variable is set
 - **Then:** the daemon runs with those folders, the status shows them, and the upgrade's copy is taken from that state
   directory
+
+**Verification:** test — the installation cycle test.
+
+#### AC-004.5 — No pi login
+
+- **Given:** an installed release and no pi agent folder for the service account
+- **When:** the team member runs `bob service install`
+- **Then:** it exits 0 once the daemon is ready, standard error holds a notice that there is no default model, pointing
+  at signing in to pi; `bob service status` shows registered and running, and `bob status` and the web interface's
+  `/ui/` answer
 
 **Verification:** test — the installation cycle test.
 
@@ -686,9 +700,12 @@ evidence.
 ### REQ-016 — Documentation
 
 The user manual SHALL have an "Installing and upgrading" page that covers the install script, `bob service install`, the
-pi login prerequisite, `bob service status` and `remove`, `bob upgrade` and its two failure paths, `bob rollback` with
-what it loses and may repeat, that it leaves the secrets store as it is and that a mail account it brings back without
-its secrets needs signing in again, `bob uninstall`, the upgrades folder, which instance directories and pi login the
+pi login: that the service starts and is reachable without one; that until a team member signs in to pi, no agent of a
+role without its own model runs, messages and jobs wait, and schedule fires with no model are skipped (S-001 REQ-027;
+S-007 REQ-006); and that signing in includes choosing a default model with pi's `/model` when pi asks for one (S-001
+Assumptions), then `bob service status` and `remove`, `bob upgrade` and its two failure paths, `bob rollback` with what
+it loses and may repeat, that it leaves the secrets store as it is and that a mail account it brings back without its
+secrets needs signing in again, `bob uninstall`, the upgrades folder, which instance directories and pi login the
 service uses, and that macOS hasn't yet been verified on a real Mac. `docs/manual/commands.md` SHALL lose its "Until
 installation puts `bob` on your `PATH`" note and list the new commands. The developer docs SHALL say how to cut a
 release and how to run the installation cycle test against local bundles.
@@ -806,6 +823,7 @@ No setting is added to `config.toml`.
 | 2 | The install script and `bob service install`, `status` and `remove` on both platforms, with the installation cycle test for install and service setup in CI on Linux | Phase 1 |
 | 3 | `bob upgrade` with both failure paths, `bob rollback`, the single-command lock and the cut-off cases | Phase 2 |
 | 4 | `bob uninstall`, the manual and developer docs, the live check on a real Linux machine | Phase 3 |
+| 5 | `bob service install` with no pi login: ready, exit 0 and the no-default-model notice; the manual's pi login section (CR-002) | Phase 4, S-002 phase 6 |
 
 ## Open Questions
 
@@ -814,9 +832,17 @@ No setting is added to `config.toml`.
 - **How the service is registered** on Linux (for example a user unit with lingering, as `release_form.md` recommends)
   and on macOS (for example a launchd daemon running as the service account), within REQ-004 and REQ-014. Owner:
   Architect. Resolution: decided in Feature Architecture; the consistency review found REQ-014 can be met on both.
+- **Resolved in CR-002's Feature Architecture (ADR-013 decision 6). How `bob service install` learns that there is no
+  default model** (REQ-004): from the `noDefaultModel` field of the ready startup report, with no S-000 change and no
+  operation called.
 - **macOS behaviour on a real Mac**: start at boot without a login, FileVault, the restart after a failure. Owner:
   product owner, who provides the Mac. Resolution: Success Criteria 5, run once a Mac is available; it can't change the
   specified behaviour, only confirm it or raise a bug.
 
 ## Amendment Log
 
+| Date | What changed | Why | Affected tasks |
+|------|-------------|-----|----------------|
+| 2026-11-24 | v0.2. The daemon starts and stays reachable without a pi login (CR-002). REQ-004, Interfaces (the `bob service install` row) and Workflow: a daemon that is ready with no pi login is ready; `bob service install` exits 0 and prints a notice that no model is available, pointing at signing in to pi. AC-004.3: "no pi login" leaves the cases that exit 1. New AC-004.5: no pi login exits 0 with the notice, and the service answers. REQ-016: the manual says the service runs without a pi login and what waits until a team member signs in. Open Questions: how `bob service install` learns that no model is available, for CR-002's Feature Architecture. No identifier retired. | CR-002, approved by the product owner on 2026-11-24. Gate 5 of this spec isn't signed off yet, so this reopens AC-004.3's acceptance. | CR-002's tasks; T-503 to T-505 are unaffected unless they cover the no-login case |
+| 2026-11-24 | v0.2, same version, revised on the planning branch after the Architect's consistency review (corrections C11, C13) and CR-002's settled details of the same day. REQ-004, AC-004.5, Interfaces (the `bob service install` row), Workflow and Open Questions: the notice says there is no default model. REQ-016: the manual says that only agents of roles without their own model wait, that only fires with no model are skipped, and that signing in includes choosing a default model with `/model` when pi asks. Implementation Order: new phase 5. No identifier added or retired. | Architect's consistency review of 2026-11-24; product owner, CR-002 settled details, 2026-11-24. | CR-002's tasks |
+| 2026-11-24 | v0.2, same version, revised on the planning branch with CR-002's Feature Architecture (Spec finding SF8). REQ-004 and Open Questions: `bob service install` learns that there is no default model from the `noDefaultModel` field of the ready startup report (ADR-013 decision 6); the question is resolved. No identifier added or retired. | CR-002 Feature Architecture, ADR-013 decision 6 amendment, 2026-11-24. | CR-002's tasks |

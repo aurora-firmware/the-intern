@@ -15,6 +15,10 @@ The package, its tooling and the product code exist: S-001 to S-009 are built, f
 endpoint to the command line, the web interface, the schedules, the skills and instructions and the email. Specs after
 S-009 are still to come.
 
+The daemon starts and is reachable without a pi login: with no default model, the command line and the web interface
+answer and show the no-default-model notice. Work that needs a model waits until a team member signs in to pi, and the
+daemon notices the sign-in within 30 seconds, with no restart.
+
 Read these before designing anything:
 
 - `docs/ai-team/specs/S-000-system-overview.md`: what the product is, who it serves, its components and exclusions.

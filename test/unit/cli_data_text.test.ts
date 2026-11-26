@@ -178,6 +178,34 @@ describe("conversation entry lines", () => {
 });
 
 describe("conversation text", () => {
+    it("prints_a_null_model_as_no_model_in_a_listing_seat_and_a_seat_record", () => {
+        const listing = formatConversationLine({
+            id: "c-1",
+            isFrontDesk: true,
+            jobId: null,
+            isLead: false,
+            seat: { role: "desk", model: null, workspace: "/w" },
+            status: "idle",
+            lastActivity: null,
+        } as never);
+        const [record] = formatTranscript([
+            {
+                id: "1",
+                kind: "intern.seat",
+                data: {
+                    previous: null,
+                    next: { role: "desk", model: null, workspace: "/w" },
+                    actor: { kind: "daemon" },
+                },
+            },
+        ]);
+        const seat = formatSeat({ role: "desk", model: null, workspace: "/w" });
+
+        assert.match(listing, /desk \(no model\)/);
+        assert.match(record, /desk \(no model\)/);
+        assert.match(seat, /desk \(no model,/);
+    });
+
     it("keeps_every_transcript_entry_on_one_clean_line", () => {
         const lines = formatTranscript([
             { id: "1", kind: "pi.user", data: [{ content: `a${CLIPBOARD_WRITE}\nb` }] },
