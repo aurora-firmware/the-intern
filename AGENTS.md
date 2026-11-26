@@ -12,8 +12,14 @@ This file gives coding agents the commands and conventions they need to work in 
 
 The Intern (`bob`) is one TypeScript/Node package that embeds pi as a library on `@earendil-works/pi-durable`.
 The package, its tooling and the product code exist: S-001 to S-009 are built, from the service and its control
-endpoint to the command line, the web interface, the schedules, the skills and instructions and the email. Specs after
-S-009 are still to come.
+endpoint to the command line, the web interface, the schedules, the skills and instructions and the email. S-010 is
+built too, up to installation and service setup: the program installs from a release and the service starts at boot.
+Specs after S-010 are still to come.
+
+The Linux demonstration of S-010 (pre-releases v0.16.0-rc.1 and v0.16.0-rc.2: boot with nobody logged in, `kill -9`,
+upgrade and rollback) ran in a privileged systemd container on a Linux x64 host, by product owner decision, not on a
+real machine; a kernel reboot of real hardware is unobserved. macOS is unverified on a real Mac: its checks and its
+launchd registration are covered by tests only, and S-010 Success Criteria 5 is pending until a Mac is available.
 
 The daemon starts and is reachable without a pi login: with no default model, the command line and the web interface
 answer and show the no-default-model notice. Work that needs a model waits until a team member signs in to pi, and the
