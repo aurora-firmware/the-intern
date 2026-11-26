@@ -30,7 +30,10 @@ function readPackageVersion(): string {
 
 function isHeadOnMain(): boolean {
     const result = spawnSync("git", ["merge-base", "--is-ancestor", "HEAD", "origin/main"], { encoding: "utf8" });
-    return result.status === 0;
+    if (result.status === 0) return true;
+    if (result.status === 1) return false;
+    const detail = result.error?.message ?? result.stderr.trim();
+    throw new Error(`git could not tell whether the tagged commit is on main (status ${result.status}): ${detail}`);
 }
 
 function main(): void {
@@ -39,11 +42,23 @@ function main(): void {
         process.stderr.write("Usage: node release/check_release.ts <tag>\n");
         process.exit(1);
     }
-    const result = checkReleaseTag({ tag, packageVersion: readPackageVersion(), isOnMain: isHeadOnMain() });
-    if (!result.ok) {
-        process.stderr.write(`${result.reason}\n`);
-        process.exit(1);
+    const packageVersion = readPackageVersion();
+    // Git is asked only when the version matches, so a wrong tag never depends on git or on who owns the checkout.
+    const versionResult = checkReleaseTag({ tag, packageVersion, isOnMain: true });
+    if (!versionResult.ok) fail(versionResult.reason);
+    let isOnMain: boolean;
+    try {
+        isOnMain = isHeadOnMain();
+    } catch (error) {
+        fail((error as Error).message);
     }
+    const result = checkReleaseTag({ tag, packageVersion, isOnMain });
+    if (!result.ok) fail(result.reason);
+}
+
+function fail(message: string): never {
+    process.stderr.write(`${message}\n`);
+    process.exit(1);
 }
 
 if (import.meta.main) main();
